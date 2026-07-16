@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "mousetool-theme",
+  "productName": " ",
   "version": "0.1.0",
   "identifier": "com.leogene.mousetool-theme",
   "build": {
@@ -13,14 +13,11 @@
     "windows": [
       {
         "title": "mousetool-theme",
-        "width": 800,
-        "height": 600,
+        "width": 1280,
+        "height": 780,
         "resizable": true,
         "decorations": true,
-        "transparent": true,
-        "windowsEffect": {
-          "type":"mica"
-        }
+        "transparent":  true
       }
     ],
     "security": {
