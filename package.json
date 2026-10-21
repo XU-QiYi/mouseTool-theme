@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:bg": "node scripts/dev_bg.mjs start",
+    "dev:stop": "node scripts/dev_bg.mjs stop",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri"

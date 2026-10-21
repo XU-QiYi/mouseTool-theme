@@ -62,4 +62,5 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy CARGO_HTTP_PROXY="
 - **删除类命令必须 `Uuid::parse_str` 校验 id**：`theme_dir(id)` 是字符串拼接，未校验时传 `../` 可越出数据目录
 - 不能删除「正在使用」的主题（注册表仍指向其文件），三层防护：UI disabled → store 校验 → 后端路径校验
 - 错误文案规范：中文主句说人话，技术细节放括号；能指导下一步就写进主句
-- **vite dev 崩溃排查**：新增依赖触发重优化时，vite 删 `node_modules/.vite/deps_temp_*` 会被 safe-delete shim 拦截（>50 文件）→ 手动 `rm -rf node_modules/.vite` 重启。另：后台起 dev server **不能接 `| head`**，SIGPIPE 会让它 16s 后退出
+- **vite 缓存必须落 OS 临时目录**（`vite.config.ts` 的 `cacheDir`，已配）：safe-delete 护栏对项目内批量删除 >50 文件 fail-closed，vite 重优化删旧 deps（70+ 文件）会把进程炸掉；临时目录是护栏豁免区（视为可再生缓存）。**禁止把 cacheDir 改回 `node_modules/.vite`**
+- **后台起 dev server 只用 `npm run dev:bg` / `node scripts/dev_bg.mjs`**：stdio 接日志文件、detached、带 start/stop/status（PID 落 `.dev-server.pid`）。**禁止 `npm run dev | head` 之类管道后台启动**——管道一关 EPIPE 直接杀死 vite；`vite.config.ts` 已加 EPIPE 守护兜底，但仍以 dev_bg 为准

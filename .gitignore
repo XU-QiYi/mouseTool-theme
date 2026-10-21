@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# dev_bg.mjs 后台 dev server
+.dev-server.pid
+.dev-server.log
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
