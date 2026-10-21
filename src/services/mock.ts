@@ -60,7 +60,8 @@ export const MOCK_THEMES: CursorTheme[] = [
         ["No", "不可用", "Unavailable", "no.cur"],
         ["SizeAll", "移动", "Move", "move.cur"],
       ],
-      "C:\\Users\\LeoGene\\AppData\\Local\\CursorStudio\\themes\\9f2c1a30-7b4e-4c1d-8e55-2a6b7c901d11\\cursors",
+      // 通用占位路径：示例数据不该把某台机器的用户名写进仓库
+      "C:\\Users\\Public\\AppData\\Local\\CursorStudio\\themes\\9f2c1a30-7b4e-4c1d-8e55-2a6b7c901d11\\cursors",
       "cur",
     ),
   },
