@@ -3,17 +3,19 @@ pub mod models;
 pub mod utils;
 
 use commands::cursor::get_cursor_preview;
-use commands::theme::{apply_theme, get_all_themes, restore_default};
+use commands::theme::{apply_theme, get_all_themes, import_theme, restore_default};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_all_themes,
             get_cursor_preview,
             apply_theme,
-            restore_default
+            restore_default,
+            import_theme
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

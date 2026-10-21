@@ -33,6 +33,8 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy CARGO_HTTP_PROXY="
 - 改用户设置的测试要用「备份 + catch_unwind + 恢复」模式，断言失败也必须还原
 
 ## 关键技术决定
+- **数据目录**：`%LOCALAPPDATA%\CursorStudio\themes\<uuid>\{theme.json, cursors/}`，唯一来源是 `utils/paths.rs::data_root()`，禁止别处硬编码
+- **槽位推断两段式**：先 `EXACT_NAMES` 精确匹配短名（`no`/`ns`/`we`/`up`），再 `SLOT_KEYWORDS` 包含匹配。短名绝不能放进包含匹配表（`no` 会撞 `normal`）
 - **15 槽位顺序**以 `src-tauri/src/utils/registry.rs` 的 `SLOT_DEFS` 为准（依据 `Schemes` 实测值），顺序错了会导致光标整体串位
 - `.cur`/`.ico` 解析：自己读 ICO 目录挑最大尺寸，再把单帧拼成「只含一帧的 ICO」交给 `image` 官方解码器（裸 DIB + AND mask 由库处理）
 - `.ani`：手写 RIFF/ACON 解析，从 `LIST/fram` 取 `icon` 块；rate 单位是 1/60 秒

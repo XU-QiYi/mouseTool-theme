@@ -1,7 +1,10 @@
+import { useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { FolderDown, History, Library, MousePointer2, Settings } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { inTauri } from "@/services/theme";
 import { useThemeStore, type Page } from "@/stores/themeStore";
 
 const NAV_ITEMS: { page: Page; label: string; icon: typeof Library }[] = [
@@ -13,6 +16,30 @@ const NAV_ITEMS: { page: Page; label: string; icon: typeof Library }[] = [
 export function Sidebar() {
   const currentPage = useThemeStore((s) => s.currentPage);
   const setCurrentPage = useThemeStore((s) => s.setCurrentPage);
+  const importTheme = useThemeStore((s) => s.importTheme);
+  const [picking, setPicking] = useState(false);
+
+  const handleImport = async () => {
+    if (!inTauri) {
+      console.warn("[dev] 浏览器环境无法选择文件，请在桌面应用中使用导入");
+      return;
+    }
+    setPicking(true);
+    try {
+      const selected = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: "主题包", extensions: ["zip"] }],
+      });
+      if (typeof selected === "string") {
+        await importTheme(selected);
+      }
+    } catch (err) {
+      console.error("选择文件失败：", err);
+    } finally {
+      setPicking(false);
+    }
+  };
 
   return (
     <aside className="flex h-full w-56 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
@@ -25,9 +52,9 @@ export function Sidebar() {
       </div>
 
       <div className="px-3 pb-3">
-        <Button className="w-full" disabled>
+        <Button className="w-full" onClick={handleImport} disabled={picking}>
           <FolderDown data-icon="inline-start" />
-          导入主题
+          {picking ? "选择中…" : "导入主题"}
         </Button>
       </div>
 

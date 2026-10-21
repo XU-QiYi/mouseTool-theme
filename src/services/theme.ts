@@ -41,3 +41,11 @@ export function restoreDefault(): Promise<void> {
   }
   return invoke<void>("restore_default");
 }
+
+/** 对应 Rust 命令 `import_theme`：导入 zip 主题包，返回新主题 */
+export function importTheme(zipPath: string): Promise<CursorTheme> {
+  if (!inTauri) {
+    return Promise.reject(new Error("浏览器环境不支持导入，请在桌面应用中使用"));
+  }
+  return invoke<CursorTheme>("import_theme", { zipPath });
+}

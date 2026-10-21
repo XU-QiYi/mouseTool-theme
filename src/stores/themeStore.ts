@@ -3,6 +3,7 @@ import { create } from "zustand";
 import {
   applyTheme as apiApplyTheme,
   getAllThemes,
+  importTheme as apiImportTheme,
   restoreDefault as apiRestoreDefault,
 } from "@/services/theme";
 import type { CursorTheme } from "@/types/theme";
@@ -26,6 +27,7 @@ interface ThemeStore {
   loadThemes: () => Promise<void>;
   applyTheme: (id: string) => Promise<void>;
   restoreDefault: () => Promise<void>;
+  importTheme: (zipPath: string) => Promise<void>;
   selectTheme: (id: string) => void;
   setSearchQuery: (q: string) => void;
   setCurrentPage: (p: Page) => void;
@@ -68,6 +70,22 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
       set({ activeThemeId: null });
     } catch (err) {
       console.error("恢复默认失败：", err);
+    }
+  },
+
+  importTheme: async (zipPath) => {
+    set({ loading: true });
+    try {
+      const theme = await apiImportTheme(zipPath);
+      set((state) => ({
+        themes: [theme, ...state.themes],
+        selectedThemeId: theme.id,
+        currentPage: "library" as const,
+      }));
+    } catch (err) {
+      console.error("导入主题失败：", err);
+    } finally {
+      set({ loading: false });
     }
   },
 
