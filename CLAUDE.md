@@ -52,3 +52,5 @@ For multi-step tasks, state a brief plan:
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
 These guidelines are working if: fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+plan的模式下的文档放到docs下，是否新建文件夹由你判断，需要对文档进行分组的。

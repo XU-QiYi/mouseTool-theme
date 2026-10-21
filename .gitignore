@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# AI 工作记忆：保留 memory 文档，忽略其余运行时产物
+.workbuddy/*
+!.workbuddy/memory/

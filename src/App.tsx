@@ -1,49 +1,72 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
+import { useEffect } from "react";
+import { FolderDown, History } from "lucide-react";
+
+import { Sidebar } from "@/components/layout/Sidebar";
+import { ThemeDetail } from "@/components/theme/ThemeDetail";
+import { ThemeList } from "@/components/theme/ThemeList";
+import { Badge } from "@/components/ui/badge";
+import { selectSelectedTheme, useThemeStore, type Page } from "@/stores/themeStore";
 import "./App.css";
 
-function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+type UnfinishedPage = Exclude<Page, "library">;
 
-  async function greet() {
-    setGreetMsg(await invoke("greet", { name }));
-  }
+/** 尚未实现页面的占位信息 */
+const PLACEHOLDER: Record<
+  UnfinishedPage,
+  { title: string; desc: string; icon: typeof FolderDown }
+> = {
+  imported: {
+    title: "已导入的主题",
+    desc: "导入 ZIP 主题包功能将在阶段 6 实现",
+    icon: FolderDown,
+  },
+  recent: {
+    title: "最近使用",
+    desc: "使用历史记录功能尚未实现",
+    icon: History,
+  },
+};
+
+function PlaceholderPage({ page }: { page: UnfinishedPage }) {
+  const { title, desc, icon: Icon } = PLACEHOLDER[page];
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
+    <section className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
+      <div className="flex size-14 items-center justify-center rounded-full bg-muted">
+        <Icon className="size-6 text-muted-foreground" />
       </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
+      <h2 className="text-base font-medium">{title}</h2>
+      <p className="max-w-xs text-sm text-muted-foreground">{desc}</p>
+      <Badge variant="outline" className="mt-1">
+        功能开发中
+      </Badge>
+    </section>
+  );
+}
 
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+function App() {
+  const loadThemes = useThemeStore((s) => s.loadThemes);
+  const currentPage = useThemeStore((s) => s.currentPage);
+  const selectedTheme = useThemeStore(selectSelectedTheme);
+
+  useEffect(() => {
+    loadThemes();
+  }, [loadThemes]);
+
+  return (
+    <div className="flex h-screen overflow-hidden">
+      <Sidebar />
+      <ThemeList />
+      {currentPage !== "library" ? (
+        <PlaceholderPage page={currentPage} />
+      ) : selectedTheme ? (
+        <ThemeDetail theme={selectedTheme} />
+      ) : (
+        <section className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+          在左侧选择一个主题查看详情
+        </section>
+      )}
+    </div>
   );
 }
 
