@@ -179,7 +179,9 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
 
   selectTheme: (id) => set({ selectedThemeId: id }),
   setSearchQuery: (q) => set({ searchQuery: q }),
-  setCurrentPage: (p) => set({ currentPage: p }),
+  // 切页清空选中：否则在「主题图库」选中的内置主题，切到「已导入」后
+  // 详情区还挂着一个不属于当前列表的主题
+  setCurrentPage: (p) => set({ currentPage: p, selectedThemeId: null }),
 }));
 
 /** 当前选中的主题对象（无选中时为 null） */

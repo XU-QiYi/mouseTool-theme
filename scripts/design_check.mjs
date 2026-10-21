@@ -86,6 +86,35 @@ try {
     console.log(`  ${k}: ${await evaluate(expr)}`);
   }
 
+  // 1.5 非「主题图库」页也必须能进详情：详情区承载应用/导出/删除/改名
+  const navSwitch = await evaluate(`(() => {
+    const btn = [...document.querySelectorAll("nav button")].find(b => b.textContent.trim() === "已导入");
+    if (!btn) return "NO_NAV";
+    btn.click();
+    return "OK";
+  })()`);
+  await sleep(600);
+  const importedCards = await evaluate(`(() => {
+    const cards = [...document.querySelectorAll("button")].filter(b => b.className.includes("rounded-xl"));
+    if (!cards.length) return 0;
+    cards[0].click();
+    return cards.length;
+  })()`);
+  await sleep(700);
+  const detailState = await evaluate(`(() => {
+    const hasApply = [...document.querySelectorAll("button")].some(b => b.textContent.includes("应用此主题"));
+    const hasPlaceholder = document.body.innerText.includes("功能开发中");
+    return JSON.stringify({ 详情区可用: hasApply, 仍有占位: hasPlaceholder });
+  })()`);
+  console.log(`已导入页: 切换到 ${navSwitch}，列表 ${importedCards} 项，${detailState}`);
+  const shotImported = await send("Page.captureScreenshot", { format: "png" });
+  writeFileSync(
+    join(OUT_DIR, "design_imported_page.png"),
+    Buffer.from(shotImported.result.data, "base64"),
+  );
+  await evaluate(`[...document.querySelectorAll("nav button")].find(b => b.textContent.trim() === "主题图库")?.click()`);
+  await sleep(600);
+
   // 2. 键盘焦点：按 Tab 走入界面，截取焦点态
   const tab = async () => {
     for (const type of ["rawKeyDown", "char", "keyUp"]) {
