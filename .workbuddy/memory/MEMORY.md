@@ -81,3 +81,8 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy CARGO_HTTP_PROXY="
 - FLIP 位置 = `offsetParent.rect.top + offsetTop`：BCR 会吃进自身 translate，单看 offsetTop 会漏掉容器整体位移
 - 退场时长不能为 0：base-ui 靠 `transitionend` 卸载节点；reduced-motion 只能压到 0.01ms
 - 验收 `scripts/motion_check.mjs`（28 项逐帧断言）；规范 `docs/motion.md`；`design_audit.mjs` 会查裸写时长与全量 `transition-all`
+
+## 最近使用（2026-10-22）
+- 历史存 `%LOCALAPPDATA%\CursorStudio\history.json`（不是 theme.json）：`{version,entries[]}`，50 条上限，同 id 去重置顶，记名称快照
+- `apply_theme` 返回 `ApplyOutcome{recent,warning}`：主操作成功就不回滚，历史失败只 warning；`ThemesResult.recent` 随启动加载，坏了只进 warnings
+- 列表复用 `ThemeCard` 的 `meta` 参数；被删主题只在底部计数，不做不可点的死卡片
