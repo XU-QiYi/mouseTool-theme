@@ -68,5 +68,16 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy CARGO_HTTP_PROXY="
 - **dev server 跨命令会被回收**：`dev_bg.mjs start` 起的 vite 在 bash 命令结束即静默消失（日志无 error，端口只余 TIME_WAIT）。**启动与验证必须写进同一条 bash 命令**，否则验证脚本拿到 502 并报一堆「按钮 NOT_FOUND」假失败
 - **改名只改 theme.json 的 name，目录名保持 UUID**（改目录会让正在使用的光标路径失效）；`updated_at` 承担「导入于」语义，改名不动它
 - 原地编辑类交互（重命名）：autoFocus + onFocus 全选，Enter 保存 / Esc 取消 / 失焦保存，值未变不发请求；**草稿必须用 ref 存**，否则 Esc 与 blur 的 setState 竞态会把「取消」变成「保存」
+- **导出 zip 的包内文件名必须按槽位重命名**（`sizenwse.cur`），因为导入靠文件名反推槽位；用源文件名会破坏「导出→再导入」闭环
+- `export_theme` 接收整个 `CursorTheme` 而非 id：系统方案（注册表）没有磁盘目录，但同样有光标文件路径，这样才能一起导出
+- 写文件失败要清理半成品（空 zip）：先 `drop(writer)` 再 `remove_file`，Windows 上句柄不关删不掉
+- `capabilities/default.json` 用了 `dialog:*` 时，save 需确认 `dialog:allow-save` 在授权内，否则运行时才报权限错
 - **「正在使用」只能从注册表反推**：`get_all_themes` 返回 `active_theme_id`（`read_current_slots` + 双向槽位比对 + 路径大小写归一）。禁止用内存/本地存储记 active——重开即过期，会让已应用的主题还能再点一次「应用」
 - **盒外 ring / box-shadow 与 overflow 容器冲突**：滚动列表首尾必须留 ≥2px padding，否则 ring 被裁、卡片像缺边；`design_check.mjs` 已加硬断言守住
+
+## 动效（2026-10-21）
+- 四档 token：`--motion-fast/base/slow/exit` = 120/180/240/160ms，配 `ease-standard` / `ease-exit`；组件只写 `duration-(--motion-*)`，禁止裸数字与 `transition-all`
+- base-ui 的 toast **前插到栈顶**：新增不推动已有项，「移除最旧一条」才需要 FLIP 让位
+- FLIP 位置 = `offsetParent.rect.top + offsetTop`：BCR 会吃进自身 translate，单看 offsetTop 会漏掉容器整体位移
+- 退场时长不能为 0：base-ui 靠 `transitionend` 卸载节点；reduced-motion 只能压到 0.01ms
+- 验收 `scripts/motion_check.mjs`（28 项逐帧断言）；规范 `docs/motion.md`；`design_audit.mjs` 会查裸写时长与全量 `transition-all`
