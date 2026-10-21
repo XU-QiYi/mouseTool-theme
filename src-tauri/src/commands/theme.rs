@@ -6,8 +6,8 @@ use std::path::Path;
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::models::{CursorSlot, CursorTheme, ThemesResult};
-use crate::utils::{importer, paths, registry};
+use crate::models::{ApplyOutcome, CursorSlot, CursorTheme, ThemesResult};
+use crate::utils::{history, importer, paths, registry};
 
 /// `export_theme` 的返回值：跳过项要说清是哪个槽位，否则用户不知道少了什么
 #[derive(Debug, Serialize)]
@@ -124,10 +124,15 @@ pub fn get_all_themes() -> Result<ThemesResult, String> {
         }
     };
 
+    // 历史是附属数据：读坏了只提示，不影响主题列表
+    let (recent, history_warnings) = history::read_history();
+    warnings.extend(history_warnings);
+
     Ok(ThemesResult {
         themes,
         warnings,
         active_theme_id,
+        recent,
     })
 }
 
@@ -138,10 +143,27 @@ pub fn import_theme(zip_path: String) -> Result<CursorTheme, String> {
 }
 
 /// 把主题应用到系统：写注册表后立即刷新，无需注销
+///
+/// 顺带记一条「最近使用」。历史是附属信息：写失败不影响「已应用」这个事实，
+/// 但要把原因回传，由界面说明「光标切了，只是没记上」，不能静默吞掉。
 #[tauri::command]
-pub fn apply_theme(theme: CursorTheme) -> Result<(), String> {
+pub fn apply_theme(theme: CursorTheme) -> Result<ApplyOutcome, String> {
     registry::write_cursors(&theme.cursors, &theme.name)?;
-    registry::refresh_cursors()
+    registry::refresh_cursors()?;
+
+    match history::record(&theme) {
+        Ok(recent) => Ok(ApplyOutcome {
+            recent,
+            warning: None,
+        }),
+        Err(err) => {
+            let (recent, _) = history::read_history();
+            Ok(ApplyOutcome {
+                recent,
+                warning: Some(err),
+            })
+        }
+    }
 }
 
 /// 恢复系统默认光标

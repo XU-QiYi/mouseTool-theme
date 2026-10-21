@@ -9,9 +9,11 @@ interface ThemeCardProps {
   active: boolean;
   selected: boolean;
   onSelect: (id: string) => void;
+  /** 副标题；默认显示槽位数量，「最近使用」页传入上次使用的时间 */
+  meta?: string;
 }
 
-export function ThemeCard({ theme, active, selected, onSelect }: ThemeCardProps) {
+export function ThemeCard({ theme, active, selected, onSelect, meta }: ThemeCardProps) {
   const cover = theme.cursors[0];
 
   return (
@@ -40,7 +42,9 @@ export function ThemeCard({ theme, active, selected, onSelect }: ThemeCardProps)
         {active && <Badge className="shrink-0">使用中</Badge>}
       </div>
 
-      <p className="mt-0.5 text-xs text-muted-foreground">{theme.cursors.length} 个光标</p>
+      <p className="mt-0.5 text-xs text-muted-foreground">
+        {meta ?? `${theme.cursors.length} 个光标`}
+      </p>
     </button>
   );
 }

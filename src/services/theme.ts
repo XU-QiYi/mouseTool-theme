@@ -1,18 +1,33 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { CursorTheme, ThemesResult } from "@/types/theme";
+import type { ApplyOutcome, CursorTheme, HistoryEntry, ThemesResult } from "@/types/theme";
 import type { CursorPreview } from "@/types/cursor";
-import { MOCK_THEMES } from "@/services/mock";
+import { MOCK_RECENT, MOCK_THEMES } from "@/services/mock";
 
 /** 是否运行在 Tauri 容器里（浏览器里打开时为 false） */
 export const inTauri = "__TAURI_INTERNALS__" in window;
+
+/** 浏览器预览用的「上一次使用时间」，格式与 Rust 侧一致（本地时区、分钟精度） */
+function stamp(): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+}
+
+/** 浏览器里没有 history.json，用内存数组模拟，方便开发时走通「最近使用」 */
+let devRecent: HistoryEntry[] = [...MOCK_RECENT];
 
 /** 对应 Rust 命令 `get_all_themes`；数据源独立容错，失败项进 warnings 而非整体报错 */
 export function getAllThemes(): Promise<ThemesResult> {
   if (!inTauri) {
     console.warn("[dev] 非 Tauri 环境，使用示例数据");
     // 浏览器里读不到注册表，无法判断哪个主题正在使用
-    return Promise.resolve({ themes: MOCK_THEMES, warnings: [], active_theme_id: null });
+    return Promise.resolve({
+      themes: MOCK_THEMES,
+      warnings: [],
+      active_theme_id: null,
+      recent: devRecent,
+    });
   }
   return invoke<ThemesResult>("get_all_themes");
 }
@@ -25,13 +40,26 @@ export function getCursorPreview(filePath: string): Promise<CursorPreview | null
   return invoke<CursorPreview>("get_cursor_preview", { filePath });
 }
 
-/** 对应 Rust 命令 `apply_theme`：写注册表并立即刷新系统光标 */
-export function applyTheme(theme: CursorTheme): Promise<void> {
+/**
+ * 对应 Rust 命令 `apply_theme`：写注册表并立即刷新系统光标
+ *
+ * 返回更新后的「最近使用」；`warning` 非空表示光标切了、但历史没记上。
+ */
+export function applyTheme(theme: CursorTheme): Promise<ApplyOutcome> {
   if (!inTauri) {
     console.warn("[dev] 非 Tauri 环境，跳过应用到系统");
-    return Promise.resolve();
+    devRecent = [
+      {
+        theme_id: theme.id,
+        name: theme.name,
+        is_built_in: theme.is_built_in,
+        applied_at: stamp(),
+      },
+      ...devRecent.filter((entry) => entry.theme_id !== theme.id),
+    ].slice(0, 50);
+    return Promise.resolve({ recent: devRecent, warning: null });
   }
-  return invoke<void>("apply_theme", { theme });
+  return invoke<ApplyOutcome>("apply_theme", { theme });
 }
 
 /** 对应 Rust 命令 `restore_default`：清空光标设置并刷新 */

@@ -21,6 +21,14 @@ pub fn theme_dir(theme_id: &str) -> PathBuf {
     themes_dir().join(theme_id)
 }
 
+/// 最近使用记录：`%LOCALAPPDATA%\CursorStudio\history.json`
+///
+/// 刻意独立于 `themes/`：历史描述的是「界面上点过什么」，
+/// 不属于任何一个主题目录，删主题时也不该跟着被删。
+pub fn history_file() -> PathBuf {
+    data_root().join("history.json")
+}
+
 /// 确保目录存在
 pub fn ensure_dir(path: &std::path::Path) -> Result<(), String> {
     std::fs::create_dir_all(path).map_err(|err| format!("创建目录 {} 失败：{err}", path.display()))

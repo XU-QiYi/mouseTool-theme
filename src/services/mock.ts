@@ -1,4 +1,4 @@
-import type { CursorSlot, CursorTheme } from "@/types/theme";
+import type { CursorSlot, CursorTheme, HistoryEntry } from "@/types/theme";
 
 /** 浏览器预览用示例数据，仅在非 Tauri 环境生效，打包后不会走到这里 */
 
@@ -63,5 +63,24 @@ export const MOCK_THEMES: CursorTheme[] = [
       "C:\\Users\\LeoGene\\AppData\\Local\\CursorStudio\\themes\\9f2c1a30-7b4e-4c1d-8e55-2a6b7c901d11\\cursors",
       "cur",
     ),
+  },
+];
+
+/**
+ * 浏览器预览用的「最近使用」示例：真实记录由 Rust 侧写 history.json，
+ * 这里给两条是为了让开发时的「最近使用」页不是空的。
+ */
+export const MOCK_RECENT: HistoryEntry[] = [
+  {
+    theme_id: "9f2c1a30-7b4e-4c1d-8e55-2a6b7c901d11",
+    name: "Neon Night",
+    is_built_in: false,
+    applied_at: "2026-10-21 22:10",
+  },
+  {
+    theme_id: "sys_firefly",
+    name: "firefly",
+    is_built_in: true,
+    applied_at: "2026-10-20 09:32",
   },
 ];

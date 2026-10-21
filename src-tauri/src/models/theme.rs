@@ -45,6 +45,35 @@ pub struct ThemesResult {
     /// 由「注册表当前光标路径」与各主题的槽位路径比对得出，而不是界面自己记。
     /// `None` 表示识别不出：既可能是系统默认光标，也可能是用户手工改过设置。
     pub active_theme_id: Option<String>,
+    /// 最近使用记录，最新在前
+    pub recent: Vec<HistoryEntry>,
+}
+
+/// 一条「最近使用」记录
+///
+/// 只存应用当时的名称快照，不存整份主题：主题随时可能被改名或删除，
+/// 历史要能独立成立，不能因为主题没了就整条消失。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    /// 系统方案为 `sys_<方案名>`，用户主题为 UUID
+    pub theme_id: String,
+    /// 应用时的显示名
+    pub name: String,
+    pub is_built_in: bool,
+    /// 应用时间，本地时区，格式 `%Y-%m-%d %H:%M`
+    pub applied_at: String,
+}
+
+/// `apply_theme` 的返回值
+///
+/// 光标切换是主操作，记历史是附属操作：历史写失败时主题照样算应用成功，
+/// 但必须把原因带回去，不能静默当作记上了。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplyOutcome {
+    /// 记录之后的最新历史，最新在前
+    pub recent: Vec<HistoryEntry>,
+    /// 光标已切换、但历史没记上时的原因；正常为 `None`
+    pub warning: Option<String>,
 }
 
 /// 光标文件预览数据

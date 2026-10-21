@@ -11,7 +11,7 @@ import {
   restoreDefault as apiRestoreDefault,
 } from "@/services/theme";
 import { readableError, toast } from "@/lib/toast";
-import type { CursorTheme } from "@/types/theme";
+import type { CursorTheme, HistoryEntry } from "@/types/theme";
 
 export type Page = "library" | "imported" | "recent";
 
@@ -20,6 +20,8 @@ interface ThemeStore {
   themes: CursorTheme[];
   /** 当前系统正在使用的主题 ID */
   activeThemeId: string | null;
+  /** 最近使用记录，最新在前（由后端 history.json 提供） */
+  recent: HistoryEntry[];
   /** 界面中选中的主题 ID */
   selectedThemeId: string | null;
   /** 搜索关键词 */
@@ -44,6 +46,7 @@ interface ThemeStore {
 export const useThemeStore = create<ThemeStore>((set, get) => ({
   themes: [],
   activeThemeId: null,
+  recent: [],
   selectedThemeId: null,
   searchQuery: "",
   currentPage: "library",
@@ -54,10 +57,10 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     // 否则重新编译后，上次点过的卡片会一直戴着高亮框、看起来像「待应用」。
     set({ loading: true, selectedThemeId: null });
     try {
-      const { themes, warnings, active_theme_id } = await getAllThemes();
+      const { themes, warnings, active_theme_id, recent } = await getAllThemes();
       // 「正在使用」每次都由后端从注册表反推，不沿用内存旧值：
       // 内存状态一重开就过期，会把已应用的主题当成还能再应用一次。
-      set({ themes, activeThemeId: active_theme_id });
+      set({ themes, activeThemeId: active_theme_id, recent });
       // 部分来源失败仍能拿到其余主题：告知降级即可，不要打断浏览
       if (warnings.length > 0) {
         for (const warn of warnings) console.warn("[loadThemes]", warn);
@@ -81,12 +84,16 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     const theme = get().themes.find((t) => t.id === id);
     if (!theme) return;
     try {
-      await apiApplyTheme(theme);
-      set({ activeThemeId: id });
+      const outcome = await apiApplyTheme(theme);
+      set({ activeThemeId: id, recent: outcome.recent });
       toast.success(
         `已应用「${theme.name}」`,
         inTauri ? "系统光标已切换" : "开发模式：未真正写入系统",
       );
+      // 光标已经切了，这只是附属信息没记上：不能反过来报「应用失败」
+      if (outcome.warning) {
+        toast.warning("光标已切换，但没记入最近使用", outcome.warning);
+      }
     } catch (err) {
       console.error("应用主题失败：", err);
       toast.error("应用失败", readableError(err));
@@ -231,4 +238,33 @@ export function filterThemes(
     list = list.filter((t) => t.name.toLowerCase().includes(q));
   }
   return list;
+}
+
+/** 「最近使用」列表项：主题可能已被删除，所以 theme 允许为 null */
+export interface RecentItem {
+  entry: HistoryEntry;
+  theme: CursorTheme | null;
+}
+
+/**
+ * 把历史记录映射成列表项（保持历史顺序，最新在前）
+ *
+ * 与 filterThemes 同理：必须是纯函数 + 组件内 `useMemo`。
+ * 在 selector 里现算会每次返回新数组，触发无限重渲染。
+ */
+export function buildRecentItems(
+  themes: CursorTheme[],
+  recent: HistoryEntry[],
+  query: string,
+): RecentItem[] {
+  const byId = new Map(themes.map((theme) => [theme.id, theme]));
+  const q = query.trim().toLowerCase();
+
+  return recent
+    .map((entry) => ({ entry, theme: byId.get(entry.theme_id) ?? null }))
+    .filter(({ entry, theme }) => {
+      if (!q) return true;
+      // 主题还在就按当前名字搜（可能改过名），被删了才退回快照名
+      return (theme?.name ?? entry.name).toLowerCase().includes(q);
+    });
 }
