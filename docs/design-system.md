@@ -1,6 +1,7 @@
 # 设计规范 · 鼠标主题工具
 
 > 可视化版本：`docs/design-system.html`（可直接用浏览器打开，含明暗切换）
+> 动效专章：`docs/motion.md`（组件范围 / 进出场 / 降级与验收）
 > Token 唯一来源：`src/App.css`
 > 适用平台：Windows 10/11 桌面端（Tauri + WebView2）
 
@@ -135,13 +136,16 @@
 
 | 档位 | 时长 | 曲线 | 用于 |
 |---|---|---|---|
-| fast | 120ms | `ease-standard` | 悬停变色、焦点环 |
-| base | 180ms | `ease-standard` | 选中切换、描边变化 |
-| slow | 240ms | `ease-standard` | 弹窗、Toast |
+| fast | 120ms | `ease-standard` | 悬停变色、焦点环、按下 |
+| base | 180ms | `ease-standard` | 选中切换、描边变化、堆叠让位 |
+| slow | 240ms | `ease-standard` | 浮层入场（弹窗、Toast） |
+| exit | 160ms | `ease-exit` | 浮层退场，比入场短 1/3 |
 
-`ease-standard = cubic-bezier(0.2, 0, 0, 1)`
+`ease-standard = cubic-bezier(0.2, 0, 0, 1)`、`ease-exit = cubic-bezier(0.4, 0, 1, 1)`
 
-**禁止 `transition-all`** —— 会把布局属性一起过渡。改为明确写 `transition-colors` / `transition-opacity` / `transition-transform`。
+**禁止 `transition-all`** —— 会把布局属性一起过渡。改为明确写属性列表，例如 `transition-[opacity,translate]`。
+
+组件级的进入 / 退出 / 状态切换清单、以及哪些组件**故意不做**动效，见 [`docs/motion.md`](./motion.md)。
 
 ---
 
@@ -195,6 +199,7 @@
 node scripts/design_check.mjs   # 自动按 Tab 走一遍，查焦点环/aria/结构，并存截图
 node scripts/design_audit.mjs   # 间距/字号/图标是否出现阶梯外的值
 node scripts/ui_ratio.mjs       # shadcn 与原生标签比例是否合理
+node scripts/motion_check.mjs   # 逐帧采样：进出场时长、中间态、降级是否生效
 ```
 
 `design_check.mjs` 需要 vite 在 1420 运行。它不会点「应用此主题」，不会改系统光标。
@@ -210,3 +215,4 @@ node scripts/ui_ratio.mjs       # shadcn 与原生标签比例是否合理
 | 2026-10-21 | v1.0 建立。补 `success/warning/info`、`preview-bg/checker`、`elev-raised/overlay`、`text-3xs/2xs`、`ease-standard`；新增 `focus-ring` / `preview-surface` utility；新增 `prefers-reduced-motion` 降级 |
 | 2026-10-21 | v1.1 首次落地。侧栏导航改用 `buttonVariants` + `aria-current`；主题卡补 `focus-ring` 并把 `border` 改为 `ring`；滚动条统一回系统原生（`ScrollArea` 停用）；`text-[10px]/[11px]` 归入 `text-3xs/2xs`；清除 `transition-all` 与 `hover:shadow-sm` |
 | 2026-10-21 | v1.2 修正焦点环。`--ring` 由 `oklch(0.708)` 调深至 `oklch(0.55)`，`button/badge/input` 与 `focus-ring` 去掉了 `/50` 透明度（原件对比仅 1.3:1，不达 3:1）。**这是对 shadcn 上游样式的有意偏离，重新 add 组件后需重打。** |
+| 2026-10-21 | v1.3 动效系统化。新增 `--motion-*` 四档时长与 `ease-exit`；Toast/Dialog 补齐进出场，Toast 增补堆叠 FLIP；`transition-all` 全部改为显式属性列表（含 shadcn 的 button/badge）；新增 `docs/motion.md` 与 `scripts/motion_check.mjs`。**button/badge/input 的过渡属性是对上游的再次偏离，重新 add 后需重打。** |

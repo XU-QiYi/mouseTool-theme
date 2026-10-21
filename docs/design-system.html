@@ -453,17 +453,31 @@ code {
   <!-- 10 动效 -->
   <section>
     <h2><span class="n">10</span>动效</h2>
-    <p class="lead">三档时长，一条主曲线。只动颜色、透明度、位移，不动宽高（会触发重排）。</p>
+    <p class="lead">四档时长，两条曲线。只动透明度、位移、缩放与阴影，不动宽高（会触发重排）。</p>
     <table>
       <thead><tr><th>档位</th><th>时长</th><th>曲线</th><th>用于</th></tr></thead>
       <tbody>
-        <tr><td class="mono">fast</td><td class="mono">120ms</td><td class="mono">ease-standard</td><td>悬停变色、焦点环</td></tr>
-        <tr><td class="mono">base</td><td class="mono">180ms</td><td class="mono">ease-standard</td><td>选中态切换、卡片描边</td></tr>
-        <tr><td class="mono">slow</td><td class="mono">240ms</td><td class="mono">ease-standard</td><td>弹窗、Toast 进出</td></tr>
+        <tr><td class="mono">fast</td><td class="mono">120ms</td><td class="mono">ease-standard</td><td>悬停变色、焦点环、按下</td></tr>
+        <tr><td class="mono">base</td><td class="mono">180ms</td><td class="mono">ease-standard</td><td>选中态切换、卡片描边、堆叠让位</td></tr>
+        <tr><td class="mono">slow</td><td class="mono">240ms</td><td class="mono">ease-standard</td><td>弹窗、Toast 入场</td></tr>
+        <tr><td class="mono">exit</td><td class="mono">160ms</td><td class="mono">ease-exit</td><td>弹窗、Toast 退场（比入场快 1/3）</td></tr>
       </tbody>
     </table>
+
+    <table style="margin-top:16px">
+      <thead><tr><th>组件</th><th>进入</th><th>退出</th><th>状态切换</th></tr></thead>
+      <tbody>
+        <tr><td>Toast</td><td>下移 8px + 0.96 → 1，240ms</td><td>下沉 4px + 0.98，160ms</td><td>堆叠让位 180ms</td></tr>
+        <tr><td>弹窗</td><td>0.96 → 1 + 淡入，240ms</td><td>缩回 0.96，160ms</td><td>遮罩 180ms / 160ms</td></tr>
+        <tr><td>控件</td><td>—</td><td>—</td><td>按钮/输入 120ms，卡片 180ms</td></tr>
+      </tbody>
+    </table>
+
     <div class="note warn-border" style="margin-top:16px">
-      <strong>禁用 <code>transition-all</code>：</strong>它会连布局属性一起过渡，视觉上发飘，性能上掉帧。改为明确列出 <code>colors</code> / <code>opacity</code> / <code>transform</code>。
+      <strong>禁用 <code>transition-all</code>：</strong>它会连布局属性一起过渡，视觉上发飘，性能上掉帧。改为明确列出 <code>opacity</code> / <code>translate</code> / <code>scale</code> / <code>box-shadow</code>。
+    </div>
+    <div class="note" style="margin-top:12px">
+      完整范围（含<strong>故意不做</strong>的项及理由）、`prefers-reduced-motion` 降级与逐帧验收，见 <code>docs/motion.md</code>。
     </div>
   </section>
 
@@ -494,6 +508,7 @@ code {
         <tr><td class="mono">node scripts/design_check.mjs</td><td>自动按 Tab 走一遍，查焦点环、aria 与结构，并存截图</td></tr>
         <tr><td class="mono">node scripts/design_audit.mjs</td><td>看间距/字号/图标是否出现阶梯外的值</td></tr>
         <tr><td class="mono">node scripts/ui_ratio.mjs</td><td>看 shadcn 与原生标签的比例是否合理</td></tr>
+        <tr><td class="mono">node scripts/motion_check.mjs</td><td>逐帧采样：进出场时长、中间态、减少动态是否生效</td></tr>
       </tbody>
     </table>
   </section>

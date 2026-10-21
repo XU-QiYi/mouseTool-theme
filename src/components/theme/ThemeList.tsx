@@ -4,6 +4,7 @@ import { Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ThemeCard } from "@/components/theme/ThemeCard";
+import { cn } from "@/lib/utils";
 import { filterThemes, useThemeStore } from "@/stores/themeStore";
 
 const EMPTY_TEXT: Record<string, string> = {
@@ -43,7 +44,7 @@ export function ThemeList() {
       <div className="flex-1 overflow-y-auto">
         {/* pt-2 不能省：卡片选中环是画在盒子外面的 box-shadow，
             贴着滚动容器上沿会被 overflow 裁掉，第一张卡看起来像没有上边框 */}
-        <div className="space-y-2 px-3 pt-2 pb-3">
+        <div className={cn("space-y-2 px-3 pt-2 pb-3", !loading && "enter-fade")}>
           {loading ? (
             [0, 1, 2].map((i) => <Skeleton key={i} className="h-32 w-full rounded-xl" />)
           ) : visibleThemes.length > 0 ? (

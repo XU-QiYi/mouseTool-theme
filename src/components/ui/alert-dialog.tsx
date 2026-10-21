@@ -17,14 +17,25 @@ function AlertDialogContent({
 }: React.ComponentProps<typeof AlertDialogPrimitive.Popup>) {
   return (
     <AlertDialogPrimitive.Portal>
-      <AlertDialogPrimitive.Backdrop className="fixed inset-0 z-50 bg-black/40 transition-opacity duration-200 ease-standard data-[ending-style]:opacity-0 data-[starting-style]:opacity-0" />
+      {/* 遮罩先淡入、后淡出；比弹窗本身快一档，避免"两层一起慢慢变" */}
+      <AlertDialogPrimitive.Backdrop
+        data-slot="alert-dialog-backdrop"
+        className={cn(
+          "fixed inset-0 z-50 bg-black/40 transition-opacity duration-(--motion-base) ease-standard",
+          "data-[starting-style]:opacity-0",
+          "data-[ending-style]:duration-(--motion-exit) data-[ending-style]:ease-exit data-[ending-style]:opacity-0",
+        )}
+      />
+      {/* 以中心为原点缩放：居中元素不加位移，否则会和 -translate 的居中打架 */}
       <AlertDialogPrimitive.Popup
+        data-slot="alert-dialog-popup"
         className={cn(
           "fixed top-1/2 left-1/2 z-50 w-96 max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2",
           "rounded-xl bg-card p-5 text-card-foreground ring-1 ring-foreground/10 shadow-overlay",
-          "transition-[opacity,transform] duration-200 ease-standard",
-          "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
-          "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
+          "origin-center transition-[opacity,scale] duration-(--motion-slow) ease-standard",
+          "data-[starting-style]:pointer-events-none data-[starting-style]:scale-96 data-[starting-style]:opacity-0",
+          "data-[ending-style]:pointer-events-none data-[ending-style]:scale-96 data-[ending-style]:opacity-0",
+          "data-[ending-style]:duration-(--motion-exit) data-[ending-style]:ease-exit",
           className,
         )}
         {...props}

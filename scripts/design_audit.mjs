@@ -31,6 +31,7 @@ const out = {
   "圆角": {},
   "阴影": {},
   "动效": {},
+  "动效时长 · token": {},
 };
 
 const bump = (k, v) => (out[k][v] = (out[k][v] || 0) + 1);
@@ -64,6 +65,7 @@ for (const f of files) {
   for (const m of src.matchAll(/\bshadow-([a-z0-9]+)/g)) bump("阴影", m[1]);
 
   for (const m of src.matchAll(/\btransition-([a-z]+)/g)) bump("动效", m[1]);
+  for (const m of src.matchAll(/\bduration-(\(--motion-[a-z]+\))/g)) bump("动效时长 · token", m[1]);
 }
 
 const fmt = (o) =>
@@ -84,7 +86,19 @@ const spacingOffGrid = Object.keys(out["间距"]).filter((v) => {
 });
 const magicType = Object.keys(out["字号 · 魔法值"]);
 
+// 动效规则对 components/ui 同样适用：上面按约定跳过了 ui，这里单独再扫全量
+const bareDurations = new Set();
+const transitionAllFiles = [];
+for (const f of walk(ROOT)) {
+  const src = fs.readFileSync(f, "utf8");
+  for (const m of src.matchAll(/\bduration-(\(--motion-[a-z]+\)|\d+|\[[^\]]+\])/g)) {
+    if (!m[1].startsWith("(--motion-")) bareDurations.add(m[1]);
+  }
+  if (/\btransition-all\b/.test(src)) transitionAllFiles.push(path.basename(f));
+}
+
 console.log("\n## 合规判定");
 console.log(`   非 2px 网格的间距：${spacingOffGrid.length ? spacingOffGrid.join(", ") : "无"}`);
 console.log(`   字号魔法值：${magicType.length ? magicType.join(", ") : "无"}`);
-console.log(`   transition-all：${out["动效"]["all"] ? "存在" : "无"}`);
+console.log(`   裸写时长（应用 --motion-*）：${bareDurations.size ? [...bareDurations].join(", ") : "无"}`);
+console.log(`   transition-all：${transitionAllFiles.length ? transitionAllFiles.join(", ") : "无"}`);

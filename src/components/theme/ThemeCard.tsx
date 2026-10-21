@@ -20,7 +20,8 @@ export function ThemeCard({ theme, active, selected, onSelect }: ThemeCardProps)
       onClick={() => onSelect(theme.id)}
       aria-pressed={selected}
       aria-current={active ? "true" : undefined}
-      className={`focus-ring w-full rounded-xl bg-card p-3 text-left transition-colors ${
+      className={`focus-ring w-full rounded-xl bg-card p-3 text-left transition-[background-color,box-shadow,translate] duration-(--motion-base) ease-standard active:translate-y-px ${
+        // ring 是 box-shadow，1px→2px 能被平滑插值；换成 border 会真的跳一下
         selected
           ? "bg-accent ring-2 ring-primary"
           : "ring-1 ring-foreground/10 hover:ring-primary/40"

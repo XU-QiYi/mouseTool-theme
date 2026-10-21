@@ -94,7 +94,7 @@ export function ThemeDetail({ theme }: ThemeDetailProps) {
       : "删除此主题";
 
   return (
-    <section className="flex h-full min-w-0 flex-1 flex-col">
+    <section className="enter-fade flex h-full min-w-0 flex-1 flex-col">
       <div className="flex items-start gap-6 p-6 pb-4">
         <div className="flex h-24 w-24 shrink-0 items-center justify-center rounded-xl border bg-muted">
           <MousePointer2 className="size-10 text-muted-foreground" />

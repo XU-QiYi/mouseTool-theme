@@ -54,6 +54,13 @@
   /* ── 层次（桌面端以描边为主、阴影为辅）── */
   --elev-raised: 0 1px 2px oklch(0 0 0 / 0.06), 0 0 0 1px oklch(0 0 0 / 0.04);
   --elev-overlay: 0 8px 24px oklch(0 0 0 / 0.12), 0 0 0 1px oklch(0 0 0 / 0.06);
+
+  /* ── 动效时长：只有这四档，组件用 duration-(--motion-*) 引用 ──
+     退场单独一档且比入场短：消失要"让开"，不能拖住用户下一步 */
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --motion-slow: 240ms;
+  --motion-exit: 160ms;
 }
 
 @theme inline {
@@ -123,6 +130,8 @@
   /* ── 缓动 ── */
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-emphasized: cubic-bezier(0.2, 0, 0, 1.2);
+  /* 退场用加速曲线：越走越快，读起来是"撤走"而不是"卡住后消失" */
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
 }
 
 .dark {
@@ -183,11 +192,17 @@
     @apply font-sans;
   }
   @media (prefers-reduced-motion: reduce) {
+    /* 全局兜底：不给"减少动态"留半截动画。
+       时长压到 0.01ms 而不是 0，是因为 base-ui 靠 transitionend 决定何时卸载浮层，
+       没有时长就收不到事件，浮层会留在 DOM 里不消失 */
     *,
     *::before,
     *::after {
       animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
+      transition-delay: 0ms !important;
+      scroll-behavior: auto !important;
     }
   }
 }
@@ -199,6 +214,20 @@
   &:focus-visible {
     @apply ring-3 ring-ring;
   }
+}
+
+/* 内容换挡（骨架 → 列表）：只整体淡入，不逐项入场 —— 逐项会让等待显得更长 */
+@keyframes enter-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@utility enter-fade {
+  animation: enter-fade var(--motion-base) var(--ease-standard) both;
 }
 
 /* 光标预览面：透明 PNG 需要棋盘格底才分得清白光标 */
