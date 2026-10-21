@@ -1,9 +1,22 @@
+use std::collections::HashSet;
 use std::fs;
+use std::io::Write;
+use std::path::Path;
 
+use serde::Serialize;
 use uuid::Uuid;
 
 use crate::models::{CursorSlot, CursorTheme, ThemesResult};
 use crate::utils::{importer, paths, registry};
+
+/// `export_theme` 的返回值：跳过项要说清是哪个槽位，否则用户不知道少了什么
+#[derive(Debug, Serialize)]
+pub struct ExportSummary {
+    /// 实际写进压缩包的光标文件数
+    pub file_count: usize,
+    /// 被跳过的槽位及原因
+    pub skipped: Vec<String>,
+}
 
 /// 聚合各数据源：单个来源失败只降级为 warning，不拖垮其余来源
 ///
@@ -192,6 +205,75 @@ pub fn rename_theme(theme_id: String, new_name: String) -> Result<CursorTheme, S
     fs::write(&json_path, json).map_err(|err| format!("保存主题信息失败（{err}）"))?;
 
     Ok(theme)
+}
+
+/// 导出主题为 zip 主题包
+///
+/// 文件名按槽位重命名（`arrow.cur` / `busy.ani`），这样对方导入时能靠文件名
+/// 反推槽位，形成「导出→再导入」的闭环。系统方案（注册表）同样能导出，
+/// 因为它们也有光标文件路径。
+#[tauri::command]
+pub fn export_theme(theme: CursorTheme, dest_path: String) -> Result<ExportSummary, String> {
+    let dest = Path::new(&dest_path);
+    let parent = dest.parent().ok_or_else(|| "目标路径无效".to_string())?;
+    if !parent.exists() {
+        return Err(format!("目标文件夹不存在：{}", parent.display()));
+    }
+
+    let file =
+        fs::File::create(dest).map_err(|err| format!("无法创建文件，它可能正被占用（{err}）"))?;
+    let mut writer = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default();
+
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut file_count = 0usize;
+    let mut skipped: Vec<String> = Vec::new();
+
+    for slot in &theme.cursors {
+        if !seen.insert(slot.registry_key.as_str()) {
+            continue;
+        }
+
+        let src = Path::new(&slot.file_path);
+        let ext = src
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase());
+        let Some(ext) = ext.filter(|e| matches!(e.as_str(), "cur" | "ani" | "ico")) else {
+            skipped.push(format!("{}（不是光标文件）", slot.display_name));
+            continue;
+        };
+
+        let Ok(data) = fs::read(src) else {
+            skipped.push(format!("{}（源文件不存在）", slot.display_name));
+            continue;
+        };
+
+        let name = format!("{}.{ext}", slot.registry_key.to_lowercase());
+        writer
+            .start_file(name, options)
+            .map_err(|err| format!("打包失败（{err}）"))?;
+        writer
+            .write_all(&data)
+            .map_err(|err| format!("写入压缩包失败（{err}）"))?;
+        file_count += 1;
+    }
+
+    if file_count == 0 {
+        // 先关掉句柄再删，否则 Windows 上文件被占用删不掉，会留个空 zip
+        drop(writer);
+        let _ = fs::remove_file(dest);
+        return Err("没有可导出的光标文件，源文件可能已被移动或删除".to_string());
+    }
+
+    writer
+        .finish()
+        .map_err(|err| format!("生成压缩包失败（{err}）"))?;
+
+    Ok(ExportSummary {
+        file_count,
+        skipped,
+    })
 }
 
 #[cfg(test)]
@@ -384,5 +466,78 @@ mod tests {
         assert_eq!(renamed.name, "新名字", "首尾空格应被去掉");
         assert_eq!(saved.name, "新名字", "改名结果必须落盘");
         assert_eq!(saved.updated_at, "", "改名不应改动导入时间");
+    }
+
+    /// 导出必须形成闭环：文件名按槽位重命名，再导入能还原成同一个槽位
+    #[test]
+    fn 导出再导入应还原槽位() {
+        let cur = std::fs::read(r"C:\Windows\Cursors\aero_arrow.cur").expect("需要系统光标文件");
+
+        let src_dir = std::env::temp_dir().join("cursortheme-export-src");
+        fs::create_dir_all(&src_dir).expect("建临时源目录");
+        // 故意用不可识别的源文件名，验证导出时会按槽位重命名
+        let src_file = src_dir.join("随便起的名字.cur");
+        fs::write(&src_file, &cur).expect("写入临时光标");
+        let src_path = src_file.to_string_lossy().to_string();
+
+        let theme = theme_with_slots("export-test", "导出测试", &[("SizeNWSE", &src_path)]);
+        let zip_path = std::env::temp_dir().join("cursortheme-export-roundtrip.zip");
+
+        let summary = export_theme(theme, zip_path.to_string_lossy().into_owned())
+            .expect("导出应成功");
+        assert_eq!(summary.file_count, 1);
+        assert!(summary.skipped.is_empty(), "不该有跳过项");
+
+        // 包内文件名必须是槽位名（小写），导入才能反推
+        let file = fs::File::open(&zip_path).expect("打开导出的 zip");
+        let mut archive = zip::ZipArchive::new(file).expect("解析导出的 zip");
+        assert_eq!(archive.len(), 1);
+        assert_eq!(archive.by_index(0).unwrap().name(), "sizenwse.cur");
+        drop(archive);
+
+        // 闭环：再导入应还原成 SizeNWSE
+        let reimported =
+            importer::import_zip(zip_path.to_str().unwrap()).expect("重新导入应成功");
+        assert_eq!(reimported.cursors.len(), 1);
+        assert_eq!(reimported.cursors[0].registry_key, "SizeNWSE");
+        assert_eq!(reimported.cursors[0].display_name, "对角线调整 1");
+
+        fs::remove_dir_all(&src_dir).ok();
+        fs::remove_file(&zip_path).ok();
+        fs::remove_dir_all(paths::theme_dir(&reimported.id)).ok();
+    }
+
+    /// 源文件全缺失时，必须报错，且不能留下空 zip 骗用户
+    #[test]
+    fn 源文件全缺失时不该留下空压缩包() {
+        let theme = theme_with_slots(
+            "empty-test",
+            "空测试",
+            &[("Arrow", r"C:\这个文件根本不存在\arrow.cur")],
+        );
+        let zip_path = std::env::temp_dir().join("cursortheme-export-empty.zip");
+
+        let err = export_theme(theme, zip_path.to_string_lossy().into_owned()).unwrap_err();
+        assert!(err.contains("没有可导出"), "实际：{err}");
+        assert!(
+            !Path::new(&zip_path).exists(),
+            "失败时不能留下空压缩包"
+        );
+    }
+
+    /// 删除是破坏性操作：既要真的把目录删掉，重复删除也要给人话而不是崩溃
+    #[test]
+    fn 删除应移除主题目录且重复删除有提示() {
+        let id = Uuid::new_v4().to_string();
+        let dir = paths::theme_dir(&id);
+        paths::ensure_dir(&dir).expect("建临时主题目录");
+        fs::write(dir.join("theme.json"), "{}").expect("写占位文件");
+        assert!(dir.exists());
+
+        delete_theme(id.clone()).expect("删除应成功");
+        assert!(!dir.exists(), "主题目录必须被真正删掉");
+
+        let err = delete_theme(id).unwrap_err();
+        assert!(err.contains("已经不在了"), "重复删除应给人话提示，实际：{err}");
     }
 }

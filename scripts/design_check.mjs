@@ -267,6 +267,20 @@ try {
   const shotRename = await send("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(OUT_DIR, "design_renamed.png"), Buffer.from(shotRename.result.data, "base64"));
 
+  // 6.5 导出：浏览器里应给出明确提示，而不是静默失败
+  const exportState = await evaluate(`(() => {
+    const btn = [...document.querySelectorAll("button")].find(b => b.textContent.includes("导出"));
+    if (!btn) return "NO_BTN";
+    if (btn.disabled) return "DISABLED";
+    btn.click();
+    return "CLICKED";
+  })()`);
+  await sleep(600);
+  const exportToast = await evaluate(
+    `document.body.innerText.includes("开发模式无法导出") ? "有提示" : "无提示"`,
+  );
+  console.log("导出按钮:", exportState, "|", exportToast);
+
   // 7. 长文案：验证真实错误信息的换行与高度（模拟 Rust 返回的最长错误）
   await evaluate(`window.__toast?.close()`);
   await sleep(300);

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { save } from "@tauri-apps/plugin-dialog";
 import { Archive, Check, MousePointer2, Pencil, RotateCcw, Trash2 } from "lucide-react";
 
 import {
@@ -13,6 +14,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { CursorGrid } from "@/components/theme/CursorGrid";
+import { toast } from "@/lib/toast";
+import { inTauri } from "@/services/theme";
 import { useThemeStore } from "@/stores/themeStore";
 import type { CursorTheme } from "@/types/theme";
 
@@ -26,8 +29,30 @@ export function ThemeDetail({ theme }: ThemeDetailProps) {
   const restoreDefault = useThemeStore((s) => s.restoreDefault);
   const deleteTheme = useThemeStore((s) => s.deleteTheme);
   const renameTheme = useThemeStore((s) => s.renameTheme);
+  const exportTheme = useThemeStore((s) => s.exportTheme);
   const isActive = theme.id === activeThemeId;
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const handleExport = async () => {
+    if (!inTauri) {
+      toast.info("开发模式无法导出", "保存文件需要桌面环境，请用 npm run tauri dev 启动");
+      return;
+    }
+    setExporting(true);
+    try {
+      const dest = await save({
+        defaultPath: `${theme.name}.zip`,
+        filters: [{ name: "主题包", extensions: ["zip"] }],
+      });
+      if (dest) await exportTheme(theme.id, dest);
+    } catch (err) {
+      console.error("打开保存对话框失败：", err);
+      toast.error("无法选择保存位置", "请重试，或检查目标文件夹权限");
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(theme.name);
@@ -129,9 +154,9 @@ export function ThemeDetail({ theme }: ThemeDetailProps) {
               <Check data-icon="inline-start" />
               {isActive ? "当前使用中" : "应用此主题"}
             </Button>
-            <Button variant="outline" disabled title="阶段 6 实现">
+            <Button variant="outline" onClick={handleExport} disabled={exporting}>
               <Archive data-icon="inline-start" />
-              导出 ZIP
+              {exporting ? "导出中…" : "导出 ZIP"}
             </Button>
           </div>
         </div>

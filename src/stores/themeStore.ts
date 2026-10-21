@@ -3,6 +3,7 @@ import { create } from "zustand";
 import {
   applyTheme as apiApplyTheme,
   deleteTheme as apiDeleteTheme,
+  exportTheme as apiExportTheme,
   getAllThemes,
   importTheme as apiImportTheme,
   inTauri,
@@ -34,6 +35,7 @@ interface ThemeStore {
   importTheme: (zipPath: string) => Promise<void>;
   deleteTheme: (id: string) => Promise<void>;
   renameTheme: (id: string, newName: string) => Promise<void>;
+  exportTheme: (id: string, destPath: string) => Promise<void>;
   selectTheme: (id: string) => void;
   setSearchQuery: (q: string) => void;
   setCurrentPage: (p: Page) => void;
@@ -174,6 +176,23 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     } catch (err) {
       console.error("改名失败：", err);
       toast.error("改名失败", readableError(err));
+    }
+  },
+
+  exportTheme: async (id, destPath) => {
+    const theme = get().themes.find((t) => t.id === id);
+    if (!theme) return;
+
+    try {
+      const summary = await apiExportTheme(theme, destPath);
+      // 跳过的槽位必须说出来：用户拿到 zip 才发现少了几个光标会很难查
+      const hint = summary.skipped.length
+        ? `${summary.skipped.length} 个槽位被跳过：${summary.skipped.join("、")}`
+        : `已保存到 ${destPath}`;
+      toast.success(`已导出 ${summary.file_count} 个光标文件`, hint);
+    } catch (err) {
+      console.error("导出主题失败：", err);
+      toast.error("导出失败", readableError(err));
     }
   },
 

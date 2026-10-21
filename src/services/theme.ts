@@ -71,3 +71,17 @@ export function renameTheme(theme: CursorTheme, newName: string): Promise<Cursor
   }
   return invoke<CursorTheme>("rename_theme", { themeId: theme.id, newName });
 }
+
+/** `export_theme` 的返回值：跳过的槽位要说清，否则用户不知道少了什么 */
+export interface ExportSummary {
+  file_count: number;
+  skipped: string[];
+}
+
+/** 对应 Rust 命令 `export_theme`：把光标文件打包成 zip */
+export function exportTheme(theme: CursorTheme, destPath: string): Promise<ExportSummary> {
+  if (!inTauri) {
+    return Promise.reject(new Error("浏览器环境不支持导出，请在桌面应用中使用"));
+  }
+  return invoke<ExportSummary>("export_theme", { theme, destPath });
+}

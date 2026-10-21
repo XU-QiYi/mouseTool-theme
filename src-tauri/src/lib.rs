@@ -4,7 +4,8 @@ pub mod utils;
 
 use commands::cursor::get_cursor_preview;
 use commands::theme::{
-    apply_theme, delete_theme, get_all_themes, import_theme, rename_theme, restore_default,
+    apply_theme, delete_theme, export_theme, get_all_themes, import_theme, rename_theme,
+    restore_default,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -19,7 +20,8 @@ pub fn run() {
             restore_default,
             import_theme,
             delete_theme,
-            rename_theme
+            rename_theme,
+            export_theme
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
