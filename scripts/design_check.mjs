@@ -190,7 +190,44 @@ try {
   })()`);
   await sleep(400);
 
-  // 6. 长文案：验证真实错误信息的换行与高度（模拟 Rust 返回的最长错误）
+  // 6. 重命名：点铅笔 → 全选 → 输入 → Enter
+  const pencilHit = await evaluate(`(() => {
+    const btn = document.querySelector('[aria-label="重命名"]');
+    if (!btn) return "NO_PENCIL";
+    btn.click();
+    return "CLICKED";
+  })()`);
+  await sleep(400);
+  const selected = await evaluate(`(() => {
+    const el = document.activeElement;
+    if (el?.tagName !== "INPUT") return "NOT_INPUT:" + el?.tagName;
+    el.select();
+    return "SELECTED";
+  })()`);
+  await send("Input.insertText", { text: "极光之夜" });
+  await sleep(250);
+  for (const type of ["keyDown", "keyUp"]) {
+    await send("Input.dispatchKeyEvent", {
+      type,
+      key: "Enter",
+      code: "Enter",
+      windowsVirtualKeyCode: 13,
+      nativeVirtualKeyCode: 13,
+    });
+  }
+  await sleep(800);
+
+  const renamed = await evaluate(`(() => {
+    const h2 = document.querySelector("h2");
+    const toast = document.body.innerText.includes("已改名");
+    return (h2?.textContent ?? "") + " | toast:" + (toast ? "有" : "无");
+  })()`);
+  console.log("重命名:", pencilHit, selected, "→", renamed);
+
+  const shotRename = await send("Page.captureScreenshot", { format: "png" });
+  writeFileSync(join(OUT_DIR, "design_renamed.png"), Buffer.from(shotRename.result.data, "base64"));
+
+  // 7. 长文案：验证真实错误信息的换行与高度（模拟 Rust 返回的最长错误）
   await evaluate(`window.__toast?.close()`);
   await sleep(300);
   const longErr = await evaluate(`(() => {
@@ -204,13 +241,13 @@ try {
   const shot4 = await send("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(OUT_DIR, "design_toast_long.png"), Buffer.from(shot4.result.data, "base64"));
 
-  // 7. 完整删除链路：确认后列表应减少一项（浏览器里 deleteTheme 是 mock，不会碰磁盘）
+  // 8. 完整删除链路：确认后列表应减少一项（浏览器里 deleteTheme 是 mock，不会碰磁盘）
   const before = await evaluate(
     `document.querySelectorAll('button[class*="rounded-xl"]').length`,
   );
   await evaluate(`(() => {
     const cards = [...document.querySelectorAll("button")].filter(b => b.className.includes("rounded-xl"));
-    const target = cards.find(c => c.textContent.includes("Neon Night"));
+    const target = cards.find(c => !c.textContent.includes("使用中"));
     target?.click();
     return !!target;
   })()`);

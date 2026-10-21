@@ -31,6 +31,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(non_snake_case)] // 函数名里的 LOCALAPPDATA 是环境变量原名，不改成小写
     fn 根目录应基于_LOCALAPPDATA() {
         let root = data_root();
         assert!(root.ends_with("CursorStudio"), "实际：{}", root.display());

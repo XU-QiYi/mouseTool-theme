@@ -58,3 +58,15 @@ export function deleteTheme(themeId: string): Promise<void> {
   }
   return invoke<void>("delete_theme", { themeId });
 }
+
+/**
+ * 对应 Rust 命令 `rename_theme`：只改显示名，返回更新后的主题
+ *
+ * 浏览器环境直接本地改名，让开发时也能走通完整交互（不会持久化）。
+ */
+export function renameTheme(theme: CursorTheme, newName: string): Promise<CursorTheme> {
+  if (!inTauri) {
+    return Promise.resolve({ ...theme, name: newName });
+  }
+  return invoke<CursorTheme>("rename_theme", { themeId: theme.id, newName });
+}

@@ -81,6 +81,43 @@ pub fn delete_theme(theme_id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 重命名已导入的主题
+///
+/// 只改 theme.json 里的显示名，目录名仍是 UUID（改目录会影响正在使用的
+/// 光标路径）。`updated_at` 保持导入时间不变——界面上它承担的是「导入于」。
+#[tauri::command]
+pub fn rename_theme(theme_id: String, new_name: String) -> Result<CursorTheme, String> {
+    let id = Uuid::parse_str(&theme_id).map_err(|_| "非法的主题 ID".to_string())?;
+    let name = new_name.trim();
+
+    if name.is_empty() {
+        return Err("名称不能为空".to_string());
+    }
+    if name.chars().count() > 40 {
+        return Err("名称最多 40 个字".to_string());
+    }
+    if name.chars().any(char::is_control) {
+        return Err("名称不能包含换行或控制字符".to_string());
+    }
+
+    let json_path = paths::theme_dir(&id.to_string()).join("theme.json");
+    if !json_path.exists() {
+        return Err("找不到这个主题，它可能已被删除".to_string());
+    }
+
+    let raw = fs::read_to_string(&json_path).map_err(|err| format!("读不到主题信息（{err}）"))?;
+    let mut theme: CursorTheme =
+        serde_json::from_str(&raw).map_err(|err| format!("主题信息已损坏，无法改名（{err}）"))?;
+
+    theme.name = name.to_string();
+
+    let json =
+        serde_json::to_string_pretty(&theme).map_err(|err| format!("保存主题信息失败（{err}）"))?;
+    fs::write(&json_path, json).map_err(|err| format!("保存主题信息失败（{err}）"))?;
+
+    Ok(theme)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

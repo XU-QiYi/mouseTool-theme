@@ -6,6 +6,7 @@ import {
   getAllThemes,
   importTheme as apiImportTheme,
   inTauri,
+  renameTheme as apiRenameTheme,
   restoreDefault as apiRestoreDefault,
 } from "@/services/theme";
 import { readableError, toast } from "@/lib/toast";
@@ -32,6 +33,7 @@ interface ThemeStore {
   restoreDefault: () => Promise<void>;
   importTheme: (zipPath: string) => Promise<void>;
   deleteTheme: (id: string) => Promise<void>;
+  renameTheme: (id: string, newName: string) => Promise<void>;
   selectTheme: (id: string) => void;
   setSearchQuery: (q: string) => void;
   setCurrentPage: (p: Page) => void;
@@ -141,6 +143,33 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     } catch (err) {
       console.error("删除主题失败：", err);
       toast.error("删除失败", readableError(err));
+    }
+  },
+
+  renameTheme: async (id, newName) => {
+    const theme = get().themes.find((t) => t.id === id);
+    if (!theme) return;
+
+    const name = newName.trim();
+    if (!name || name === theme.name) return;
+
+    if (theme.is_built_in) {
+      toast.error("系统自带方案不能改名");
+      return;
+    }
+
+    try {
+      const updated = await apiRenameTheme(theme, name);
+      set((state) => ({
+        themes: state.themes.map((t) => (t.id === id ? updated : t)),
+      }));
+      // 正在使用的主题改名后，注册表里的 SchemeName 还是旧名，需重新应用才同步
+      const hint =
+        get().activeThemeId === id ? "系统设置里的方案名会在下次应用时更新" : undefined;
+      toast.success(`已改名为「${updated.name}」`, hint);
+    } catch (err) {
+      console.error("改名失败：", err);
+      toast.error("改名失败", readableError(err));
     }
   },
 

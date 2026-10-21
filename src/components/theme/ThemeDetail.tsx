@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Archive, Check, MousePointer2, RotateCcw, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Archive, Check, MousePointer2, Pencil, RotateCcw, Trash2 } from "lucide-react";
 
 import {
   AlertDialog,
@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { CursorGrid } from "@/components/theme/CursorGrid";
 import { useThemeStore } from "@/stores/themeStore";
@@ -24,8 +25,40 @@ export function ThemeDetail({ theme }: ThemeDetailProps) {
   const applyTheme = useThemeStore((s) => s.applyTheme);
   const restoreDefault = useThemeStore((s) => s.restoreDefault);
   const deleteTheme = useThemeStore((s) => s.deleteTheme);
+  const renameTheme = useThemeStore((s) => s.renameTheme);
   const isActive = theme.id === activeThemeId;
   const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(theme.name);
+  // 用 ref 存草稿：Esc 与失焦可能落在同一批更新里，此时读 state 会拿到旧值
+  const draftRef = useRef(theme.name);
+
+  // 切换主题或改名成功后，退出编辑态并同步草稿
+  useEffect(() => {
+    draftRef.current = theme.name;
+    setDraft(theme.name);
+    setEditing(false);
+  }, [theme.id, theme.name]);
+
+  const startEdit = () => {
+    draftRef.current = theme.name;
+    setDraft(theme.name);
+    setEditing(true);
+  };
+
+  const commitName = () => {
+    if (!editing) return;
+    setEditing(false);
+    const name = draftRef.current.trim();
+    if (name && name !== theme.name) void renameTheme(theme.id, name);
+  };
+
+  const cancelEdit = () => {
+    draftRef.current = theme.name;
+    setDraft(theme.name);
+    setEditing(false);
+  };
 
   // 系统自带方案没有文件可删；正在使用的主题删掉会让注册表指向空文件
   const canDelete = !theme.is_built_in && !isActive;
@@ -43,9 +76,49 @@ export function ThemeDetail({ theme }: ThemeDetailProps) {
         </div>
 
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <h2 className="truncate text-lg font-medium">{theme.name}</h2>
-            {theme.is_built_in && <Badge variant="outline">系统方案</Badge>}
+          <div className="flex min-w-0 items-center gap-2">
+            {editing ? (
+              <Input
+                autoFocus
+                value={draft}
+                maxLength={40}
+                aria-label="主题名称"
+                className="h-9 max-w-xs text-base"
+                onChange={(e) => {
+                  draftRef.current = e.currentTarget.value;
+                  setDraft(e.currentTarget.value);
+                }}
+                onFocus={(e) => e.currentTarget.select()}
+                onBlur={commitName}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    commitName();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    cancelEdit();
+                  }
+                }}
+              />
+            ) : (
+              <>
+                <h2 className="truncate text-lg font-medium">{theme.name}</h2>
+                {theme.is_built_in ? (
+                  <Badge variant="outline">系统方案</Badge>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label="重命名"
+                    title="重命名"
+                    onClick={startEdit}
+                    className="shrink-0 text-muted-foreground"
+                  >
+                    <Pencil />
+                  </Button>
+                )}
+              </>
+            )}
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
             {theme.description || `${theme.cursors.length} 个光标槽位`}
