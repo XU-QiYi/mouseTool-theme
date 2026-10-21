@@ -23,7 +23,7 @@
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --ring: oklch(0.55 0 0);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -38,6 +38,22 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  /* ── 状态色（反馈专用，不用于主操作）── */
+  --success: oklch(0.55 0.13 152);
+  --success-foreground: oklch(0.985 0 0);
+  --warning: oklch(0.75 0.15 78);
+  --warning-foreground: oklch(0.28 0.06 78);
+  --info: oklch(0.55 0.16 255);
+  --info-foreground: oklch(0.985 0 0);
+
+  /* ── 光标预览面（透明 PNG 需要可分辨的底）── */
+  --preview-bg: oklch(0.965 0 0);
+  --preview-checker: oklch(0.925 0 0);
+
+  /* ── 层次（桌面端以描边为主、阴影为辅）── */
+  --elev-raised: 0 1px 2px oklch(0 0 0 / 0.06), 0 0 0 1px oklch(0 0 0 / 0.04);
+  --elev-overlay: 0 8px 24px oklch(0 0 0 / 0.12), 0 0 0 1px oklch(0 0 0 / 0.06);
 }
 
 @theme inline {
@@ -81,6 +97,32 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+
+  /* ── 状态色：仅用于反馈，不承载主操作 ── */
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+
+  /* ── 光标预览面 ── */
+  --color-preview-bg: var(--preview-bg);
+  --color-preview-checker: var(--preview-checker);
+
+  /* ── 字号补充档（替代 text-[10px] 之类的魔法值）── */
+  --text-3xs: 0.625rem;
+  --text-3xs--line-height: 0.875rem;
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+
+  /* ── 层次 ── */
+  --shadow-raised: var(--elev-raised);
+  --shadow-overlay: var(--elev-overlay);
+
+  /* ── 缓动 ── */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.2, 0, 0, 1.2);
 }
 
 .dark {
@@ -115,6 +157,19 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+
+  --success: oklch(0.72 0.15 152);
+  --success-foreground: oklch(0.15 0 0);
+  --warning: oklch(0.8 0.14 78);
+  --warning-foreground: oklch(0.2 0.05 78);
+  --info: oklch(0.7 0.14 255);
+  --info-foreground: oklch(0.15 0 0);
+
+  --preview-bg: oklch(0.235 0 0);
+  --preview-checker: oklch(0.275 0 0);
+
+  --elev-raised: 0 1px 2px oklch(0 0 0 / 0.4);
+  --elev-overlay: 0 12px 32px oklch(0 0 0 / 0.55), 0 0 0 1px oklch(1 0 0 / 0.08);
 }
 
 @layer base {
@@ -127,4 +182,33 @@
   html {
     @apply font-sans;
   }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* 键盘焦点：所有可交互元素默认可见，不依赖组件是否用了 Button
+   焦点环用不透明 ring —— 半透明（ring/50）在浅底上对比度不足 3:1，形同没有 */
+@utility focus-ring {
+  @apply outline-none;
+  &:focus-visible {
+    @apply ring-3 ring-ring;
+  }
+}
+
+/* 光标预览面：透明 PNG 需要棋盘格底才分得清白光标 */
+@utility preview-surface {
+  background-color: var(--preview-bg);
+  background-image:
+    linear-gradient(45deg, var(--preview-checker) 25%, transparent 25%, transparent 75%, var(--preview-checker) 75%),
+    linear-gradient(45deg, var(--preview-checker) 25%, transparent 25%, transparent 75%, var(--preview-checker) 75%);
+  background-size: 8px 8px;
+  background-position:
+    0 0,
+    4px 4px;
 }

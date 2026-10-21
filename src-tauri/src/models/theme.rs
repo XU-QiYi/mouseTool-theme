@@ -29,6 +29,19 @@ pub struct CursorTheme {
     pub cursors: Vec<CursorSlot>,
 }
 
+/// `get_all_themes` 的返回值：能读到多少给多少，失败项进 `warnings`
+///
+/// 系统方案（注册表）与用户主题（磁盘）是两个独立来源。以前任何一边出错
+/// 都走 `Result::Err` 把整锅端掉，本来能显示的用户主题跟着一起消失。现在
+/// 各来源独立降级，错误改走 `warnings` 通道，只有聚合本身失败才返回 `Err`。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThemesResult {
+    /// 能读出来的主题（系统方案 + 用户主题）
+    pub themes: Vec<CursorTheme>,
+    /// 非致命问题的中文描述，供界面提示"哪些数据没能加载"
+    pub warnings: Vec<String>,
+}
+
 /// 光标文件预览数据
 ///
 /// `image` / `frames` 为 PNG 的 base64 字符串（不含 `data:` 前缀）。

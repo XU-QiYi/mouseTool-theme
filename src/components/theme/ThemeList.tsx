@@ -2,7 +2,6 @@ import { useMemo } from "react";
 import { Search } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ThemeCard } from "@/components/theme/ThemeCard";
 import { filterThemes, useThemeStore } from "@/stores/themeStore";
@@ -40,7 +39,8 @@ export function ThemeList() {
         />
       </div>
 
-      <ScrollArea className="flex-1">
+      {/* 滚动条跟随系统：桌面端优先平台一致，与右侧详情区保持同一套滚动行为 */}
+      <div className="flex-1 overflow-y-auto">
         <div className="space-y-2 px-3 pb-3">
           {loading ? (
             [0, 1, 2].map((i) => <Skeleton key={i} className="h-32 w-full rounded-xl" />)
@@ -60,7 +60,7 @@ export function ThemeList() {
             </p>
           )}
         </div>
-      </ScrollArea>
+      </div>
     </section>
   );
 }

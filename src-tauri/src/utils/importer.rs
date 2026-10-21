@@ -113,8 +113,10 @@ fn collect_cursor_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String
 
 /// 把 zip 解压到临时目录
 fn extract_zip(zip_path: &Path, temp_dir: &Path) -> Result<(), String> {
-    let file = File::open(zip_path).map_err(|err| format!("打开压缩包失败：{err}"))?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|err| format!("解析压缩包失败：{err}"))?;
+    let file = File::open(zip_path)
+        .map_err(|err| format!("打不开这个文件，它可能已被移动或删除（{err}）"))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|err| format!("这不是有效的 ZIP 压缩包（{err}）"))?;
 
     for i in 0..archive.len() {
         let mut entry = archive
@@ -148,9 +150,13 @@ fn extract_zip(zip_path: &Path, temp_dir: &Path) -> Result<(), String> {
 /// 导入一个 zip 主题包，返回生成的主题
 pub fn import_zip(zip_path: &str) -> Result<CursorTheme, String> {
     let source = Path::new(zip_path);
-    let meta = fs::metadata(source).map_err(|err| format!("无法读取文件：{err}"))?;
+    let meta = fs::metadata(source)
+        .map_err(|err| format!("找不到这个文件，它可能已被移动或删除（{err}）"))?;
     if meta.len() > MAX_ZIP_BYTES {
-        return Err("主题包超过 50MB 上限".to_string());
+        let mb = meta.len() as f64 / 1024.0 / 1024.0;
+        return Err(format!(
+            "主题包 {mb:.1}MB，超过 50MB 上限。请删掉多余的光标或截图后重新打包"
+        ));
     }
 
     let theme_id = Uuid::new_v4().to_string();
@@ -174,7 +180,10 @@ fn extract_and_persist(
     let mut files = Vec::new();
     collect_cursor_files(temp_dir, &mut files)?;
     if files.is_empty() {
-        return Err("压缩包里没有找到 .cur 或 .ani 光标文件".to_string());
+        return Err(
+            "压缩包里没有 .cur 或 .ani 光标文件。请把光标文件一起打包，不要只放 .inf 或说明文档"
+                .to_string(),
+        );
     }
 
     // 按槽位去重：同一槽位只取第一个文件
@@ -194,7 +203,9 @@ fn extract_and_persist(
     }
 
     if picked.is_empty() {
-        return Err("光标文件名无法识别对应的槽位".to_string());
+        return Err(
+            "光标文件名认不出来。请改用 arrow、busy、text、hand 这类标准命名后重新打包".to_string(),
+        );
     }
 
     // 按标准槽位顺序排列，界面显示更整齐
@@ -253,25 +264,52 @@ fn extract_and_persist(
 }
 
 /// 读取全部已导入的用户主题
-pub fn read_user_themes() -> Vec<CursorTheme> {
+///
+/// 返回 `(主题列表, 非致命问题描述)`。单项损坏只跳过那一项，不整体失败；
+/// 目录本身读不出来也要让调用方知情，否则用户只会看到"主题凭空消失"。
+pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
+    let mut warnings = Vec::new();
     let dir = paths::themes_dir();
     if !dir.exists() {
-        return Vec::new();
+        return (Vec::new(), warnings);
     }
     let Ok(entries) = fs::read_dir(&dir) else {
-        return Vec::new();
+        warnings.push(format!(
+            "用户主题目录读不出来（{}），已导入的主题暂时显示不了",
+            dir.display()
+        ));
+        return (Vec::new(), warnings);
     };
 
     let mut themes: Vec<CursorTheme> = entries
         .flatten()
         .filter_map(|entry| {
-            let json = fs::read_to_string(entry.path().join("theme.json")).ok()?;
-            serde_json::from_str::<CursorTheme>(&json).ok()
+            let dir = entry.path();
+            // 不能直接 .ok()?：theme.json 一旦损坏，主题会从列表里凭空消失，
+            // 用户只会觉得"我的主题丢了"。跳过它并留下可诊断的信息。
+            let json = match fs::read_to_string(dir.join("theme.json")) {
+                Ok(text) => text,
+                Err(err) => {
+                    let msg = format!("跳过主题目录 {}（读不到 theme.json：{err}）", dir.display());
+                    eprintln!("{msg}");
+                    warnings.push(msg);
+                    return None;
+                }
+            };
+            match serde_json::from_str::<CursorTheme>(&json) {
+                Ok(theme) => Some(theme),
+                Err(err) => {
+                    let msg = format!("跳过损坏的 theme.json {}：{err}", dir.display());
+                    eprintln!("{msg}");
+                    warnings.push(msg);
+                    None
+                }
+            }
         })
         .collect();
 
     themes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-    themes
+    (themes, warnings)
 }
 
 #[cfg(test)]

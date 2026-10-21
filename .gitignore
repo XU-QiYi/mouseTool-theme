@@ -26,3 +26,9 @@ dist-ssr
 # AI 工作记忆：保留 memory 文档，忽略其余运行时产物
 .workbuddy/*
 !.workbuddy/memory/
+
+# 浏览器自动化临时产物
+.playwright-mcp/
+
+# 本地工具测试碎片
+.tmp_shim_test/

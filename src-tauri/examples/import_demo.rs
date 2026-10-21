@@ -27,7 +27,10 @@ fn main() {
             println!();
             println!("  主题目录: {}", paths::theme_dir(&theme.id).display());
 
-            let all = importer::read_user_themes();
+            let (all, warnings) = importer::read_user_themes();
+            for warn in &warnings {
+                println!("  ! {warn}");
+            }
             println!("  已导入主题总数: {}", all.len());
         }
         Err(err) => println!("✗ 导入失败: {err}"),

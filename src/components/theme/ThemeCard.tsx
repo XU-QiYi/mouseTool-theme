@@ -18,10 +18,11 @@ export function ThemeCard({ theme, active, selected, onSelect }: ThemeCardProps)
     <button
       type="button"
       onClick={() => onSelect(theme.id)}
-      className={`w-full rounded-xl border p-3 text-left transition-all ${
+      aria-pressed={selected}
+      className={`focus-ring w-full rounded-xl bg-card p-3 text-left transition-colors ${
         selected
-          ? "border-primary bg-accent"
-          : "border-border hover:border-primary/40 hover:shadow-sm"
+          ? "bg-accent ring-2 ring-primary"
+          : "ring-1 ring-foreground/10 hover:ring-primary/40"
       }`}
     >
       <div className="mb-2.5 flex h-16 items-center justify-center rounded-lg bg-muted">

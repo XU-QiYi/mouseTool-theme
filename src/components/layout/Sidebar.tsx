@@ -2,8 +2,10 @@ import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FolderDown, History, Library, MousePointer2, Settings } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { cn } from "@/lib/utils";
+import { toast } from "@/lib/toast";
 import { inTauri } from "@/services/theme";
 import { useThemeStore, type Page } from "@/stores/themeStore";
 
@@ -21,7 +23,8 @@ export function Sidebar() {
 
   const handleImport = async () => {
     if (!inTauri) {
-      console.warn("[dev] 浏览器环境无法选择文件，请在桌面应用中使用导入");
+      // 浏览器里没有文件系统，静默 return 会让人以为按钮坏了，必须明说
+      toast.info("开发模式无法导入", "文件选择需要桌面环境，请用 npm run tauri dev 启动");
       return;
     }
     setPicking(true);
@@ -59,21 +62,28 @@ export function Sidebar() {
       </div>
 
       <nav className="flex-1 space-y-1 px-3">
-        {NAV_ITEMS.map(({ page, label, icon: Icon }) => (
-          <button
-            key={page}
-            type="button"
-            onClick={() => setCurrentPage(page)}
-            className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${
-              currentPage === page
-                ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
-                : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground"
-            }`}
-          >
-            <Icon className="size-4" />
-            {label}
-          </button>
-        ))}
+        {NAV_ITEMS.map(({ page, label, icon: Icon }) => {
+          const isCurrent = currentPage === page;
+          return (
+            <button
+              key={page}
+              type="button"
+              onClick={() => setCurrentPage(page)}
+              aria-current={isCurrent ? "page" : undefined}
+              className={cn(
+                // 复用 shadcn 按钮的变体，保证与上方「导入主题」同一套状态与焦点环
+                buttonVariants({ variant: "ghost" }),
+                "h-auto w-full justify-start gap-2.5 px-3 py-2",
+                isCurrent
+                  ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                  : "text-muted-foreground hover:bg-sidebar-accent/50",
+              )}
+            >
+              <Icon className="size-4" />
+              {label}
+            </button>
+          );
+        })}
       </nav>
 
       <Separator />

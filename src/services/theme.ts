@@ -1,19 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { CursorTheme } from "@/types/theme";
+import type { CursorTheme, ThemesResult } from "@/types/theme";
 import type { CursorPreview } from "@/types/cursor";
 import { MOCK_THEMES } from "@/services/mock";
 
 /** 是否运行在 Tauri 容器里（浏览器里打开时为 false） */
 export const inTauri = "__TAURI_INTERNALS__" in window;
 
-/** 对应 Rust 命令 `get_all_themes` */
-export function getAllThemes(): Promise<CursorTheme[]> {
+/** 对应 Rust 命令 `get_all_themes`；数据源独立容错，失败项进 warnings 而非整体报错 */
+export function getAllThemes(): Promise<ThemesResult> {
   if (!inTauri) {
     console.warn("[dev] 非 Tauri 环境，使用示例数据");
-    return Promise.resolve(MOCK_THEMES);
+    return Promise.resolve({ themes: MOCK_THEMES, warnings: [] });
   }
-  return invoke<CursorTheme[]>("get_all_themes");
+  return invoke<ThemesResult>("get_all_themes");
 }
 
 /** 对应 Rust 命令 `get_cursor_preview`；浏览器环境无文件系统，返回 null 走占位图 */
@@ -48,4 +48,13 @@ export function importTheme(zipPath: string): Promise<CursorTheme> {
     return Promise.reject(new Error("浏览器环境不支持导入，请在桌面应用中使用"));
   }
   return invoke<CursorTheme>("import_theme", { zipPath });
+}
+
+/** 对应 Rust 命令 `delete_theme`：删除已导入主题及其光标文件目录 */
+export function deleteTheme(themeId: string): Promise<void> {
+  if (!inTauri) {
+    console.warn("[dev] 浏览器环境不删除真实主题");
+    return Promise.resolve();
+  }
+  return invoke<void>("delete_theme", { themeId });
 }

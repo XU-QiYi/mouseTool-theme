@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>设计规范 · 鼠标主题工具</title>
+<style>
+/* ══════════════════════════════════════════════════════════
+   本文件内联的 token 与 src/App.css 保持一致。
+   修改任一处，必须同步另一处。
+   ══════════════════════════════════════════════════════════ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --success: oklch(0.55 0.13 152);
+  --warning: oklch(0.75 0.15 78);
+  --info: oklch(0.55 0.16 255);
+  --preview-bg: oklch(0.965 0 0);
+  --preview-checker: oklch(0.925 0 0);
+  --elev-raised: 0 1px 2px oklch(0 0 0 / .06), 0 0 0 1px oklch(0 0 0 / .04);
+  --elev-overlay: 0 8px 24px oklch(0 0 0 / .12), 0 0 0 1px oklch(0 0 0 / .06);
+  --radius: 0.625rem;
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 240ms;
+  --ease-standard: cubic-bezier(.2, 0, 0, 1);
+  color-scheme: light;
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --border: oklch(1 0 0 / .1);
+  --input: oklch(1 0 0 / .15);
+  --ring: oklch(0.556 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --success: oklch(0.72 0.15 152);
+  --warning: oklch(0.8 0.14 78);
+  --info: oklch(0.7 0.14 255);
+  --preview-bg: oklch(0.235 0 0);
+  --preview-checker: oklch(0.275 0 0);
+  --elev-raised: 0 1px 2px oklch(0 0 0 / .4);
+  --elev-overlay: 0 12px 32px oklch(0 0 0 / .55), 0 0 0 1px oklch(1 0 0 / .08);
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: "Geist Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap { max-width: 1040px; margin: 0 auto; padding: 48px 32px 96px; }
+
+.top {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 24px; padding-bottom: 24px; border-bottom: 1px solid var(--border);
+  margin-bottom: 40px;
+}
+.top h1 { margin: 0; font-size: 20px; font-weight: 500; letter-spacing: -.01em; }
+.top p { margin: 6px 0 0; font-size: 13px; color: var(--muted-foreground); }
+.toggle {
+  flex-shrink: 0; height: 32px; padding: 0 12px; cursor: pointer;
+  font: inherit; font-size: 13px; color: var(--foreground);
+  background: var(--background); border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * .8); transition: background var(--duration-fast) var(--ease-standard);
+}
+.toggle:hover { background: var(--muted); }
+.toggle:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent); }
+
+section { margin-bottom: 56px; scroll-margin-top: 24px; }
+h2 {
+  margin: 0 0 4px; font-size: 15px; font-weight: 500;
+  display: flex; align-items: baseline; gap: 8px;
+}
+h2 .n {
+  font-size: 11px; color: var(--muted-foreground); font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.lead { margin: 0 0 20px; font-size: 13px; color: var(--muted-foreground); max-width: 68ch; }
+
+/* 色板 */
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 12px; }
+.sw { border: 1px solid var(--border); border-radius: calc(var(--radius) * 1.4); overflow: hidden; }
+.sw .chip { height: 56px; border-bottom: 1px solid var(--border); }
+.sw .meta { padding: 8px 10px 10px; }
+.sw .name { font-size: 12px; font-weight: 500; }
+.sw .val { font-size: 10px; color: var(--muted-foreground); font-family: ui-monospace, "Cascadia Code", monospace; margin-top: 2px; word-break: break-all; }
+.sw .use { font-size: 10px; color: var(--muted-foreground); margin-top: 4px; }
+
+/* 表格 */
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+th { font-size: 11px; font-weight: 500; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: .04em; }
+td.mono, .mono { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 11px; color: var(--muted-foreground); }
+tr:last-child td { border-bottom: none; }
+
+/* 字阶 */
+.type-row { display: flex; align-items: baseline; gap: 20px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.type-row:last-child { border-bottom: none; }
+.type-row .sample { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.type-row .tk { width: 92px; flex-shrink: 0; }
+.type-row .px { width: 74px; flex-shrink: 0; font-size: 10px; color: var(--muted-foreground); font-family: ui-monospace, monospace; }
+.type-row .use { width: 190px; flex-shrink: 0; font-size: 11px; color: var(--muted-foreground); }
+
+/* 间距 */
+.space-row { display: flex; align-items: center; gap: 16px; padding: 7px 0; }
+.space-row .bar { height: 12px; background: var(--primary); border-radius: 2px; flex-shrink: 0; opacity: .85; }
+.space-row .lbl { font-size: 11px; font-family: ui-monospace, monospace; color: var(--muted-foreground); }
+
+/* 圆角 / 层次 */
+.grid4 { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 12px; }
+.demo-box {
+  height: 76px; display: flex; align-items: center; justify-content: center;
+  background: var(--card); border: 1px solid var(--border);
+  font-size: 11px; color: var(--muted-foreground); font-family: ui-monospace, monospace;
+}
+.elev { height: 76px; background: var(--card); display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--muted-foreground); border-radius: calc(var(--radius) * 1.4); }
+
+/* 图标 */
+.icon-row { display: flex; align-items: flex-end; gap: 28px; }
+.icon-item { text-align: center; }
+.icon-item svg { display: block; margin: 0 auto 8px; stroke: currentColor; fill: none; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.icon-item span { font-size: 10px; color: var(--muted-foreground); font-family: ui-monospace, monospace; }
+
+/* 按钮矩阵 */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; padding: 0 10px; font: inherit; font-size: 14px; font-weight: 500;
+  border-radius: calc(var(--radius) * .8); border: 1px solid transparent;
+  cursor: pointer; transition: background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard), box-shadow var(--duration-fast) var(--ease-standard);
+  white-space: nowrap; user-select: none;
+}
+.btn:disabled { opacity: .5; pointer-events: none; }
+.btn:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent); }
+.btn-default { background: var(--primary); color: var(--primary-foreground); }
+.btn-default:hover { background: color-mix(in oklch, var(--primary) 80%, transparent); }
+.btn-outline { border-color: var(--border); background: var(--background); color: var(--foreground); }
+.btn-outline:hover { background: var(--muted); }
+.btn-ghost { color: var(--foreground); }
+.btn-ghost:hover { background: var(--muted); }
+.btn-destructive { background: color-mix(in oklch, var(--destructive) 10%, transparent); color: var(--destructive); }
+.btn-destructive:hover { background: color-mix(in oklch, var(--destructive) 20%, transparent); }
+.btn-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+
+/* 预览面 */
+.preview-demo { display: flex; gap: 12px; flex-wrap: wrap; }
+.preview-cell {
+  width: 96px; height: 96px; display: flex; align-items: center; justify-content: center;
+  border-radius: calc(var(--radius) * 1.4); border: 1px solid var(--border);
+  background-color: var(--preview-bg);
+  background-image:
+    linear-gradient(45deg, var(--preview-checker) 25%, transparent 25%, transparent 75%, var(--preview-checker) 75%),
+    linear-gradient(45deg, var(--preview-checker) 25%, transparent 25%, transparent 75%, var(--preview-checker) 75%);
+  background-size: 8px 8px;
+  background-position: 0 0, 4px 4px;
+}
+.preview-cell.plain { background-image: none; }
+.preview-cell svg { width: 32px; height: 32px; fill: var(--foreground); }
+.caption { font-size: 10px; color: var(--muted-foreground); text-align: center; margin-top: 6px; }
+
+/* 卡片对比 */
+.card-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.card-pair > div { border-radius: calc(var(--radius) * 1.4); padding: 14px; font-size: 12px; }
+.card-border { background: var(--card); border: 1px solid var(--border); }
+.card-ring { background: var(--card); box-shadow: 0 0 0 1px color-mix(in oklch, var(--foreground) 10%, transparent); }
+
+.tag {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 8px;
+  font-size: 11px; font-weight: 500; border-radius: 999px;
+  background: var(--muted); color: var(--muted-foreground);
+}
+.tag.ok { background: color-mix(in oklch, var(--success) 16%, transparent); color: var(--success); }
+.tag.warn { background: color-mix(in oklch, var(--warning) 20%, transparent); color: color-mix(in oklch, var(--warning) 70%, var(--foreground)); }
+.tag.bad { background: color-mix(in oklch, var(--destructive) 14%, transparent); color: var(--destructive); }
+
+.note {
+  padding: 12px 14px; border-left: 2px solid var(--border);
+  background: var(--muted); border-radius: 0 calc(var(--radius) * .6) calc(var(--radius) * .6) 0;
+  font-size: 12px; color: var(--muted-foreground);
+}
+.note strong { color: var(--foreground); font-weight: 500; }
+.note.warn-border { border-left-color: var(--warning); }
+
+code {
+  font-family: ui-monospace, "Cascadia Code", monospace; font-size: .92em;
+  background: var(--muted); padding: 1px 5px; border-radius: 4px;
+}
+
+@media (max-width: 720px) {
+  .card-pair { grid-template-columns: 1fr; }
+  .wrap { padding: 32px 20px 64px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div>
+      <h1>鼠标主题工具 · 设计规范</h1>
+      <p>v1.0 · 与 src/App.css 同源 · 桌面端 Windows 10/11</p>
+    </div>
+    <button class="toggle" onclick="document.documentElement.classList.toggle('dark')">切换明暗</button>
+  </header>
+
+  <!-- 01 基础色 -->
+  <section>
+    <h2><span class="n">01</span>语义色</h2>
+    <p class="lead">所有颜色只通过语义名使用，禁止在组件里写死 oklch 或 hex。明暗两套值挂在同名变量上，切换主题时自动生效。</p>
+    <div class="swatches">
+      <div class="sw"><div class="chip" style="background:var(--background)"></div><div class="meta"><div class="name">background</div><div class="val">窗口底色</div><div class="use">最底层，不承载内容</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--card)"></div><div class="meta"><div class="name">card</div><div class="val">卡片面</div><div class="use">与背景区分 1 级</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--muted)"></div><div class="meta"><div class="name">muted</div><div class="val">弱化面</div><div class="use">预览底、占位块</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--accent)"></div><div class="meta"><div class="name">accent</div><div class="val">选中态</div><div class="use">列表项被选中</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--primary)"></div><div class="meta"><div class="name">primary</div><div class="val">主操作</div><div class="use">整屏只允许 1 个</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--border)"></div><div class="meta"><div class="name">border</div><div class="val">描边</div><div class="use">1px 分隔与轮廓</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--muted-foreground)"></div><div class="meta"><div class="name">muted-foreground</div><div class="val">次要文字</div><div class="use">说明、计数、时间</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--ring)"></div><div class="meta"><div class="name">ring</div><div class="val">焦点环</div><div class="use">仅键盘触发</div></div></div>
+    </div>
+  </section>
+
+  <!-- 02 状态色 -->
+  <section>
+    <h2><span class="n">02</span>状态色</h2>
+    <p class="lead">只用于反馈，不承载主操作。成功/警告/失败三色不得用作按钮主色，否则用户会误判可点性。</p>
+    <div class="swatches">
+      <div class="sw"><div class="chip" style="background:var(--success)"></div><div class="meta"><div class="name">success</div><div class="val">oklch(0.55 0.13 152)</div><div class="use">导入成功、已应用</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--warning)"></div><div class="meta"><div class="name">warning</div><div class="val">oklch(0.75 0.15 78)</div><div class="use">格式降级、部分缺失</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--destructive)"></div><div class="meta"><div class="name">destructive</div><div class="val">oklch(0.577 0.245 27.325)</div><div class="use">删除、不可恢复操作</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--info)"></div><div class="meta"><div class="name">info</div><div class="val">oklch(0.55 0.16 255)</div><div class="use">新增提示、说明</div></div></div>
+    </div>
+    <div class="note" style="margin-top:16px">
+      <strong>对比度约束：</strong>状态色作为文字使用时，必须叠在自身 10–20% 的淡化底上（见上方标签），不要直接压在白底或黑底，否则 <code>warning</code> 在白底只有 2.1:1，达不到 AA。
+    </div>
+    <div class="btn-row" style="margin-top:12px">
+      <span class="tag ok">已应用</span>
+      <span class="tag warn">格式降级</span>
+      <span class="tag bad">导入失败</span>
+      <span class="tag">开发中</span>
+    </div>
+  </section>
+
+  <!-- 03 字阶 -->
+  <section>
+    <h2><span class="n">03</span>字阶</h2>
+    <p class="lead">七档封顶。小于 11px 只允许出现在徽章角标，正文最小 12px。字重只有 400 和 500 两种，不使用 600/700。</p>
+    <div class="type-row"><div class="tk mono">text-xl</div><div class="sample" style="font-size:20px;line-height:28px">鼠标主题工具</div><div class="px">20 / 28</div><div class="use">页面主标题</div></div>
+    <div class="type-row"><div class="tk mono">text-lg</div><div class="sample" style="font-size:18px;line-height:28px">光标主题详情</div><div class="px">18 / 28</div><div class="use">区块标题</div></div>
+    <div class="type-row"><div class="tk mono">text-base</div><div class="sample" style="font-size:16px;line-height:24px">空状态主文案</div><div class="px">16 / 24</div><div class="use">空状态、强调</div></div>
+    <div class="type-row"><div class="tk mono">text-sm</div><div class="sample" style="font-size:14px;line-height:20px">主题名称、按钮文字、正文</div><div class="px">14 / 20</div><div class="use">默认正文</div></div>
+    <div class="type-row"><div class="tk mono">text-xs</div><div class="sample" style="font-size:12px;line-height:16px;color:var(--muted-foreground)">辅助说明、光标计数、时间戳</div><div class="px">12 / 16</div><div class="use">次要信息</div></div>
+    <div class="type-row"><div class="tk mono">text-2xs</div><div class="sample" style="font-size:11px;line-height:16px;color:var(--muted-foreground)">槽位英文名 · Cursor Slot</div><div class="px">11 / 16</div><div class="use">密集列表副行</div></div>
+    <div class="type-row"><div class="tk mono">text-3xs</div><div class="sample" style="font-size:10px;line-height:14px">ANI</div><div class="px">10 / 14</div><div class="use">仅徽章角标</div></div>
+    <div class="note" style="margin-top:16px">
+      <strong>已收敛：</strong>原先散落的 <code>text-[10px]</code> 与 <code>text-[11px]</code> 两处魔法值，已改为 <code>text-3xs</code> / <code>text-2xs</code>。当前魔法值数量为 0。
+    </div>
+  </section>
+
+  <!-- 04 间距 -->
+  <section>
+    <h2><span class="n">04</span>间距</h2>
+    <p class="lead">硬规则只有一条：<strong>必须落在 2px 网格上</strong>。在这之上分三档使用——主节奏走 8 的倍数，常规走 4 的倍数，微调只用于图标与文字之间。禁止 <code>p-[7px]</code> 这类任意值。</p>
+
+    <div style="font-size:11px;color:var(--muted-foreground);margin:0 0 10px;text-transform:uppercase;letter-spacing:.04em">主节奏 · 8 的倍数</div>
+    <div class="space-row"><div class="bar" style="width:8px"></div><div class="lbl">8px · gap-2 · 紧凑元素</div></div>
+    <div class="space-row"><div class="bar" style="width:16px"></div><div class="lbl">16px · p-4 · 卡片内边距</div></div>
+    <div class="space-row"><div class="bar" style="width:24px"></div><div class="lbl">24px · p-6 · 区块分离</div></div>
+    <div class="space-row"><div class="bar" style="width:32px"></div><div class="lbl">32px · p-8 · 页面级留白</div></div>
+    <div class="space-row"><div class="bar" style="width:64px"></div><div class="lbl">64px · mt-16 · 空状态下移</div></div>
+
+    <div style="font-size:11px;color:var(--muted-foreground);margin:24px 0 10px;text-transform:uppercase;letter-spacing:.04em">常规 · 4 的倍数</div>
+    <div class="space-row"><div class="bar" style="width:12px"></div><div class="lbl">12px · p-3 · 列表项内边距（最常用）</div></div>
+    <div class="space-row"><div class="bar" style="width:20px"></div><div class="lbl">20px · pt-5 · 侧栏顶部留白</div></div>
+    <div class="space-row"><div class="bar" style="width:40px"></div><div class="lbl">40px · pl-10 · 输入框让位给图标</div></div>
+
+    <div style="font-size:11px;color:var(--muted-foreground);margin:24px 0 10px;text-transform:uppercase;letter-spacing:.04em">微调 · 仅限图标与文字之间</div>
+    <div class="space-row"><div class="bar" style="width:6px"></div><div class="lbl">6px · gap-1.5 · shadcn 按钮内置间距，必须放行</div></div>
+    <div class="space-row"><div class="bar" style="width:10px"></div><div class="lbl">10px · gap-2.5 · 侧栏图标与标签</div></div>
+
+    <div class="note" style="margin-top:16px">
+      <strong>为什么不做白名单：</strong>最初版只允许 8 档，结果把 <code>pt-5</code>、<code>pl-10</code>、<code>mt-16</code> 全判成违规——但它们都是合理值。规范的职责是挡住"随手写"（7px、13px），不是把合理选择也一并禁掉。
+    </div>
+  </section>
+
+  <!-- 05 圆角 -->
+  <section>
+    <h2><span class="n">05</span>圆角</h2>
+    <p class="lead">基准 <code>--radius: 10px</code>，其余由倍数派生。控件小于容器，容器小于浮层。</p>
+    <div class="grid4">
+      <div class="demo-box" style="border-radius:calc(var(--radius)*.6)">md · 6px<br>徽章 / 小标签</div>
+      <div class="demo-box" style="border-radius:calc(var(--radius)*.8)">lg · 8px<br>按钮 / 输入框</div>
+      <div class="demo-box" style="border-radius:calc(var(--radius)*1.4)">xl · 14px<br>卡片</div>
+      <div class="demo-box" style="border-radius:999px">full<br>胶囊 / 头像</div>
+    </div>
+  </section>
+
+  <!-- 06 层次 -->
+  <section>
+    <h2><span class="n">06</span>层次</h2>
+    <p class="lead">桌面端以描边为主、阴影为辅。同一层级只用一种手法，不要既加 border 又加 ring。</p>
+    <div class="grid4">
+      <div class="elev" style="box-shadow:none;border:1px solid var(--border)">flat<br>底色、分隔</div>
+      <div class="elev" style="box-shadow:var(--elev-raised)">raised<br>主题卡、光标卡</div>
+      <div class="elev" style="box-shadow:var(--elev-overlay)">overlay<br>弹窗、下拉、Toast</div>
+    </div>
+    <div class="note" style="margin-top:16px">
+      <strong>浮层层级（z-index）：</strong>Toast <code>60</code> &gt; 弹窗 <code>50</code> &gt; 下拉/浮层 <code>40</code> &gt; 页面内容 <code>0</code>。Toast 永远在最上层——它可能会在弹窗打开时出现。
+    </div>
+    <div class="note" style="margin-top:12px">
+      <strong>已统一：</strong>主题卡原本用 <code>1px border</code>，光标卡用 <code>ring-1</code>，两种描边。现已全部改为 <code>ring-1 ring-foreground/10</code>，与 shadcn Card 的默认手法一致。
+    </div>
+    <div class="card-pair" style="margin-top:12px">
+      <div class="card-border">border 1px · 已废弃</div>
+      <div class="card-ring">ring 1px · 现行</div>
+    </div>
+  </section>
+
+  <!-- 07 图标 -->
+  <section>
+    <h2><span class="n">07</span>图标</h2>
+    <p class="lead">分两类看，不要混为一谈：跟着文字走的<strong>内联图标</strong>必须严格落在四档内；独立成块的<strong>占位图形</strong>（空状态、缩略图）按容器尺寸取值，允许更宽的范围。</p>
+
+    <div style="font-size:11px;color:var(--muted-foreground);margin:0 0 10px;text-transform:uppercase;letter-spacing:.04em">内联图标 · 四档封顶</div>
+    <div class="icon-row">
+      <div class="icon-item"><svg width="12" height="12" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg><span>12 · size-3<br>徽章内</span></div>
+      <div class="icon-item"><svg width="14" height="14" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg><span>14 · size-3.5<br>按钮内联</span></div>
+      <div class="icon-item"><svg width="16" height="16" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg><span>16 · size-4<br>标准</span></div>
+      <div class="icon-item"><svg width="20" height="20" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg><span>20 · size-5<br>导航 / 标题</span></div>
+    </div>
+
+    <div style="font-size:11px;color:var(--muted-foreground);margin:28px 0 10px;text-transform:uppercase;letter-spacing:.04em">占位图形 · 跟容器走</div>
+    <div class="icon-row">
+      <div class="icon-item"><svg width="24" height="24" viewBox="0 0 24 24" style="opacity:.55"><path d="M5 12h14M13 6l6 6-6 6"/></svg><span>24 · size-6<br>空状态</span></div>
+      <div class="icon-item"><svg width="28" height="28" viewBox="0 0 24 24" style="opacity:.55"><path d="M5 12h14M13 6l6 6-6 6"/></svg><span>28 · size-7<br>主题卡占位</span></div>
+      <div class="icon-item"><svg width="32" height="32" viewBox="0 0 24 24" style="opacity:.55"><path d="M5 12h14M13 6l6 6-6 6"/></svg><span>32 · size-8<br>槽位占位</span></div>
+      <div class="icon-item"><svg width="40" height="40" viewBox="0 0 24 24" style="opacity:.55"><path d="M5 12h14M13 6l6 6-6 6"/></svg><span>40 · size-10<br>详情页头图</span></div>
+    </div>
+
+    <div class="note" style="margin-top:16px">
+      <strong>现状是干净的：</strong>审计脚本报"7 种尺寸"，是因为把两类混着数了。分开看，内联 16/20 各一处，占位 24/28/32/40 与各自容器匹配，没有需要返工的地方。<strong>这条记下来：统计要分维度，否则会把合理差异误判成混乱。</strong>
+    </div>
+  </section>
+
+  <!-- 08 组件状态 -->
+  <section>
+    <h2><span class="n">08</span>组件状态</h2>
+    <p class="lead">每个可交互元素必须有默认、悬停、焦点、禁用四态。焦点环只在键盘操作时出现，鼠标点击不出现。</p>
+    <table>
+      <thead><tr><th>变体</th><th>默认</th><th>悬停</th><th>禁用</th><th>用途</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="mono">default</td>
+          <td><button class="btn btn-default">应用此主题</button></td>
+          <td><button class="btn btn-default" style="background:color-mix(in oklch,var(--primary) 80%,transparent)">应用此主题</button></td>
+          <td><button class="btn btn-default" disabled>应用此主题</button></td>
+          <td>整屏唯一主操作</td>
+        </tr>
+        <tr>
+          <td class="mono">outline</td>
+          <td><button class="btn btn-outline">导出 ZIP</button></td>
+          <td><button class="btn btn-outline" style="background:var(--muted)">导出 ZIP</button></td>
+          <td><button class="btn btn-outline" disabled>导出 ZIP</button></td>
+          <td>并列的次操作</td>
+        </tr>
+        <tr>
+          <td class="mono">ghost</td>
+          <td><button class="btn btn-ghost">最近使用</button></td>
+          <td><button class="btn btn-ghost" style="background:var(--muted)">最近使用</button></td>
+          <td><button class="btn btn-ghost" disabled>最近使用</button></td>
+          <td>导航项、弱化操作</td>
+        </tr>
+        <tr>
+          <td class="mono">destructive</td>
+          <td><button class="btn btn-destructive">删除此主题</button></td>
+          <td><button class="btn btn-destructive" style="background:color-mix(in oklch,var(--destructive) 20%,transparent)">删除此主题</button></td>
+          <td><button class="btn btn-destructive" disabled>删除此主题</button></td>
+          <td>不可恢复操作</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="note" style="margin-top:16px">
+      <strong>焦点演示：</strong>用 Tab 键依次聚焦上面任意按钮，应出现 3px <strong>不透明</strong> <code>ring</code> 外环（对比度 ≥ 3:1）。鼠标点击时不应出现。
+    </div>
+    <div class="note warn-border" style="margin-top:12px">
+      <strong>为什么不半透明：</strong>shadcn 默认是 <code>ring-ring/50</code>，实测在浅色底上只有约 1.3:1，键盘用户看不见。<code>--ring</code> 已从 <code>oklch(0.708)</code> 调深到 <code>oklch(0.55)</code>，并去掉 50% 透明度，实测达到 3.6:1。
+    </div>
+  </section>
+
+  <!-- 09 光标预览面 -->
+  <section>
+    <h2><span class="n">09</span>光标预览面</h2>
+    <p class="lead">本产品专属规格。光标多为透明 PNG，纯灰底会让白色光标消失，因此预览底必须是棋盘格；对比度压到 4% 以内，避免抢戏。</p>
+    <div class="preview-demo">
+      <div>
+        <div class="preview-cell">
+          <svg viewBox="0 0 24 24"><path d="M5.5 3.2 18 11.4l-5.6 1.1 2.8 5.4-2.3 1.2-2.8-5.5L5.5 17z"/></svg>
+        </div>
+        <div class="caption">棋盘格（推荐）</div>
+      </div>
+      <div>
+        <div class="preview-cell plain">
+          <svg viewBox="0 0 24 24"><path d="M5.5 3.2 18 11.4l-5.6 1.1 2.8 5.4-2.3 1.2-2.8-5.5L5.5 17z"/></svg>
+        </div>
+        <div class="caption">纯色底（白光标会丢）</div>
+      </div>
+      <div style="flex:1;min-width:220px">
+        <table>
+          <tbody>
+            <tr><td>格子尺寸</td><td class="mono">8px / 4px 交错</td></tr>
+            <tr><td>格子对比</td><td class="mono">ΔL ≈ 4%</td></tr>
+            <tr><td>卡片内尺寸</td><td class="mono">h-16 (64px)</td></tr>
+            <tr><td>槽位内尺寸</td><td class="mono">h-12 (48px)</td></tr>
+            <tr><td>光标图最大边</td><td class="mono">48px</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 动效 -->
+  <section>
+    <h2><span class="n">10</span>动效</h2>
+    <p class="lead">三档时长，一条主曲线。只动颜色、透明度、位移，不动宽高（会触发重排）。</p>
+    <table>
+      <thead><tr><th>档位</th><th>时长</th><th>曲线</th><th>用于</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">fast</td><td class="mono">120ms</td><td class="mono">ease-standard</td><td>悬停变色、焦点环</td></tr>
+        <tr><td class="mono">base</td><td class="mono">180ms</td><td class="mono">ease-standard</td><td>选中态切换、卡片描边</td></tr>
+        <tr><td class="mono">slow</td><td class="mono">240ms</td><td class="mono">ease-standard</td><td>弹窗、Toast 进出</td></tr>
+      </tbody>
+    </table>
+    <div class="note warn-border" style="margin-top:16px">
+      <strong>禁用 <code>transition-all</code>：</strong>它会连布局属性一起过渡，视觉上发飘，性能上掉帧。改为明确列出 <code>colors</code> / <code>opacity</code> / <code>transform</code>。
+    </div>
+  </section>
+
+  <!-- 11 可访问性 -->
+  <section>
+    <h2><span class="n">11</span>可访问性</h2>
+    <p class="lead">桌面应用同样需要键盘可达。以下为上线前必须逐条通过。</p>
+    <table>
+      <thead><tr><th>项</th><th>标准</th><th>当前</th></tr></thead>
+      <tbody>
+        <tr><td>正文对比度</td><td>≥ 4.5:1</td><td><span class="tag ok">达标</span></td></tr>
+        <tr><td>键盘可达</td><td>所有操作可用 Tab + Enter 完成</td><td><span class="tag ok">达标</span></td></tr>
+        <tr><td>焦点可见</td><td>每个可交互元素有 3px 焦点环</td><td><span class="tag ok">达标</span></td></tr>
+        <tr><td>当前项语义</td><td>导航当前页带 aria-current="page"</td><td><span class="tag ok">达标</span></td></tr>
+        <tr><td>命中区</td><td>≥ 32×32px（桌面，鼠标精度高）</td><td><span class="tag ok">达标</span></td></tr>
+        <tr><td>动效降级</td><td>尊重 prefers-reduced-motion</td><td><span class="tag ok">已支持</span></td></tr>
+        <tr><td>图标可读</td><td>纯图标按钮必须有 aria-label</td><td><span class="tag warn">待补</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 12 落地检查 -->
+  <section>
+    <h2><span class="n">12</span>落地检查</h2>
+    <p class="lead">每次改动界面后跑这三条，全绿才算完成。</p>
+    <table>
+      <tbody>
+        <tr><td class="mono">node scripts/design_check.mjs</td><td>自动按 Tab 走一遍，查焦点环、aria 与结构，并存截图</td></tr>
+        <tr><td class="mono">node scripts/design_audit.mjs</td><td>看间距/字号/图标是否出现阶梯外的值</td></tr>
+        <tr><td class="mono">node scripts/ui_ratio.mjs</td><td>看 shadcn 与原生标签的比例是否合理</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+</div>
+</body>
+</html>

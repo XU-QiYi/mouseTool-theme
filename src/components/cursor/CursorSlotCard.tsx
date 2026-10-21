@@ -16,14 +16,14 @@ export function CursorSlotCard({ slot }: { slot: CursorSlot }) {
           {isAnimated && (
             <Badge
               variant="secondary"
-              className="absolute -right-3 -bottom-1 h-4 px-1 text-[10px] font-normal"
+              className="absolute -right-3 -bottom-1 h-4 px-1 text-3xs font-normal"
             >
               ANI
             </Badge>
           )}
         </div>
         <span className="text-xs font-medium">{slot.display_name}</span>
-        <span className="text-[11px] text-muted-foreground">{slot.english_name}</span>
+        <span className="text-2xs text-muted-foreground">{slot.english_name}</span>
       </CardContent>
     </Card>
   );

@@ -5,6 +5,7 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { ThemeDetail } from "@/components/theme/ThemeDetail";
 import { ThemeList } from "@/components/theme/ThemeList";
 import { Badge } from "@/components/ui/badge";
+import { Toaster } from "@/components/ui/toaster";
 import { selectSelectedTheme, useThemeStore, type Page } from "@/stores/themeStore";
 import "./App.css";
 
@@ -54,19 +55,22 @@ function App() {
   }, [loadThemes]);
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      <Sidebar />
-      <ThemeList />
-      {currentPage !== "library" ? (
-        <PlaceholderPage page={currentPage} />
-      ) : selectedTheme ? (
-        <ThemeDetail theme={selectedTheme} />
-      ) : (
-        <section className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-          在左侧选择一个主题查看详情
-        </section>
-      )}
-    </div>
+    <>
+      <div className="flex h-screen overflow-hidden">
+        <Sidebar />
+        <ThemeList />
+        {currentPage !== "library" ? (
+          <PlaceholderPage page={currentPage} />
+        ) : selectedTheme ? (
+          <ThemeDetail theme={selectedTheme} />
+        ) : (
+          <section className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+            在左侧选择一个主题查看详情
+          </section>
+        )}
+      </div>
+      <Toaster />
+    </>
   );
 }
 
