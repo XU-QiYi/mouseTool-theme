@@ -60,7 +60,9 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
       const { themes, warnings, active_theme_id, recent } = await getAllThemes();
       // 「正在使用」每次都由后端从注册表反推，不沿用内存旧值：
       // 内存状态一重开就过期，会把已应用的主题当成还能再应用一次。
-      set({ themes, activeThemeId: active_theme_id, recent });
+      // recent 兜底：前端热更新、后端还是旧二进制时字段会缺失，
+      // 让状态变成 undefined 会让「最近使用」页直接白屏。
+      set({ themes, activeThemeId: active_theme_id, recent: recent ?? [] });
       // 部分来源失败仍能拿到其余主题：告知降级即可，不要打断浏览
       if (warnings.length > 0) {
         for (const warn of warnings) console.warn("[loadThemes]", warn);
