@@ -34,6 +34,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy CARGO_HTTP_PROXY="
 
 ## 关键技术决定
 - **多数据源聚合必须部分成功**：`get_all_themes` 返回 `models::ThemesResult{themes, warnings}`，来源失败进 warnings 不整体失败（`merge_sources` 纯函数 + 回归测试）；`read_user_themes` 返回 `(themes, warnings)`，坏了的主题只跳过不消失
+- `get_all_themes` 签名**保留** `Result<ThemesResult, String>`（用户拍板 2026-10-21）：`Err` 只留给意外的全灭，来源失败一律走 warnings；此题已定，不再反复纠结改成不可失败
 - **数据目录**：`%LOCALAPPDATA%\CursorStudio\themes\<uuid>\{theme.json, cursors/}`，唯一来源是 `utils/paths.rs::data_root()`，禁止别处硬编码
 - **槽位推断两段式**：先 `EXACT_NAMES` 精确匹配短名（`no`/`ns`/`we`/`up`），再 `SLOT_KEYWORDS` 包含匹配。短名绝不能放进包含匹配表（`no` 会撞 `normal`）
 - **15 槽位顺序**以 `src-tauri/src/utils/registry.rs` 的 `SLOT_DEFS` 为准（依据 `Schemes` 实测值），顺序错了会导致光标整体串位
@@ -64,3 +65,8 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy CARGO_HTTP_PROXY="
 - 错误文案规范：中文主句说人话，技术细节放括号；能指导下一步就写进主句
 - **vite 缓存必须落 OS 临时目录**（`vite.config.ts` 的 `cacheDir`，已配）：safe-delete 护栏对项目内批量删除 >50 文件 fail-closed，vite 重优化删旧 deps（70+ 文件）会把进程炸掉；临时目录是护栏豁免区（视为可再生缓存）。**禁止把 cacheDir 改回 `node_modules/.vite`**
 - **后台起 dev server 只用 `npm run dev:bg` / `node scripts/dev_bg.mjs`**：stdio 接日志文件、detached、带 start/stop/status（PID 落 `.dev-server.pid`）。**禁止 `npm run dev | head` 之类管道后台启动**——管道一关 EPIPE 直接杀死 vite；`vite.config.ts` 已加 EPIPE 守护兜底，但仍以 dev_bg 为准
+- **dev server 跨命令会被回收**：`dev_bg.mjs start` 起的 vite 在 bash 命令结束即静默消失（日志无 error，端口只余 TIME_WAIT）。**启动与验证必须写进同一条 bash 命令**，否则验证脚本拿到 502 并报一堆「按钮 NOT_FOUND」假失败
+- **改名只改 theme.json 的 name，目录名保持 UUID**（改目录会让正在使用的光标路径失效）；`updated_at` 承担「导入于」语义，改名不动它
+- 原地编辑类交互（重命名）：autoFocus + onFocus 全选，Enter 保存 / Esc 取消 / 失焦保存，值未变不发请求；**草稿必须用 ref 存**，否则 Esc 与 blur 的 setState 竞态会把「取消」变成「保存」
+- **「正在使用」只能从注册表反推**：`get_all_themes` 返回 `active_theme_id`（`read_current_slots` + 双向槽位比对 + 路径大小写归一）。禁止用内存/本地存储记 active——重开即过期，会让已应用的主题还能再点一次「应用」
+- **盒外 ring / box-shadow 与 overflow 容器冲突**：滚动列表首尾必须留 ≥2px padding，否则 ring 被裁、卡片像缺边；`design_check.mjs` 已加硬断言守住
