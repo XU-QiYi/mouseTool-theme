@@ -196,6 +196,37 @@ pub fn refresh_cursors() -> Result<(), String> {
     }
 }
 
+/// 读取注册表里当前生效的光标设置：只返回非空槽位，环境变量已展开
+///
+/// 「哪个主题正在使用」的唯一事实来源是注册表，不是界面内存状态——
+/// 内存状态一重开就没了，会把已应用的主题当成可用主题再点一次。
+pub fn read_current_slots() -> Result<Vec<(String, String)>, String> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let key = hkcu
+        .open_subkey_with_flags(CURSORS_KEY, KEY_READ)
+        .map_err(|err| format!("无法读取注册表键 HKCU\\{CURSORS_KEY}：{err}"))?;
+
+    let mut slots = Vec::new();
+    for (slot_key, _, _) in SLOT_DEFS.iter() {
+        // 值缺失或为空 = 该槽位回落到系统默认，不参与比对
+        if let Ok(raw) = key.get_value::<String, _>(*slot_key) {
+            let raw = raw.trim();
+            if !raw.is_empty() {
+                slots.push(((*slot_key).to_string(), expand_env(raw)));
+            }
+        }
+    }
+    Ok(slots)
+}
+
+/// 注册表里记录的方案名
+///
+/// 只用于「多套主题指向同一批文件时该标哪个」，不参与是否一致的判断：
+/// 改名后方案名会滞后于主题名，拿它做判断会把正在使用的主题判成没用。
+pub fn read_scheme_name() -> String {
+    read_slot_value("SchemeName").unwrap_or_default()
+}
+
 /// 读取指定槽位的当前值，测试与备份用
 pub fn read_slot_value(slot_key: &str) -> Result<String, String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
@@ -256,6 +287,22 @@ mod tests {
 
     /// 碰注册表的测试必须串行，否则互相踩踏
     static REGISTRY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn 能读出当前生效的光标槽位() {
+        let _guard = REGISTRY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let slots = read_current_slots().expect("读取当前光标不应失败");
+        assert!(slots.len() <= SLOT_DEFS.len(), "不得超过 15 个槽位");
+
+        for (key, path) in &slots {
+            assert!(
+                SLOT_DEFS.iter().any(|(known, _, _)| known == key),
+                "出现了未知槽位：{key}"
+            );
+            assert!(!path.trim().is_empty(), "{key} 的空值应在读取时被跳过");
+        }
+    }
 
     impl Backup {
         fn capture() -> Self {

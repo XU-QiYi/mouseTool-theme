@@ -40,6 +40,11 @@ pub struct ThemesResult {
     pub themes: Vec<CursorTheme>,
     /// 非致命问题的中文描述，供界面提示"哪些数据没能加载"
     pub warnings: Vec<String>,
+    /// 注册表里当前生效的主题 ID
+    ///
+    /// 由「注册表当前光标路径」与各主题的槽位路径比对得出，而不是界面自己记。
+    /// `None` 表示识别不出：既可能是系统默认光标，也可能是用户手工改过设置。
+    pub active_theme_id: Option<String>,
 }
 
 /// 光标文件预览数据

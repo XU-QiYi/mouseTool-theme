@@ -130,6 +130,17 @@ try {
   const shot2 = await send("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(OUT_DIR, "design_selected.png"), Buffer.from(shot2.result.data, "base64"));
 
+  // 3.1 选中环不能被滚动容器裁掉：卡片上沿离容器上沿至少 2px（环画在盒子外面）
+  const ringClearance = await evaluate(`(() => {
+    const card = [...document.querySelectorAll("button")].find(b => b.className.includes("rounded-xl"));
+    const scroller = card?.closest(".overflow-y-auto");
+    if (!card || !scroller) return null;
+    return Math.round(card.getBoundingClientRect().top - scroller.getBoundingClientRect().top);
+  })()`);
+  const clearanceOk = typeof ringClearance === "number" && ringClearance >= 2;
+  console.log(`卡片顶部余量: ${ringClearance}px ${clearanceOk ? "OK" : "✗ 会被裁切"}`);
+  if (!clearanceOk) process.exitCode = 1;
+
   // 4. Toast：浏览器环境 applyTheme 是 mock，不会改系统光标，可以安全点击
   const applyClicked = await evaluate(`(() => {
     const btn = [...document.querySelectorAll("button")].find(b => b.textContent.includes("应用此主题"));

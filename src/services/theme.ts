@@ -11,7 +11,8 @@ export const inTauri = "__TAURI_INTERNALS__" in window;
 export function getAllThemes(): Promise<ThemesResult> {
   if (!inTauri) {
     console.warn("[dev] 非 Tauri 环境，使用示例数据");
-    return Promise.resolve({ themes: MOCK_THEMES, warnings: [] });
+    // 浏览器里读不到注册表，无法判断哪个主题正在使用
+    return Promise.resolve({ themes: MOCK_THEMES, warnings: [], active_theme_id: null });
   }
   return invoke<ThemesResult>("get_all_themes");
 }

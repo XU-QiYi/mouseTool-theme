@@ -19,6 +19,7 @@ export function ThemeCard({ theme, active, selected, onSelect }: ThemeCardProps)
       type="button"
       onClick={() => onSelect(theme.id)}
       aria-pressed={selected}
+      aria-current={active ? "true" : undefined}
       className={`focus-ring w-full rounded-xl bg-card p-3 text-left transition-colors ${
         selected
           ? "bg-accent ring-2 ring-primary"

@@ -48,10 +48,14 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
   loading: false,
 
   loadThemes: async () => {
-    set({ loading: true });
+    // 选中是临时的界面状态：重新加载视同「重新打开界面」，不继承上一次点击。
+    // 否则重新编译后，上次点过的卡片会一直戴着高亮框、看起来像「待应用」。
+    set({ loading: true, selectedThemeId: null });
     try {
-      const { themes, warnings } = await getAllThemes();
-      set({ themes });
+      const { themes, warnings, active_theme_id } = await getAllThemes();
+      // 「正在使用」每次都由后端从注册表反推，不沿用内存旧值：
+      // 内存状态一重开就过期，会把已应用的主题当成还能再应用一次。
+      set({ themes, activeThemeId: active_theme_id });
       // 部分来源失败仍能拿到其余主题：告知降级即可，不要打断浏览
       if (warnings.length > 0) {
         for (const warn of warnings) console.warn("[loadThemes]", warn);

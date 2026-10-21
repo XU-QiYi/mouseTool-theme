@@ -29,7 +29,7 @@ export function ThemeList() {
 
   return (
     <section className="flex h-full w-72 shrink-0 flex-col border-r">
-      <div className="relative p-3">
+      <div className="relative px-3 pt-3 pb-2">
         <Search className="absolute top-1/2 left-6 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
           value={searchQuery}
@@ -41,7 +41,9 @@ export function ThemeList() {
 
       {/* 滚动条跟随系统：桌面端优先平台一致，与右侧详情区保持同一套滚动行为 */}
       <div className="flex-1 overflow-y-auto">
-        <div className="space-y-2 px-3 pb-3">
+        {/* pt-2 不能省：卡片选中环是画在盒子外面的 box-shadow，
+            贴着滚动容器上沿会被 overflow 裁掉，第一张卡看起来像没有上边框 */}
+        <div className="space-y-2 px-3 pt-2 pb-3">
           {loading ? (
             [0, 1, 2].map((i) => <Skeleton key={i} className="h-32 w-full rounded-xl" />)
           ) : visibleThemes.length > 0 ? (

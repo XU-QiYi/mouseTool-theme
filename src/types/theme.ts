@@ -24,4 +24,11 @@ export interface ThemesResult {
   themes: CursorTheme[];
   /** 非致命问题的中文描述，对应没能加载的数据源 */
   warnings: string[];
+  /**
+   * 注册表里当前生效的主题 ID，由后端比对光标路径得出
+   *
+   * null = 识别不出（系统默认光标，或用户手工改过设置）。
+   * 不要指望从本地存储恢复它：重启后注册表才是事实来源。
+   */
+  active_theme_id: string | null;
 }
