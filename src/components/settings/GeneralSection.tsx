@@ -1,10 +1,14 @@
 import { useEffect } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { Monitor, Moon, Sun } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
 import { Toggle } from "@/components/ui/toggle";
 import { SettingCard, SettingsGroup } from "@/components/settings/SettingCard";
 import { setThemeMode, useThemeMode, type ThemeMode } from "@/lib/theme-mode";
+import { toast } from "@/lib/toast";
+import { inTauri } from "@/services/theme";
 import type { CloseBehavior } from "@/services/settings";
 import { useSettingsStore } from "@/stores/settingsStore";
 
@@ -34,11 +38,33 @@ export function GeneralSection() {
   const loadAutostart = useSettingsStore((s) => s.loadAutostart);
   const patchSettings = useSettingsStore((s) => s.patchSettings);
   const toggleAutostart = useSettingsStore((s) => s.toggleAutostart);
+  const changeThemesDir = useSettingsStore((s) => s.changeThemesDir);
 
   useEffect(() => {
     loadSettings();
     loadAutostart();
   }, [loadSettings, loadAutostart]);
+
+  // 选文件夹 → 搬家（Rust 侧搬运 + 落盘），选完即生效
+  const pickThemesDir = async () => {
+    if (!inTauri) {
+      toast.info("开发模式无法选择目录", "文件选择需要桌面环境，请用 npm run tauri dev 启动");
+      return;
+    }
+    try {
+      const selected = await open({
+        multiple: false,
+        directory: true,
+        title: "选择主题存储目录",
+      });
+      if (typeof selected === "string") {
+        await changeThemesDir(selected);
+      }
+    } catch (err) {
+      console.error("选择目录失败：", err);
+      toast.error("没能打开文件夹选择框", "请重试");
+    }
+  };
 
   return (
     <div>
@@ -114,6 +140,34 @@ export function GeneralSection() {
       </SettingsGroup>
 
       <SettingsGroup title="存储与更新">
+        <SettingCard
+          title="主题存储目录"
+          description="存放导入的主题包；更改位置时会把现有主题一起搬过去"
+          action={
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={() => void pickThemesDir()}>
+                更改…
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => void changeThemesDir(null)}
+                disabled={!settings?.themes_dir}
+                title={settings?.themes_dir ? "搬回默认目录" : "当前已是默认目录"}
+              >
+                恢复默认
+              </Button>
+            </div>
+          }
+        >
+          <p
+            data-themes-dir
+            className="mt-3 break-all font-mono text-2xs text-muted-foreground select-text"
+          >
+            {settings?.effective_themes_dir ?? "…"}
+          </p>
+        </SettingCard>
+
         <SettingCard
           title="自动检查更新"
           description="启动时检查 GitHub Releases 有没有新版本；只在发现新版本时提示，不打断使用"

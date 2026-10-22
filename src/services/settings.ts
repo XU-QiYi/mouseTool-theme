@@ -116,3 +116,18 @@ export function setAutostart(enable: boolean): Promise<AutostartStatus> {
   }
   return invoke<AutostartStatus>("set_autostart", { enable });
 }
+
+/** 更换主题存储目录（null = 回默认）；现有主题由 Rust 一起搬过去 */
+export function setThemesDir(path: string | null): Promise<SettingsSnapshot> {
+  if (!inTauri) {
+    const settings = mockSettings();
+    return Promise.resolve(
+      mockSave({
+        ...settings,
+        themes_dir: path,
+        effective_themes_dir: path ?? MOCK_DEFAULT.effective_themes_dir,
+      }),
+    );
+  }
+  return invoke<SettingsSnapshot>("set_themes_dir", { path });
+}

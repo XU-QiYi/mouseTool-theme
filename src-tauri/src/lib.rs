@@ -4,7 +4,9 @@ pub mod utils;
 
 use commands::cursor::get_cursor_preview;
 use commands::data::{get_data_dir, open_data_dir};
-use commands::settings::{get_autostart, get_settings, set_autostart, update_settings};
+use commands::settings::{
+    get_autostart, get_settings, set_autostart, set_themes_dir, update_settings,
+};
 use commands::system::{
     get_windows_version, get_zip_menu_registered, open_mouse_panel, set_zip_menu,
     take_pending_import,
@@ -59,7 +61,8 @@ pub fn run() {
             get_settings,
             update_settings,
             get_autostart,
-            set_autostart
+            set_autostart,
+            set_themes_dir
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

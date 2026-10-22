@@ -11,8 +11,20 @@ pub fn data_root() -> PathBuf {
     PathBuf::from(base).join(APP_DIR_NAME)
 }
 
-/// 用户主题目录：`%LOCALAPPDATA%\CursorStudio\themes`
+/// 用户主题目录：默认 `%LOCALAPPDATA%\CursorStudio\themes`
+///
+/// 用户可在「设置 → 通用」里改存储目录（`settings.json` 的 `themes_dir`），
+/// 改动走 `utils/themes_dir::change`（带搬迁）；这里只负责解析生效值，
+/// 于是所有 `theme_dir()` 调用点自动跟着走。
 pub fn themes_dir() -> PathBuf {
+    if let Some(raw) = crate::utils::settings::read()
+        .themes_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return PathBuf::from(raw);
+    }
     data_root().join("themes")
 }
 

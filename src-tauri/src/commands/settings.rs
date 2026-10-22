@@ -6,7 +6,7 @@
 use serde::Serialize;
 use tauri::AppHandle;
 
-use crate::utils::{autostart, paths, settings, settings::CloseBehavior, tray};
+use crate::utils::{autostart, paths, settings, settings::CloseBehavior, themes_dir, tray};
 
 /// 给界面的设置快照：行为偏好 + 解析后的真实主题目录
 #[derive(Debug, Serialize)]
@@ -82,4 +82,13 @@ pub fn get_autostart() -> Result<AutostartStatus, String> {
 pub fn set_autostart(enable: bool) -> Result<AutostartStatus, String> {
     let (enabled, exe_path) = autostart::set(enable)?;
     Ok(AutostartStatus { enabled, exe_path })
+}
+
+/// 更换主题存储目录（`None` = 回默认），现有主题一起搬过去，返回更新后的快照
+///
+/// 搬运成功前不改设置：中途失败原目录完好，界面不会指向一个空目录。
+#[tauri::command]
+pub fn set_themes_dir(path: Option<String>) -> Result<SettingsSnapshot, String> {
+    themes_dir::change(path)?;
+    Ok(snapshot(&settings::read()))
 }

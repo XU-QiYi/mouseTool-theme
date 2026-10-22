@@ -7,4 +7,5 @@ pub mod integration;
 pub mod paths;
 pub mod registry;
 pub mod settings;
+pub mod themes_dir;
 pub mod tray;

@@ -5,11 +5,13 @@ import {
   getAutostart as apiGetAutostart,
   getSettings as apiGetSettings,
   setAutostart as apiSetAutostart,
+  setThemesDir as apiSetThemesDir,
   updateSettings as apiUpdateSettings,
   type AutostartStatus,
   type SettingsPatch,
   type SettingsSnapshot,
 } from "@/services/settings";
+import { useThemeStore } from "@/stores/themeStore";
 
 /**
  * 行为设置（设置 → 通用 / 快捷键）
@@ -32,6 +34,8 @@ interface SettingsStore {
   /** 局部更新（只有通用页的三个行为项）；失败回读真实状态 */
   patchSettings: (patch: SettingsPatch) => Promise<void>;
   toggleAutostart: () => Promise<void>;
+  /** 更换主题存储目录（null = 回默认）；成功后主题列表从新目录重读 */
+  changeThemesDir: (path: string | null) => Promise<void>;
 }
 
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
@@ -86,6 +90,20 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       } catch {
         /* 回读失败就保留旧值 */
       }
+    }
+  },
+
+  changeThemesDir: async (path) => {
+    try {
+      const next = await apiSetThemesDir(path);
+      set({ settings: next });
+      toast.success("主题存储目录已更改", next.effective_themes_dir);
+      // 目录换了，列表得从新位置重读，不然「我的主题」还停在旧目录的幻影上
+      await useThemeStore.getState().loadThemes();
+    } catch (err) {
+      console.error("更改主题存储目录失败：", err);
+      toast.error("更改失败", readableError(err));
+      await get().loadSettings();
     }
   },
 }));
