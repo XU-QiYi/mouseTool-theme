@@ -44,21 +44,26 @@ mouseTool-theme/
 │   │   ├── theme.ts                ← 全部 invoke 封装
 │   │   └── mock.ts                 ← 浏览器直开时的假数据（非 Tauri 环境）
 │   ├── stores/themeStore.ts        ← 唯一全局状态（页面 / 按页选中 / 搜索 / 警告）
-│   ├── lib/                        ← pages（页面清单）、slots（槽位统计）、themes（筛选与分组）、toast、cn()
+│   ├── lib/                        ← pages（页面清单）、settings-sections（设置分组）、slots（槽位统计）、themes（筛选与分组）、theme-mode、shortcuts、toast、cn()
 │   └── types/                      ← 与 Rust 结构体逐字段对应
 ├── src-tauri/
 │   ├── tauri.conf.json             ← 窗口/打包配置（含 --no-sandbox，勿删）
 │   ├── capabilities/default.json   ← 前端可用的插件权限
 │   └── src/
-│       ├── commands/               ← cursor.rs / theme.rs：命令层
+│       ├── commands/               ← cursor.rs / theme.rs / data.rs / settings.rs / system.rs / backup.rs：命令层
 │       ├── models/theme.rs         ← 数据结构
 │       └── utils/
-│           ├── paths.rs            ← 数据目录唯一来源
+│           ├── paths.rs            ← 数据目录唯一来源（主题目录跟随 settings.json 覆盖值）
 │           ├── registry.rs         ← SLOT_DEFS、注册表读写、SPI 刷新
 │           ├── cursor.rs           ← .cur/.ico/.ani 解析与缩放
 │           ├── importer.rs         ← zip 导入、槽位推断
 │           ├── inf_export.rs       ← 导出 zip 附带的通用 .inf 安装文件（决策 13）
-│           └── history.rs          ← 最近使用读写
+│           ├── history.rs          ← 最近使用读写（含备份合并）
+│           ├── settings.rs         ← settings.json（关闭行为/主题目录/开关，决策 14）
+│           ├── themes_dir.rs       ← 主题存储目录更换与搬迁
+│           ├── autostart.rs        ← HKCU Run 键（开机自启动）
+│           ├── tray.rs             ← 托盘图标（关闭到托盘时才存在）
+│           └── integration.rs      ← 单实例互斥、--import 转交、.zip 右键菜单
 ├── scripts/                        ← 无头浏览器验收脚本（设计/动效/交互）
 └── docs/
 ```
@@ -73,15 +78,16 @@ mouseTool-theme/
 
 ```
 App.tsx
-  ├─ Sidebar                    导航（带计数）、导入入口、常驻「当前光标」状态卡、外观三态
+  ├─ Sidebar                    主形态：导航（带计数）、导入入口、常驻「当前光标」状态卡；
+  │                             设置形态：返回 + 五个分组（通用/快捷键/数据/系统集成/关于）
   └─ main
-       ├─ PageHeader            标题 / 这一页做什么 / 该页搜索 / 计数
+       ├─ PageHeader            标题 / 这一页做什么 / 该页搜索 / 计数（设置页跟随分组标题）
        ├─ DataWarning           部分数据源失败时的常驻提示（可关、可重试）
        └─ [data-view=<page>]    当前视图（换页整块淡入）
             ├─ GalleryView      分组网格 → GalleryCard
             ├─ MyThemesView     表格（槽位覆盖率 + 导入时间 + 导出/删除）
             ├─ RecentView       按自然日分组的时间轴
-            ├─ SettingsView     设置：数据目录卡片（路径展示 + 打开入口），不依赖主题列表
+            ├─ SettingsView     设置：按 settingsSection 切五个分组内容（决策 14），不依赖主题列表
             └─ ThemeInspector   图库/我的主题共用：预览、应用、导出、删除、改名
 ```
 
@@ -116,7 +122,7 @@ App.tsx
 
 ---
 
-## 5. 命令契约（当前共 15 个）
+## 5. 命令契约（当前共 22 个）
 
 | Command | 入参（前端写法） | 返回 | 失败场景 |
 |---|---|---|---|
@@ -135,10 +141,19 @@ App.tsx
 | `get_zip_menu_registered` | — | `ZipMenuStatus` | **不失败**（读不到就当未注册） |
 | `set_zip_menu` | `register`（布尔） | `void` | 注册表写失败（试点功能，决策 12） |
 | `take_pending_import` | — | `String \| null` | **不失败**（无待导入 / 文件损坏都返回 null，领取即删除） |
+| `get_settings` | — | `SettingsSnapshot` | **不失败**（文件缺失/损坏都退回默认值） |
+| `update_settings` | `closeBehavior?`, `autoCheckUpdate?`, `shortcutsEnabled?`（只传要改的） | `SettingsSnapshot` | 不认识的关闭行为值、写盘失败；关闭行为变更会同步托盘有无 |
+| `get_autostart` | — | `AutostartStatus` | **不失败**（读不到就当未注册） |
+| `set_autostart` | `enable`（布尔） | `AutostartStatus` | Run 键写/删失败；状态以注册表回读为准 |
+| `set_themes_dir` | `path`（字符串 \| null） | `SettingsSnapshot` | 路径为空、与数据目录/原目录互为嵌套、搬运失败（不改设置，尽力回滚） |
+| `export_backup` | `destPath` | `ExportBackupSummary` | 目标目录不存在、没有可备份内容、写 zip 失败 |
+| `import_backup` | `zipPath` | `ImportBackupSummary` | 不是有效 zip、写盘失败（清掉半成品主题目录） |
 
 **为什么 `apply_theme` / `export_theme` 收整个 `CursorTheme` 而不是 ID**：系统方案只存在于注册表，没有磁盘目录，但同样有光标文件路径；只传 ID 就到不了它们的文件。
 
 **`export_theme` 的包内清单**：光标文件按槽位重命名（`arrow.cur` / `busy.ani`），另附 `<方案名>.inf`（决策 13，`utils/inf_export.rs` 生成，UTF-16LE + BOM）——接收方没装本软件也能右键安装。导入端只认 `.cur/.ani/.ico`，`.inf` 自动忽略，不破坏「导出 → 再导入」闭环。
+
+**设置三来源**（决策 14）：行为类落 `settings.json`（`utils/settings.rs`，Rust 与前端共用，`update_settings` 是补丁语义）；外观三态留 `localStorage`（首帧落色要同步读）；开机自启动的真相在 `HKCU\...\Run`。`import_backup` 是**合并**语义：本地已有主题整套跳过、记录本地优先按主题去重，只补回缺失的。
 
 ---
 
@@ -206,3 +221,4 @@ App.tsx
 | 2026-10-22 | v2.0 重写：删掉全篇重复的提示词块；槽位由错误的 14 项改为 `SLOT_DEFS` 的 15 项；技术栈改为 React 19；移除 `sonner` 与"复制到 `C:\Windows\Cursors` 需 UAC"；补命令契约、类型契约、硬约束与未实现清单 |
 | 2026-10-22 | 设置模块落地：导航增至四项，新增 `get_data_dir` / `open_data_dir`（决策 11），命令契约 8 → 10，设置页从 §9 缺口清单移除 |
 | 2026-10-22 | 决策 12：设置页第二批锚点（诊断信息 / Windows 快捷入口）+ `.zip` 右键菜单试点与单实例转交；命令契约 10 → 15，`services/` 拆出 `system.ts`，只读例外补 `useDiagnostics` |
+| 2026-10-23 | 决策 14：设置分组化（通用/快捷键/数据/系统集成/关于），新增设置存储（settings.json）、自启动、托盘关闭行为、主题目录迁移、备份、快捷键、检查更新；命令契约 15 → 22，`services/` 拆出 `settings.ts`，外观三态从侧栏迁入「通用」 |
