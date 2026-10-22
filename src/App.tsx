@@ -5,11 +5,13 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { DataWarning } from "@/components/layout/DataWarning";
 import { LoadErrorState } from "@/components/layout/LoadErrorState";
+import { InspectorResizer } from "@/components/layout/InspectorResizer";
 import { ThemeInspector } from "@/components/theme/ThemeInspector";
 import { GalleryView } from "@/components/views/GalleryView";
 import { MyThemesView } from "@/components/views/MyThemesView";
 import { RecentView } from "@/components/views/RecentView";
 import { Toaster } from "@/components/ui/toaster";
+import { useInspectorWidth } from "@/hooks/useInspectorWidth";
 import { PAGE_META, type Page } from "@/lib/pages";
 import { selectSelectedTheme, useThemeStore } from "@/stores/themeStore";
 import "./App.css";
@@ -32,6 +34,7 @@ function App() {
   const currentPage = useThemeStore((s) => s.currentPage);
   const selectedTheme = useThemeStore(selectSelectedTheme);
   const loadError = useThemeStore((s) => s.loadError);
+  const [inspectorWidth, resizeInspector] = useInspectorWidth();
 
   useEffect(() => {
     loadThemes();
@@ -62,7 +65,10 @@ function App() {
                 </div>
 
                 {meta.hasInspector && (
-                  <ThemeInspector theme={selectedTheme} width={320} />
+                  <>
+                    <InspectorResizer width={inspectorWidth} onChange={resizeInspector} />
+                    <ThemeInspector theme={selectedTheme} width={inspectorWidth} />
+                  </>
                 )}
               </>
             )}

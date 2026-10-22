@@ -71,6 +71,11 @@ try {
   await send("Page.navigate", { url: URL_TO_OPEN });
   await sleep(3200);
 
+  const assert = (name, ok, detail) => {
+    console.log(`  ${ok ? "✓" : "✗"} ${name}${detail ? " · " + detail : ""}`);
+    if (!ok) process.exitCode = 1;
+  };
+
   // 1. 结构断言（逐条查，任何一条出错都能定位）
   const checks = {
     导航项数: `document.querySelectorAll("nav button").length`,
@@ -189,6 +194,65 @@ try {
   const clearanceOk = typeof ringClearance === "number" && ringClearance >= 2;
   console.log(`卡片顶部余量: ${ringClearance}px ${clearanceOk ? "OK" : "✗ 会被裁切"}`);
   if (!clearanceOk) process.exitCode = 1;
+
+  // 3.2 检查器：宽度可拖 + 15 槽位在常规窗口里不该出现滚动条
+  //（选中项此刻是 15 槽位的「Windows 默认」，正好是内容最多的那种）
+  const inspector = JSON.parse(
+    await evaluate(`(() => {
+      const aside = document.querySelector('aside[aria-label="主题详情"]');
+      const body = aside?.querySelector('.overflow-y-auto');
+      const cs = body ? getComputedStyle(body) : null;
+      const row = body?.querySelector('.grid > *');
+      return JSON.stringify({
+        width: Math.round(aside?.getBoundingClientRect().width ?? 0),
+        overflow: body ? body.scrollHeight - body.clientHeight : null,
+        scrollbar: cs?.scrollbarWidth ?? null,
+        gutter: cs?.scrollbarGutter ?? null,
+        scrollbarSpace: body ? body.offsetWidth - body.clientWidth : null,
+        slots: body?.querySelectorAll('.grid > *').length ?? 0,
+        rowH: row ? Math.round(row.getBoundingClientRect().height) : null,
+        resizer: !!document.querySelector('[aria-label="调整详情面板宽度"]'),
+        ariaNow: document.querySelector('[aria-label="调整详情面板宽度"]')?.getAttribute("aria-valuenow"),
+      });
+    })()`),
+  );
+  console.log("检查器:", JSON.stringify(inspector));
+  assert("分隔条存在且有 aria-valuenow", inspector.resizer && inspector.ariaNow !== null);
+  assert("15 槽位在默认宽度下不溢出", inspector.overflow === 0, `溢出 ${inspector.overflow}px`);
+  assert("滚动条预留槽位（gutter stable）", inspector.gutter === "stable", inspector.gutter);
+  assert(
+    "滚动条是 6px 细条而不是 15px 经典条",
+    inspector.scrollbarSpace !== null && inspector.scrollbarSpace <= 6,
+    `占宽 ${inspector.scrollbarSpace}px`,
+  );
+
+  await evaluate(`document.querySelector('[aria-label="调整详情面板宽度"]')?.focus()`);
+  await sleep(150);
+  for (const type of ["rawKeyDown", "keyUp"]) {
+    await send("Input.dispatchKeyEvent", {
+      type,
+      key: "ArrowLeft",
+      code: "ArrowLeft",
+      windowsVirtualKeyCode: 37,
+      nativeVirtualKeyCode: 37,
+    });
+  }
+  await sleep(250);
+  const widened = await evaluate(
+    `Math.round(document.querySelector('aside[aria-label="主题详情"]').getBoundingClientRect().width)`,
+  );
+  assert("分隔条支持键盘加宽（←）", widened === inspector.width + 16, `${inspector.width} → ${widened}`);
+
+  await evaluate(`(() => {
+    const el = document.querySelector('[aria-label="调整详情面板宽度"]');
+    el?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    return "OK";
+  })()`);
+  await sleep(250);
+  const reset = await evaluate(
+    `Math.round(document.querySelector('aside[aria-label="主题详情"]').getBoundingClientRect().width)`,
+  );
+  assert("双击分隔条复位到默认宽度", reset === 320, `→ ${reset}`);
 
   // 4. Toast：浏览器环境 applyTheme 是 mock，不会改系统光标，可以安全点击
   const applyClicked = await evaluate(`(() => {
