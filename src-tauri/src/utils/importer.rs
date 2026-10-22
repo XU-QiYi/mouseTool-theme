@@ -149,6 +149,11 @@ fn extract_zip(zip_path: &Path, temp_dir: &Path) -> Result<(), String> {
 
 /// 导入一个 zip 主题包，返回生成的主题
 pub fn import_zip(zip_path: &str) -> Result<CursorTheme, String> {
+    import_zip_as(zip_path, &Uuid::new_v4().to_string())
+}
+
+/// `theme_id` 可注入：测试需要预先知道主题目录，才能构造并验证半成品状态
+fn import_zip_as(zip_path: &str, theme_id: &str) -> Result<CursorTheme, String> {
     let source = Path::new(zip_path);
     let meta = fs::metadata(source)
         .map_err(|err| format!("找不到这个文件，它可能已被移动或删除（{err}）"))?;
@@ -159,15 +164,30 @@ pub fn import_zip(zip_path: &str) -> Result<CursorTheme, String> {
         ));
     }
 
-    let theme_id = Uuid::new_v4().to_string();
     let temp_dir = std::env::temp_dir().join(format!("cursortheme-{theme_id}"));
     paths::ensure_dir(&temp_dir)?;
 
-    let outcome = extract_and_persist(source, &temp_dir, &theme_id);
-
-    // 无论成败都清理临时目录
-    let _ = fs::remove_dir_all(&temp_dir);
-    outcome
+    match extract_and_persist(source, &temp_dir, theme_id) {
+        Ok(theme) => {
+            let _ = fs::remove_dir_all(&temp_dir);
+            Ok(theme)
+        }
+        Err(err) => {
+            // 无论成败都清理临时目录
+            let _ = fs::remove_dir_all(&temp_dir);
+            // 失败时也不能留半成品主题目录：cursors/ 可能已经建了一半，
+            // 残留的无 theme.json 目录会让下次启动多一条「跳过主题目录」的 warning
+            let theme_dir = paths::theme_dir(theme_id);
+            if fs::remove_dir_all(&theme_dir).is_err() {
+                // 清不掉要说明，别让人对着一个来历不明的坏目录发呆；原始错误优先
+                return Err(format!(
+                    "{err}；另外，残留文件清理失败，可手动删除 {} 目录",
+                    theme_dir.display()
+                ));
+            }
+            Err(err)
+        }
+    }
 }
 
 fn extract_and_persist(
@@ -394,5 +414,39 @@ mod tests {
         let outcome = import_zip(bad.to_str().unwrap());
         assert!(outcome.is_err());
         std::fs::remove_file(&bad).ok();
+    }
+
+    /// 持久化阶段失败时不能留半成品主题目录：没有 theme.json 的残留目录
+    /// 会让下次启动多一条「跳过主题目录」的 warning，还一直占着数据目录
+    #[test]
+    fn 导入失败时不残留半成品主题目录() {
+        use std::io::Write;
+
+        let cur = std::fs::read(r"C:\Windows\Cursors\aero_arrow.cur").expect("需要系统光标文件");
+
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut buffer);
+            let options = zip::write::SimpleFileOptions::default();
+            writer.start_file("cursors/pointer.cur", options).expect("写入条目");
+            writer.write_all(&cur).expect("写入数据");
+            writer.finish().expect("完成压缩");
+        }
+        let zip_path = std::env::temp_dir().join("cursortheme-rollback-test.zip");
+        std::fs::write(&zip_path, buffer.into_inner()).expect("保存测试包");
+
+        // 预先制造半成品：cursors 被一个同名文件占住，后面 ensure_dir 必然失败
+        let theme_id = "00000000-0000-4000-8000-000000000001";
+        let theme_dir = paths::theme_dir(theme_id);
+        let _ = fs::remove_dir_all(&theme_dir);
+        paths::ensure_dir(&theme_dir).expect("建主题目录");
+        fs::write(theme_dir.join("cursors"), "不是目录").expect("造占位文件");
+
+        let outcome = import_zip_as(zip_path.to_str().unwrap(), theme_id);
+
+        fs::remove_file(&zip_path).ok();
+
+        assert!(outcome.is_err(), "cursors 被文件占住应导入失败");
+        assert!(!theme_dir.exists(), "失败后不能残留半成品主题目录");
     }
 }
