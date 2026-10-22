@@ -16,6 +16,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { useDragDropImport } from "@/hooks/useDragDropImport";
 import { useInspectorWidth } from "@/hooks/useInspectorWidth";
 import { PAGE_META, type Page, type PageMeta } from "@/lib/pages";
+import { initShortcuts } from "@/lib/shortcuts";
 import { selectSelectedTheme, useThemeStore } from "@/stores/themeStore";
 import "./App.css";
 
@@ -45,6 +46,10 @@ function App() {
   useEffect(() => {
     loadThemes();
   }, [loadThemes]);
+
+  // 应用内快捷键（Ctrl+1~4 切页 / Ctrl+O 导入 / Ctrl+F 搜索）：
+  // 注册一次，卸载时注销；开关在「设置 → 快捷键」
+  useEffect(() => initShortcuts(), []);
 
   // 右键菜单 / 二次启动转交的待导入路径：启动时领一次，
   // 之后每次窗口聚焦再领（第二个实例写完文件会拉起本窗口）
