@@ -1,5 +1,5 @@
 // 统计界面层 JSX 元素构成：shadcn UI 组件 / 业务组件 / 原生 HTML / 图标
-// 口径：只统计"使用方"文件（App + components/{layout,theme,cursor}），不含 components/ui 本体
+// 口径：只统计"使用方"文件（App + components/{layout,theme,cursor,views}），不含 components/ui 本体
 import fs from "node:fs";
 import path from "node:path";
 
@@ -8,9 +8,17 @@ const ROOT = "F:/forge/mouse-theme/mouseTool-theme/src";
 const FILES = [
   "App.tsx",
   "components/layout/Sidebar.tsx",
-  "components/theme/ThemeList.tsx",
-  "components/theme/ThemeCard.tsx",
-  "components/theme/ThemeDetail.tsx",
+  "components/layout/PageHeader.tsx",
+  "components/layout/DataWarning.tsx",
+  "components/layout/EmptyState.tsx",
+  "components/layout/InspectorResizer.tsx",
+  "components/views/GalleryView.tsx",
+  "components/views/MyThemesView.tsx",
+  "components/views/RecentView.tsx",
+  "components/theme/GalleryCard.tsx",
+  "components/theme/ThemeInspector.tsx",
+  "components/theme/ThemeNameField.tsx",
+  "components/theme/DeleteThemeDialog.tsx",
   "components/theme/CursorGrid.tsx",
   "components/cursor/CursorSlotCard.tsx",
   "components/cursor/CursorPreviewImage.tsx",

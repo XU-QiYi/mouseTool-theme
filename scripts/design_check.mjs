@@ -1,5 +1,6 @@
-// 设计规范落地验证：不点「应用」（避免动系统光标），只验结构、焦点与截图
-// 用法：node scripts/design_check.mjs [URL]
+// 设计规范落地验证：不点「应用」以外的系统动作（浏览器里 apply 走 mock），只验结构、焦点与截图
+// 用法：node scripts/dev_bg.mjs start; node scripts/design_check.mjs; node scripts/dev_bg.mjs stop
+//      （必须与 dev server 写在同一条命令里，跨命令的 vite 会被回收）
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -75,9 +76,13 @@ try {
     导航项数: `document.querySelectorAll("nav button").length`,
     当前页有aria_current: `[...document.querySelectorAll("nav button")].filter(b => b.getAttribute("aria-current") === "page").length`,
     导航全部带焦点环: `[...document.querySelectorAll("nav button")].every(b => b.className.includes("focus-visible:ring-3"))`,
-    卡片带焦点环: `(() => { const c = [...document.querySelectorAll("button")].find(b => b.className.includes("rounded-xl")); return c ? c.className.includes("focus-ring") : null; })()`,
-    卡片带aria_pressed: `(() => { const c = [...document.querySelectorAll("button")].find(b => b.className.includes("rounded-xl")); return c ? c.getAttribute("aria-pressed") : null; })()`,
-    卡片描边方式: `(() => { const c = [...document.querySelectorAll("button")].find(b => b.className.includes("rounded-xl")); return c ? (c.className.includes("ring-1") ? "ring" : "border") : null; })()`,
+    导航带计数: `[...document.querySelectorAll("nav button")].every(b => /\\d+/.test(b.textContent))`,
+    画廊卡带焦点环: `[...document.querySelectorAll("[data-theme-card]")].every(b => b.className.includes("focus-ring"))`,
+    画廊卡带aria_pressed: `["true","false"].includes(document.querySelector("[data-theme-card]")?.getAttribute("aria-pressed"))`,
+    画廊卡描边方式: `document.querySelector("[data-theme-card]")?.className.includes("ring-1") ? "ring" : "border"`,
+    页头有一级标题: `document.querySelectorAll("h1").length`,
+    检查器存在: `!!document.querySelector('aside[aria-label="主题详情"]')`,
+    常驻状态卡: `!!document.querySelector("aside .preview-surface")`,
     自定义滚动区数量: `document.querySelectorAll('[data-slot="scroll-area"]').length`,
     原生滚动容器数: `[...document.querySelectorAll("*")].filter(e => { const s = getComputedStyle(e); return s.overflowY === "auto" && e.clientHeight > 100; }).length`,
   };
@@ -86,34 +91,53 @@ try {
     console.log(`  ${k}: ${await evaluate(expr)}`);
   }
 
-  // 1.5 非「主题图库」页也必须能进详情：详情区承载应用/导出/删除/改名
-  const navSwitch = await evaluate(`(() => {
-    const btn = [...document.querySelectorAll("nav button")].find(b => b.textContent.trim() === "已导入");
-    if (!btn) return "NO_NAV";
-    btn.click();
-    return "OK";
+  // 1.5 三页的「中间区域」必须是三种结构，而不是同一张列表换个过滤条件
+  const switchTo = async (label) => {
+    await evaluate(`(() => {
+      const btn = [...document.querySelectorAll("nav button")].find(b => b.textContent.includes("${label}"));
+      btn?.click();
+      return !!btn;
+    })()`);
+    await sleep(500);
+  };
+
+  await switchTo("我的主题");
+  await evaluate(`document.querySelector("[data-theme-row] button")?.click()`);
+  await sleep(500);
+  const tableState = await evaluate(`(() => {
+    const rows = [...document.querySelectorAll("[data-theme-row]")];
+    return JSON.stringify({
+      行数: rows.length,
+      有表头: !!document.querySelector("table thead th"),
+      选中行有aria_pressed: rows[0]?.querySelector("button")?.getAttribute("aria-pressed"),
+      检查器有应用按钮: [...document.querySelectorAll("button")].some(b => b.textContent.includes("应用此主题")),
+    });
   })()`);
-  await sleep(600);
-  const importedCards = await evaluate(`(() => {
-    const cards = [...document.querySelectorAll("button")].filter(b => b.className.includes("rounded-xl"));
-    if (!cards.length) return 0;
-    cards[0].click();
-    return cards.length;
-  })()`);
-  await sleep(700);
-  const detailState = await evaluate(`(() => {
-    const hasApply = [...document.querySelectorAll("button")].some(b => b.textContent.includes("应用此主题"));
-    const hasPlaceholder = document.body.innerText.includes("功能开发中");
-    return JSON.stringify({ 详情区可用: hasApply, 仍有占位: hasPlaceholder });
-  })()`);
-  console.log(`已导入页: 切换到 ${navSwitch}，列表 ${importedCards} 项，${detailState}`);
-  const shotImported = await send("Page.captureScreenshot", { format: "png" });
+  console.log("我的主题页:", tableState);
+  await sleep(300);
+  const shotMine = await send("Page.captureScreenshot", { format: "png" });
   writeFileSync(
-    join(OUT_DIR, "design_imported_page.png"),
-    Buffer.from(shotImported.result.data, "base64"),
+    join(OUT_DIR, "design_mine_page.png"),
+    Buffer.from(shotMine.result.data, "base64"),
   );
-  await evaluate(`[...document.querySelectorAll("nav button")].find(b => b.textContent.trim() === "主题图库")?.click()`);
-  await sleep(600);
+
+  await switchTo("最近使用");
+  const recentState = await evaluate(`(() => {
+    return JSON.stringify({
+      时间轴行: document.querySelectorAll("[data-recent-row]").length,
+      有检查器: !!document.querySelector('aside[aria-label="主题详情"]'),
+      有日期分组: document.body.innerText.includes("今天"),
+      有再次应用: document.body.innerText.includes("再次应用"),
+    });
+  })()`);
+  console.log("最近使用页:", recentState);
+  const shotRecent = await send("Page.captureScreenshot", { format: "png" });
+  writeFileSync(
+    join(OUT_DIR, "design_recent_page.png"),
+    Buffer.from(shotRecent.result.data, "base64"),
+  );
+
+  await switchTo("主题图库");
 
   // 2. 键盘焦点：按 Tab 走入界面，截取焦点态
   const tab = async () => {
@@ -138,7 +162,7 @@ try {
       const s = getComputedStyle(el);
       const hasRing = s.boxShadow && s.boxShadow !== "none";
       return (el.tagName + " · " + (el.textContent || "").trim().slice(0, 10) +
-        " · ring: " + (hasRing ? s.boxShadow.replace(/rgba?\\([^)]*\\)/g, m => m).slice(-70) : "无")).replace(/\\s+/g, " ");
+        " · ring: " + (hasRing ? s.boxShadow.slice(-60) : "无")).replace(/\\s+/g, " ");
     })()`);
     focused.push(info);
   }
@@ -148,12 +172,8 @@ try {
   const shot1 = await send("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(OUT_DIR, "design_focus.png"), Buffer.from(shot1.result.data, "base64"));
 
-  // 3. 选中第一张卡，截整体
-  await evaluate(`(() => {
-    const card = [...document.querySelectorAll("button")].find(b => b.className.includes("rounded-xl"));
-    card?.click();
-    return "ok";
-  })()`);
+  // 3. 选中一张卡，截整体
+  await evaluate(`document.querySelector("[data-theme-card]")?.click()`);
   await sleep(900);
 
   const shot2 = await send("Page.captureScreenshot", { format: "png" });
@@ -161,7 +181,7 @@ try {
 
   // 3.1 选中环不能被滚动容器裁掉：卡片上沿离容器上沿至少 2px（环画在盒子外面）
   const ringClearance = await evaluate(`(() => {
-    const card = [...document.querySelectorAll("button")].find(b => b.className.includes("rounded-xl"));
+    const card = document.querySelector("[data-theme-card]");
     const scroller = card?.closest(".overflow-y-auto");
     if (!card || !scroller) return null;
     return Math.round(card.getBoundingClientRect().top - scroller.getBoundingClientRect().top);
@@ -194,17 +214,16 @@ try {
   const shot3 = await send("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(OUT_DIR, "design_toast.png"), Buffer.from(shot3.result.data, "base64"));
 
-  // 5. 删除确认弹窗：选第二个（已导入）主题，点删除
-  const picked = await evaluate(`(() => {
-    const cards = [...document.querySelectorAll("button")].filter(b => b.className.includes("rounded-xl"));
-    if (cards.length < 2) return "ONLY_" + cards.length;
-    cards[1].click();
-    return "OK";
+  // 5. 删除确认弹窗：选中 Neon Night，点检查器里的删除
+  await evaluate(`(() => {
+    const card = [...document.querySelectorAll("[data-theme-card]")].find(c => c.textContent.includes("Neon Night"));
+    card?.click();
+    return !!card;
   })()`);
-  await sleep(700);
+  await sleep(600);
 
   const delState = await evaluate(`(() => {
-    const btn = [...document.querySelectorAll("button")].find(b => b.textContent.includes("删除此主题"));
+    const btn = document.querySelector('[aria-label="删除此主题"]');
     if (!btn) return "NO_BTN";
     if (btn.disabled) return "DISABLED";
     btn.click();
@@ -217,7 +236,7 @@ try {
     if (!el) return "弹窗未出现";
     return "弹窗：" + el.innerText.replace(/\\s+/g, " ").slice(0, 80);
   })()`);
-  console.log("删除按钮:", picked, delState, "|", dialog);
+  console.log("删除按钮:", delState, "|", dialog);
 
   const shot5 = await send("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(OUT_DIR, "design_confirm.png"), Buffer.from(shot5.result.data, "base64"));
@@ -258,7 +277,7 @@ try {
   await sleep(800);
 
   const renamed = await evaluate(`(() => {
-    const h2 = document.querySelector("h2");
+    const h2 = document.querySelector('aside[aria-label="主题详情"] h2');
     const toast = document.body.innerText.includes("已改名");
     return (h2?.textContent ?? "") + " | toast:" + (toast ? "有" : "无");
   })()`);
@@ -269,7 +288,7 @@ try {
 
   // 6.5 导出：浏览器里应给出明确提示，而不是静默失败
   const exportState = await evaluate(`(() => {
-    const btn = [...document.querySelectorAll("button")].find(b => b.textContent.includes("导出"));
+    const btn = document.querySelector('[aria-label="导出 ZIP"]');
     if (!btn) return "NO_BTN";
     if (btn.disabled) return "DISABLED";
     btn.click();
@@ -295,29 +314,20 @@ try {
   const shot4 = await send("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(OUT_DIR, "design_toast_long.png"), Buffer.from(shot4.result.data, "base64"));
 
-  // 8. 完整删除链路：确认后列表应减少一项（浏览器里 deleteTheme 是 mock，不会碰磁盘）
-  const before = await evaluate(
-    `document.querySelectorAll('button[class*="rounded-xl"]').length`,
-  );
-  await evaluate(`(() => {
-    const cards = [...document.querySelectorAll("button")].filter(b => b.className.includes("rounded-xl"));
-    const target = cards.find(c => !c.textContent.includes("使用中"));
-    target?.click();
-    return !!target;
-  })()`);
-  await sleep(500);
-  await evaluate(`[...document.querySelectorAll("button")].find(b => b.textContent.includes("删除此主题"))?.click()`);
+  // 8. 完整删除链路：在「我的主题」表格里删掉 Paper & Ink，行数应减少一项
+  await switchTo("我的主题");
+  const before = await evaluate(`document.querySelectorAll("[data-theme-row]").length`);
+  await evaluate(`document.querySelector('[aria-label^="删除「Paper"]')?.click()`);
   await sleep(500);
   await evaluate(`[...document.querySelectorAll('[role="alertdialog"] button')].find(b => b.textContent.includes("确认删除"))?.click()`);
   await sleep(900);
 
-  const after = await evaluate(
-    `document.querySelectorAll('button[class*="rounded-xl"]').length`,
-  );
+  const after = await evaluate(`document.querySelectorAll("[data-theme-row]").length`);
   const delToast = await evaluate(
     `document.body.innerText.includes("已删除") ? "toast 出现" : "toast 缺失"`,
   );
-  console.log(`删除链路: ${before} 项 → ${after} 项 | ${delToast}`);
+  console.log(`删除链路: ${before} 行 → ${after} 行 | ${delToast}`);
+  if (after !== before - 1) process.exitCode = 1;
 
   const shot6 = await send("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(OUT_DIR, "design_deleted.png"), Buffer.from(shot6.result.data, "base64"));

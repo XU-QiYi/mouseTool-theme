@@ -1,4 +1,4 @@
-// 临时验证「最近使用」：排序 / 应用后置顶 / 删除后的提示
+// 验证「最近使用」时间轴：按天分组 / 再次应用后置顶 / 被删主题的记录仍在
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -75,50 +75,51 @@ try {
     if (await evaluate(`Boolean(window.__toast)`).catch(() => false)) break;
   }
 
-  const cards = () => evaluate(`
-    [...document.querySelectorAll('button')]
-      .filter((b) => b.className.includes('rounded-xl'))
-      .map((b) => b.innerText.replace(/\\n/g, ' | '))
-  `);
+  // 时间轴的读数：分组标题、每行的时间与文案、每行有没有「再次应用」
+  const timeline = () =>
+    evaluate(`(() => {
+      const groups = [...document.querySelectorAll("[data-view] section")].map((sec) => ({
+        label: sec.querySelector("h2")?.textContent ?? "",
+        count: sec.querySelectorAll("[data-recent-row]").length,
+      }));
+      const rows = [...document.querySelectorAll("[data-recent-row]")].map((r) => ({
+        time: r.querySelector("time")?.textContent ?? "",
+        text: r.innerText.replace(/\\n/g, " | "),
+        canReapply: !!r.querySelector("button"),
+      }));
+      return JSON.stringify({ groups, rows });
+    })()`);
 
   // 1. 切到「最近使用」
   await evaluate(`[...document.querySelectorAll('nav button')].find((b) => b.textContent.includes('最近使用')).click()`);
   await sleep(700);
-  const first = await cards();
-  check("最近使用页有历史卡片", first.length === 2, `共 ${first.length} 张`);
-  check("按时间倒序（Neon Night 在前）", first[0]?.includes("Neon Night"), first[0]);
-  check("副标题显示上次使用时间", first[0]?.includes("上次使用 2026-10-21 22:10"), first[0]);
-  check("不再显示「功能开发中」占位", !(await evaluate(`document.body.innerText.includes('使用历史记录功能尚未实现')`)));
 
-  // 2. 应用 firefly 后应置顶
-  await evaluate(`(() => {
-    const card = [...document.querySelectorAll('button')].find((b) => b.className.includes('rounded-xl') && b.textContent.includes('firefly'));
-    card.click();
-  })()`);
-  await sleep(500);
-  await evaluate(`[...document.querySelectorAll('button')].find((b) => b.textContent.includes('应用此主题')).click()`);
-  await sleep(900);
-  const afterApply = await cards();
-  check("应用后置顶为 firefly", afterApply[0]?.includes("firefly"), afterApply[0]);
-  check("置顶项时间已刷新为今天", afterApply[0]?.includes("2026-10-22"), afterApply[0]);
+  const first = JSON.parse(await timeline());
+  check("时间轴按自然日分组", first.groups.length >= 3, first.groups.map((g) => `${g.label}×${g.count}`).join(" / "));
+  check("分组含「今天」「昨天」", first.groups[0]?.label === "今天" && first.groups[1]?.label === "昨天");
+  check("首条是最新的 Neon Night", first.rows[0]?.text.includes("Neon Night"), first.rows[0]?.text);
+  check("左列显示时刻", /^\d{1,2}:\d{2}$/.test(first.rows[0]?.time ?? ""), first.rows[0]?.time);
+  check("时间轴页不挂右侧检查器", !(await evaluate(`!!document.querySelector('aside[aria-label="主题详情"]')`)));
 
-  // 3. 删除 Neon Night 后，记录仍在但提示已删除
-  await evaluate(`(() => {
-    const card = [...document.querySelectorAll('button')].find((b) => b.className.includes('rounded-xl') && b.textContent.includes('Neon Night'));
-    card.click();
+  const deletedRow = first.rows.find((r) => r.text.includes("Midnight Blue"));
+  check("被删主题的记录仍在", Boolean(deletedRow), deletedRow?.text);
+  check("被删记录标记为已删除且不可应用", Boolean(deletedRow) && deletedRow.text.includes("已删除") && !deletedRow.canReapply);
+
+  // 2. 在时间轴上直接「再次应用」firefly，应归入今天并置顶
+  const reapply = await evaluate(`(() => {
+    const row = [...document.querySelectorAll("[data-recent-row]")].find((r) => r.textContent.includes("firefly"));
+    const btn = row?.querySelector("button");
+    if (!btn) return "NO_BTN";
+    btn.click();
+    return "CLICKED";
   })()`);
-  await sleep(500);
-  await evaluate(`[...document.querySelectorAll('button')].find((b) => b.textContent.includes('删除此主题')).click()`);
-  await sleep(500);
-  await evaluate(`[...document.querySelectorAll('button')].find((b) => b.textContent.includes('确认删除')).click()`);
+  check("时间轴可再次应用", reapply === "CLICKED", reapply);
   await sleep(900);
 
-  const afterDelete = await cards();
-  check("删除后仅剩可用主题", afterDelete.length === 1 && afterDelete[0].includes("firefly"), afterDelete.join(" / "));
-  check(
-    "保留被删主题的记录数",
-    await evaluate(`document.body.innerText.includes('另有 1 条记录的主题已被删除')`),
-  );
+  const afterApply = JSON.parse(await timeline());
+  check("应用后置顶为 firefly", afterApply.rows[0]?.text.includes("firefly"), afterApply.rows[0]?.text);
+  check("今天分组增加到 2 条", afterApply.groups[0]?.label === "今天" && afterApply.groups[0].count === 2, JSON.stringify(afterApply.groups[0]));
+  check("原 Neon Night 记录仍在", afterApply.rows.some((r) => r.text.includes("Neon Night")));
 
   const shot = await send("Page.captureScreenshot", { format: "png" });
   const out = join(process.env.TEMP ?? ".", "recent_page.png");

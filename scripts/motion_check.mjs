@@ -200,7 +200,7 @@ try {
       card.click();
       await sleep(200);
 
-      const del = byText('删除此主题');
+      const del = document.querySelector('[aria-label="删除此主题"]');
       out.deleteEnabled = Boolean(del) && !del.disabled;
       del.click();
       out.enterFrames = [];

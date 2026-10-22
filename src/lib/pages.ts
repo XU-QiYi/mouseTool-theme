@@ -1,0 +1,73 @@
+import { FolderDown, History, LayoutGrid } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+
+import type { CursorTheme, HistoryEntry } from "@/types/theme";
+
+/**
+ * 页面清单 —— 加一个页面只改两处
+ *
+ * 1. 这张表加一条（导航文案 / 页头文案 / 搜索框 / 计数口径 / 有没有检查器）；
+ * 2. `App.tsx` 的 `VIEWS` 映射加一行视图组件。
+ *
+ * 两处都由 TS 的 `Record<Page, …>` 逼着补全，漏了就编译不过 ——
+ * 以前"加页面忘了写视图分支 → 中间区域白屏"的静默失败就是这么堵上的。
+ */
+export interface PageCountContext {
+  themes: CursorTheme[];
+  recent: HistoryEntry[];
+}
+
+export interface PageMeta {
+  /** 侧栏导航文案 */
+  label: string;
+  icon: LucideIcon;
+  /** 页头主标题 */
+  title: string;
+  /** 页头副标题：这一页要做什么 */
+  hint: string;
+  /** 有值才显示搜索框，值即占位符 */
+  search?: string;
+  /** 计数口径；不传就不显示计数（设置这类没有集合的页面） */
+  count?: (ctx: PageCountContext) => number;
+  /** 计数单位，与 count 成对出现 */
+  unit?: string;
+  /** 右侧是否挂主题检查器 */
+  hasInspector: boolean;
+}
+
+export const PAGE_META = {
+  gallery: {
+    label: "主题图库",
+    icon: LayoutGrid,
+    title: "主题图库",
+    hint: "选中方案后在右侧预览并应用",
+    search: "搜索方案…",
+    count: ({ themes }) => themes.length,
+    unit: "个方案",
+    hasInspector: true,
+  },
+  mine: {
+    label: "我的主题",
+    icon: FolderDown,
+    title: "我的主题",
+    hint: "从 ZIP 导入；可改名、导出、删除",
+    search: "搜索我的主题…",
+    count: ({ themes }) => themes.reduce((n, theme) => (theme.is_built_in ? n : n + 1), 0),
+    unit: "个方案",
+    hasInspector: true,
+  },
+  recent: {
+    label: "最近使用",
+    icon: History,
+    title: "最近使用",
+    hint: "每次切换都会留一条记录",
+    count: ({ recent }) => recent.length,
+    unit: "条记录",
+    hasInspector: false,
+  },
+} satisfies Record<string, PageMeta>;
+
+export type Page = keyof typeof PAGE_META;
+
+/** 导航顺序 = 这里的声明顺序 */
+export const PAGE_ORDER = Object.keys(PAGE_META) as Page[];

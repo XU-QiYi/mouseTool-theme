@@ -21,6 +21,11 @@ let devRecent: HistoryEntry[] = [...MOCK_RECENT];
 export function getAllThemes(): Promise<ThemesResult> {
   if (!inTauri) {
     console.warn("[dev] 非 Tauri 环境，使用示例数据");
+    // 开发用开关：?mock-fail 让「整体加载失败」这条分支能被真正走一遍
+    //（正常情况下浏览器永远拿到示例数据，错误态没机会出现，也就没法验收）
+    if (new URLSearchParams(window.location.search).has("mock-fail")) {
+      return Promise.reject(new Error("读取光标方案被拒绝（EACCES，模拟）"));
+    }
     // 浏览器里读不到注册表，无法判断哪个主题正在使用
     return Promise.resolve({
       themes: MOCK_THEMES,

@@ -87,9 +87,9 @@ try {
 
   const state = await send("Runtime.evaluate", {
     expression: `(() => {
-      const badge = [...document.querySelectorAll("button")].find(b => b.textContent.includes("当前使用中"));
+      const strip = [...document.querySelectorAll('[role="status"]')].find(e => e.textContent.includes("当前使用中"));
       const using = [...document.querySelectorAll("*")].some(e => e.textContent === "使用中");
-      return JSON.stringify({ 按钮变为使用中: !!badge, 卡片有使用中角标: using });
+      return JSON.stringify({ 动作区变为使用中状态: !!strip, 卡片有使用中角标: using });
     })()`,
     returnByValue: true,
   });
