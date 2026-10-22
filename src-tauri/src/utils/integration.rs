@@ -13,7 +13,7 @@ use winreg::enums::HKEY_CURRENT_USER;
 use winreg::RegKey;
 use windows::core::HSTRING;
 use windows::Win32::System::Threading::CreateMutexW;
-use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow};
+use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE};
 
 use crate::utils::paths;
 
@@ -60,6 +60,9 @@ pub fn activate_existing() -> bool {
     if hwnd.0 == 0 {
         return false;
     }
+    // 先还原再置前：窗口可能正藏在托盘里（关闭行为 = 最小化到托盘），
+    // 对隐藏窗只调 SetForegroundWindow 是叫不回来的
+    let _ = unsafe { ShowWindow(hwnd, SW_RESTORE) };
     let _ = unsafe { SetForegroundWindow(hwnd) };
     true
 }

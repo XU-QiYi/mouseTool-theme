@@ -4,6 +4,7 @@ pub mod utils;
 
 use commands::cursor::get_cursor_preview;
 use commands::data::{get_data_dir, open_data_dir};
+use commands::settings::{get_autostart, get_settings, set_autostart, update_settings};
 use commands::system::{
     get_windows_version, get_zip_menu_registered, open_mouse_panel, set_zip_menu,
     take_pending_import,
@@ -12,7 +13,8 @@ use commands::theme::{
     apply_theme, delete_theme, export_theme, get_all_themes, import_theme, rename_theme,
     restore_default,
 };
-use utils::integration;
+use utils::settings::{self, CloseBehavior};
+use utils::{integration, tray};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -22,6 +24,22 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            // 托盘按设置决定有无：关闭行为是「最小化到托盘」才有图标
+            tray::sync(app.handle());
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // 关闭行为 = 最小化到托盘：拦下关闭，藏窗继续跑（托盘能叫回来）
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main"
+                    && settings::read().close_behavior == CloseBehavior::Tray
+                {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_all_themes,
             get_cursor_preview,
@@ -37,7 +55,11 @@ pub fn run() {
             open_mouse_panel,
             get_zip_menu_registered,
             set_zip_menu,
-            take_pending_import
+            take_pending_import,
+            get_settings,
+            update_settings,
+            get_autostart,
+            set_autostart
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

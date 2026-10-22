@@ -1,8 +1,12 @@
+import { useEffect } from "react";
 import { Monitor, Moon, Sun } from "lucide-react";
 
 import { Segmented } from "@/components/ui/segmented";
+import { Toggle } from "@/components/ui/toggle";
 import { SettingCard, SettingsGroup } from "@/components/settings/SettingCard";
 import { setThemeMode, useThemeMode, type ThemeMode } from "@/lib/theme-mode";
+import type { CloseBehavior } from "@/services/settings";
+import { useSettingsStore } from "@/stores/settingsStore";
 
 const THEME_MODES = [
   { value: "system", label: "跟随系统", icon: Monitor },
@@ -10,14 +14,31 @@ const THEME_MODES = [
   { value: "dark", label: "深色", icon: Moon },
 ] as const;
 
+const CLOSE_BEHAVIORS = [
+  { value: "exit", label: "直接退出" },
+  { value: "tray", label: "最小化到托盘" },
+] as const;
+
 /**
  * 通用：外观、启动与关闭、存储与更新
  *
- * 每张卡片一个可立即生效的决定；行为类写 settings.json（Rust 也要读），
- * 纯界面类（外观）沿用 localStorage——首帧落色需要同步读，见 `lib/theme-mode.ts`。
+ * 每张卡片一个可立即生效的决定：外观走 localStorage（首帧落色要同步读），
+ * 其余行为项走 settings.json（Rust 也要读，见 `utils/settings.rs` 的分工注释）。
  */
 export function GeneralSection() {
   const themeMode = useThemeMode();
+  const settings = useSettingsStore((s) => s.settings);
+  const settingsError = useSettingsStore((s) => s.settingsError);
+  const autostart = useSettingsStore((s) => s.autostart);
+  const loadSettings = useSettingsStore((s) => s.loadSettings);
+  const loadAutostart = useSettingsStore((s) => s.loadAutostart);
+  const patchSettings = useSettingsStore((s) => s.patchSettings);
+  const toggleAutostart = useSettingsStore((s) => s.toggleAutostart);
+
+  useEffect(() => {
+    loadSettings();
+    loadAutostart();
+  }, [loadSettings, loadAutostart]);
 
   return (
     <div>
@@ -35,6 +56,73 @@ export function GeneralSection() {
                 icon: mode.icon,
               }))}
               onChange={setThemeMode}
+            />
+          }
+        />
+      </SettingsGroup>
+
+      <SettingsGroup title="启动与关闭">
+        <SettingCard
+          title="开机自启动"
+          description="登录 Windows 后自动启动；注册的是当前程序位置，移动安装目录后需重新开启"
+          action={
+            <Toggle
+              label="开机自启动"
+              checked={autostart?.enabled ?? false}
+              onCheckedChange={() => void toggleAutostart()}
+              disabled={!autostart}
+            />
+          }
+        >
+          <p
+            data-autostart-status
+            className="mt-3 break-all text-2xs text-muted-foreground"
+          >
+            {autostart
+              ? autostart.enabled
+                ? `已开启 · 命令指向 ${autostart.exe_path}`
+                : "未开启"
+              : "读取中…"}
+          </p>
+        </SettingCard>
+
+        <SettingCard
+          title="关闭行为"
+          description={
+            settings?.close_behavior === "tray"
+              ? "关窗口后程序缩到托盘继续运行；单击托盘图标或右键菜单可回到主界面"
+              : "关窗口即退出程序"
+          }
+          action={
+            <Segmented
+              label="关闭行为"
+              value={settings?.close_behavior ?? "exit"}
+              options={CLOSE_BEHAVIORS.map((item) => ({
+                value: item.value as CloseBehavior,
+                label: item.label,
+              }))}
+              onChange={(value) => void patchSettings({ close_behavior: value })}
+            />
+          }
+        >
+          {settingsError && (
+            <p className="mt-3 text-2xs text-muted-foreground">
+              设置读取失败：应用可能是旧版本，重启应用后重试
+            </p>
+          )}
+        </SettingCard>
+      </SettingsGroup>
+
+      <SettingsGroup title="存储与更新">
+        <SettingCard
+          title="自动检查更新"
+          description="启动时检查 GitHub Releases 有没有新版本；只在发现新版本时提示，不打断使用"
+          action={
+            <Toggle
+              label="自动检查更新"
+              checked={settings?.auto_check_update ?? true}
+              onCheckedChange={(checked) => void patchSettings({ auto_check_update: checked })}
+              disabled={!settings}
             />
           }
         />
