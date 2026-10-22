@@ -3,6 +3,7 @@ import type { LucideIcon } from "lucide-react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { BrandMark } from "@/components/brand/BrandMark";
 import { CursorPreviewImage } from "@/components/cursor/CursorPreviewImage";
 import { useImportTheme } from "@/hooks/useImportTheme";
 import { PAGE_META, PAGE_ORDER, type PageMeta } from "@/lib/pages";
@@ -38,7 +39,7 @@ export function Sidebar() {
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
       <div className="flex items-center gap-2 px-4 pt-5 pb-4">
-        <MousePointer2 className="size-5 shrink-0" />
+        <BrandMark className="size-5 shrink-0" />
         <div className="min-w-0">
           <p className="truncate text-sm leading-tight font-medium">鼠标主题工具</p>
           <p className="text-2xs text-muted-foreground">v0.1.0</p>

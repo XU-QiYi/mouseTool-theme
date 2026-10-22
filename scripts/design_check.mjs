@@ -85,6 +85,12 @@ try {
     `${winConfig.minWidth}×${winConfig.minHeight}`,
   );
 
+  // 0.5 品牌标记：侧栏顶部用应用图标里的指针轮廓（单色），不是 lucide 通用箭头
+  assert(
+    "侧栏品牌位用品牌指针",
+    await evaluate(`!!document.querySelector('aside svg[aria-label="鼠标主题工具"]')`),
+  );
+
   // 1. 结构断言（逐条查，任何一条出错都能定位）
   const checks = {
     导航项数: `document.querySelectorAll("nav button").length`,
@@ -481,11 +487,7 @@ try {
   // 收尾：还原成跟随系统，避免污染下一次运行
   await clickMode("跟随系统");
 
-  console.log(
-    "截图:",
-    join(OUT_DIR, "design_confirm.png"),
-    join(OUT_DIR, "design_deleted.png"),
-  );
+  console.log("截图目录:", OUT_DIR);
   ws.close();
 } finally {
   edge.kill();

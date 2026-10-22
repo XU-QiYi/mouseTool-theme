@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>鼠标主题工具 — 主题叠片</title>
+  <desc>原创几何图标：石墨色圆角底、蓝色与青色主题卡片、白色鼠标指针。</desc>
+  <defs>
+    <filter id="card-shadow" x="-40%" y="-40%" width="180%" height="180%" color-interpolation-filters="sRGB"><feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity=".20"/></filter>
+    <filter id="pointer-shadow" x="-40%" y="-40%" width="180%" height="180%" color-interpolation-filters="sRGB"><feDropShadow dx="0" dy="9" stdDeviation="10" flood-color="#000000" flood-opacity=".30"/></filter>
+  </defs>
+  <rect width="1024" height="1024" rx="208" fill="#202329"/>
+  <rect x="426" y="182" width="399" height="477" rx="72" fill="#527DE8" filter="url(#card-shadow)"/>
+  <rect x="362" y="261" width="399" height="476" rx="72" fill="#47C5DC" filter="url(#card-shadow)"/>
+  <polygon points="212,170 717,407 506,471 611,711 498,760 394,522 228,685" fill="#F6F8FC" filter="url(#pointer-shadow)"/>
+</svg>

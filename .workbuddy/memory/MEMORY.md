@@ -3,6 +3,20 @@
 ## 技术栈
 Tauri 2 (Rust) + React 19 + TypeScript + Vite + Tailwind v4 + shadcn/ui (base-nova) + zustand
 
+## 范围（2026-10-22 拍板，决策 10）
+- 产品 = 主题管理器：导入整套方案 → 应用 → 管理 → 回溯。**自制方案 / 单光标替换不做**（连带不做图片转 .cur、热点编辑）；槽位卡保持不可点、不做 hover 暗示，这是产品决定不是欠债
+- 主题来源只有两条：系统注册表方案、`.zip` 导入。市场/在线来源**已搁置**（2026-10-22），需求文档 §0 本来就把"在线主题商店"列为不做；"更多主题"若重启，方向是索引 + 下载安装回到同一条落盘路径，不是应用内生产光标
+
+## 文档权威顺序（2026-10-22 定）
+决策记录 > 需求描述（需求基线 v2.0）> 架构设计 > design-system / motion。冲突取前者，别各写一套。
+- docs 现有 6 份：决策记录 / 需求描述 / 架构设计 / 启动与构建指南 / design-system.md+html / motion.md；`技术栈.md`（选型对比稿）与 `stitch-ui-prompt.md` 已删（结论并入决策记录附录 A）
+- **文档里不得把未实现写成已支持**：自制方案、文件夹导入、拖拽导入、`.inf` 解析、单光标替换、设置页/打开数据目录、窗口窄宽适配
+- 写注册表只写 15 槽位 + `SchemeName`，**不写** `Cursors\Schemes`；槽位网格只列实际有的槽位（不补齐 15 格）
+- 圆角实际口径：`sm 6 / md 8 / lg 10（按钮·输入框）/ xl 14（卡片·弹窗）/ 4xl 26（徽章=胶囊）`，旧文档写"lg 8px"是错的
+- **`productName` 只改显示名/安装包名，不改 exe 文件名**（exe 名来自 `Cargo.toml [package] name`）；要改二进制名才用 `mainBinaryName`。改 productName 是安全的（`cargo check` 即可验）
+- `AGENTS.md`（git 跟踪的是小写 `agents.md`，同一文件）是每次会话自动注入的项目指导，**事实必须与代码一致**；2026-10-22 已按 15 槽位 / LOCALAPPDATA / 不写 Schemes / 8 命令 / 未实现清单重写，并压成 103 行速查卡（明细指向 docs，勿再塞回全量表）
+- 改了文档交叉引用就跑 `node scripts/doc_ref_check.mjs`（`§x` / `决策 N` 指空会列 `文件:行号` 并退出码 1，不需要 dev server）；重排章节后必跑
+
 ## 踩过的坑（务必遵守）
 
 ### 1. zustand selector 不能返回新对象
@@ -85,4 +99,19 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy CARGO_HTTP_PROXY="
 ## 最近使用（2026-10-22）
 - 历史存 `%LOCALAPPDATA%\CursorStudio\history.json`（不是 theme.json）：`{version,entries[]}`，50 条上限，同 id 去重置顶，记名称快照
 - `apply_theme` 返回 `ApplyOutcome{recent,warning}`：主操作成功就不回滚，历史失败只 warning；`ThemesResult.recent` 随启动加载，坏了只进 warnings
-- 列表复用 `ThemeCard` 的 `meta` 参数；被删主题只在底部计数，不做不可点的死卡片
+- 时间轴每条 = 时刻 + 名称 + 槽位数；被删主题仍占一条、标「已删除」且不给「再次应用」
+
+## 导航与视图结构（2026-10-22 重构，已实现）
+
+- 三项 = 三视图，**不共用列表**：图库=分组网格（系统方案/我的主题两段）· 我的主题=表格（槽位覆盖/导入于/导出·删除）· 最近使用=按天分组时间轴（无检查器）
+- **加页面只改两处**：`lib/pages.ts::PAGE_META` 加一条 + `App.tsx` 的 `VIEWS` 加一行视图；`Page = keyof typeof PAGE_META`，两处都是 `Record<Page,…>`，漏写编译即失败
+- 选中按页各记一份 `selection: Partial<Record<Page,string|null>>`（页面不写键=没有选中，别给每页强塞槽位）；切页只清搜索词，重载只清已不存在的 id
+- 检查器由图库与我的主题共用（应用/导出/删除/改名）；改名只在 `ThemeNameField` 一处，表格行内只放导出/删除
+- 选中强反馈：图库用 2px ring，表格用整行高 2px 竖线（`accent` 与底仅 3% 明度差，单靠底色不够）
+- 侧栏底部常驻「当前光标」状态卡，「还原系统默认」只此一处；`lib/slots.ts::SYSTEM_SLOT_TOTAL=15` 是 SLOT_DEFS 镜像，后端改槽位要同步
+- 检查器宽度由 `InspectorResizer` 拖动（280–560、双击复位、←→16px，被 `innerWidth-224-440` 夹住，**不落盘**）；滚动容器一律 `scroll-thin`：6px、轨道透明、**拇指默认隐形、hover 才浮出**（`::-webkit-scrollbar`；`scrollbar-width: thin` 在 Chromium 里仍是带箭头的经典条，别用）
+- 外观三态（跟随系统/浅/深）只在 `lib/theme-mode.ts`：`html.dark` + 落盘 `cursorstudio.theme-mode` + `setTheme` 同步标题栏（权限 `core:window:allow-set-theme`，改完要重编）；组件零 `dark:` 前缀；手选浅/深后不再跟系统，选回 system 才恢复
+- 检查器内容压到 **462px**（15 槽位在 1200×760 不出现滚动条）：别再往头部塞徽章行、往底部塞多行 dl
+- `ThemeList`/`ThemeCard`/`ThemeDetail` 已删除，别再按"列表+详情+过滤条件"加页面
+- 窗口最小 1080×640（`tauri.conf.json`，224+280+440=944 的依据）；**不做响应式断点**，窄窗不重排不收起；`design_check` 会断言这两个值
+- 验收：`nav_check` 断言三页结构签名（同构即失败）；`design_check` 覆盖表格/时间轴/删除链 + 检查器宽度/不溢出/最小窗口；均已跑绿

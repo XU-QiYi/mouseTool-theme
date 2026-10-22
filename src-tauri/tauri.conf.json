@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "mousetool-theme",
+  "productName": "鼠标主题工具",
   "version": "0.1.0",
   "identifier": "com.leogene.mousetool-theme",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "mousetool-theme",
+        "title": "鼠标主题工具",
         "width": 1200,
         "height": 800,
         "minWidth": 1080,
