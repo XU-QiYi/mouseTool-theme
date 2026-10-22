@@ -118,6 +118,7 @@ try {
     { label: "主题图库", key: "gallery", pick: "Neon Night" },
     { label: "我的主题", key: "mine", pick: "Paper & Ink" },
     { label: "最近使用", key: "recent", pick: null },
+    { label: "设置", key: "settings", pick: null },
   ];
 
   for (const { label, key, pick } of plan) {
@@ -153,15 +154,20 @@ try {
     shots.push(out);
   }
 
-  // 核心断言：三页的「中间区域」必须是三种不同结构，而不是同一张列表换个过滤条件
-  const [g, m, r] = signs;
+  // 核心断言：每页的「中间区域」必须是不同结构，而不是同一张列表换个过滤条件
+  const [g, m, r, s] = signs;
   check("图库是卡片网格", g.view === "gallery" && g.galleryCards > 0 && !g.table, `${g.galleryCards} 张卡`);
   check("我的主题是表格", m.view === "mine" && m.table && m.tableRows > 0 && m.galleryCards === 0, `${m.tableRows} 行`);
   check("最近使用是时间轴且不挂检查器", r.view === "recent" && r.timelineRows > 0 && r.inspector === false, `${r.timelineRows} 条`);
-  check("三页标题互不相同", new Set([g.title, m.title, r.title]).size === 3, [g.title, m.title, r.title].join(" / "));
-  check("三页说明互不相同", new Set([g.hint, m.hint, r.hint]).size === 3);
+  check(
+    "设置页是管理面板：无列表、无检查器、无搜索",
+    s.view === "settings" && s.galleryCards === 0 && !s.table && s.timelineRows === 0 && s.inspector === false && !s.search,
+    `数据卡=${s.view === "settings" ? "有" : "无"}`,
+  );
+  check("四页标题互不相同", new Set([g.title, m.title, r.title, s.title]).size === 4, [g.title, m.title, r.title, s.title].join(" / "));
+  check("四页说明互不相同", new Set([g.hint, m.hint, r.hint, s.hint]).size === 4);
   check("图库与我的主题各有检查器", g.inspector && m.inspector);
-  check("图库/我的主题有搜索，最近使用没有", g.search && m.search && !r.search);
+  check("图库/我的主题有搜索，最近使用与设置没有", g.search && m.search && !r.search && !s.search);
 
   console.log("\n截图:");
   for (const s of shots) console.log("  " + s);

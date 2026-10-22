@@ -29,6 +29,13 @@ pub fn history_file() -> PathBuf {
     data_root().join("history.json")
 }
 
+/// 右键菜单 `--import` 的转交文件：`...\CursorStudio\pending_import.json`
+///
+/// 第二个实例把待导入路径写在这里就退出，由活着的实例在启动/聚焦时领取。
+pub fn pending_import_file() -> PathBuf {
+    data_root().join("pending_import.json")
+}
+
 /// 确保目录存在
 pub fn ensure_dir(path: &std::path::Path) -> Result<(), String> {
     std::fs::create_dir_all(path).map_err(|err| format!("创建目录 {} 失败：{err}", path.display()))

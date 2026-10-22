@@ -96,7 +96,7 @@ try {
     导航项数: `document.querySelectorAll("nav button").length`,
     当前页有aria_current: `[...document.querySelectorAll("nav button")].filter(b => b.getAttribute("aria-current") === "page").length`,
     导航全部带焦点环: `[...document.querySelectorAll("nav button")].every(b => b.className.includes("focus-visible:ring-3"))`,
-    导航带计数: `[...document.querySelectorAll("nav button")].every(b => /\\d+/.test(b.textContent))`,
+    导航带计数: `[...document.querySelectorAll("nav button")].filter(b => /\\d+/.test(b.textContent)).length + "/" + document.querySelectorAll("nav button").length`,
     画廊卡带焦点环: `[...document.querySelectorAll("[data-theme-card]")].every(b => b.className.includes("focus-ring"))`,
     画廊卡带aria_pressed: `["true","false"].includes(document.querySelector("[data-theme-card]")?.getAttribute("aria-pressed"))`,
     画廊卡描边方式: `document.querySelector("[data-theme-card]")?.className.includes("ring-1") ? "ring" : "border"`,
@@ -155,6 +155,21 @@ try {
   writeFileSync(
     join(OUT_DIR, "design_recent_page.png"),
     Buffer.from(shotRecent.result.data, "base64"),
+  );
+
+  await switchTo("设置");
+  const settingsState = await evaluate(`(() => {
+    return JSON.stringify({
+      路径已显示: !!document.querySelector("[data-data-dir]")?.textContent,
+      打开按钮存在: [...document.querySelectorAll("button")].some(b => b.textContent.includes("打开数据目录")),
+      检查器: !!document.querySelector('aside[aria-label="主题详情"]'),
+    });
+  })()`);
+  console.log("设置页:", settingsState);
+  const shotSettings = await send("Page.captureScreenshot", { format: "png" });
+  writeFileSync(
+    join(OUT_DIR, "design_settings_page.png"),
+    Buffer.from(shotSettings.result.data, "base64"),
   );
 
   await switchTo("主题图库");

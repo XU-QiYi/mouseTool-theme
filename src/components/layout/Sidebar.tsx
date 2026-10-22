@@ -1,4 +1,4 @@
-import { FolderDown, Monitor, Moon, MousePointer2, RotateCcw, Settings, Sun } from "lucide-react";
+import { FolderDown, Monitor, Moon, MousePointer2, RotateCcw, Sun } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -176,17 +176,7 @@ export function Sidebar() {
 
       <Separator />
 
-      <div className="p-3">
-        <Button
-          variant="ghost"
-          className="w-full justify-start text-muted-foreground"
-          disabled
-          title="设置页尚未实现"
-        >
-          <Settings data-icon="inline-start" />
-          设置
-        </Button>
-      </div>
+      <div className="h-3" />
     </aside>
   );
 }

@@ -11,10 +11,11 @@ import { ThemeInspector } from "@/components/theme/ThemeInspector";
 import { GalleryView } from "@/components/views/GalleryView";
 import { MyThemesView } from "@/components/views/MyThemesView";
 import { RecentView } from "@/components/views/RecentView";
+import { SettingsView } from "@/components/views/SettingsView";
 import { Toaster } from "@/components/ui/toaster";
 import { useDragDropImport } from "@/hooks/useDragDropImport";
 import { useInspectorWidth } from "@/hooks/useInspectorWidth";
-import { PAGE_META, type Page } from "@/lib/pages";
+import { PAGE_META, type Page, type PageMeta } from "@/lib/pages";
 import { selectSelectedTheme, useThemeStore } from "@/stores/themeStore";
 import "./App.css";
 
@@ -29,6 +30,7 @@ const VIEWS: Record<Page, ComponentType> = {
   gallery: GalleryView,
   mine: MyThemesView,
   recent: RecentView,
+  settings: SettingsView,
 };
 
 function App() {
@@ -36,6 +38,7 @@ function App() {
   const currentPage = useThemeStore((s) => s.currentPage);
   const selectedTheme = useThemeStore(selectSelectedTheme);
   const loadError = useThemeStore((s) => s.loadError);
+  const pickupPendingImport = useThemeStore((s) => s.pickupPendingImport);
   const [inspectorWidth, resizeInspector] = useInspectorWidth();
   const { dragActive } = useDragDropImport();
 
@@ -43,7 +46,19 @@ function App() {
     loadThemes();
   }, [loadThemes]);
 
-  const meta = PAGE_META[currentPage];
+  // 右键菜单 / 二次启动转交的待导入路径：启动时领一次，
+  // 之后每次窗口聚焦再领（第二个实例写完文件会拉起本窗口）
+  useEffect(() => {
+    const pick = () => {
+      void pickupPendingImport();
+    };
+    pick();
+    window.addEventListener("focus", pick);
+    return () => window.removeEventListener("focus", pick);
+  }, [pickupPendingImport]);
+
+  // 显式标注成 PageMeta：字面量收窄后，dependsOnThemes 这类可选字段访问不过编译
+  const meta: PageMeta = PAGE_META[currentPage];
   const View = VIEWS[currentPage];
 
   return (
@@ -57,9 +72,11 @@ function App() {
 
           {/* key 让换页时整块淡入：换的是内容，不是换了个标题 */}
           <div key={currentPage} className="enter-fade flex min-h-0 flex-1">
-            {loadError ? (
+            {loadError && meta.dependsOnThemes !== false ? (
               // 整次读取失败：连检查器一起让位。此时三页都没有数据，
-              // 继续显示空状态会让用户以为"主题真的没了"
+              // 继续显示空状态会让用户以为"主题真的没了"。
+              // 例外是设置页（dependsOnThemes: false）——「打开数据目录」
+              // 恰恰是加载失败时的排查入口，不能被错误态顶掉
               <LoadErrorState message={loadError} onRetry={loadThemes} />
             ) : (
               <>

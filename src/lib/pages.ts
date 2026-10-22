@@ -1,4 +1,4 @@
-import { FolderDown, History, LayoutGrid } from "lucide-react";
+import { FolderDown, History, LayoutGrid, Settings } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 import type { CursorTheme, HistoryEntry } from "@/types/theme";
@@ -33,6 +33,12 @@ export interface PageMeta {
   unit?: string;
   /** 右侧是否挂主题检查器 */
   hasInspector: boolean;
+  /**
+   * 此页内容是否依赖主题列表加载成功；缺省视为 true。
+   * false 的页面在整体读取失败时照常渲染——设置页的「打开数据目录」
+   * 恰恰是加载失败时的排查手段，不能被错误态顶掉。
+   */
+  dependsOnThemes?: boolean;
 }
 
 export const PAGE_META = {
@@ -63,6 +69,14 @@ export const PAGE_META = {
     hint: "每次切换都会留一条记录",
     count: ({ recent }) => recent.length,
     unit: "条记录",
+    hasInspector: false,
+  },
+  settings: {
+    label: "设置",
+    icon: Settings,
+    title: "设置",
+    hint: "数据目录与应用数据维护",
+    dependsOnThemes: false,
     hasInspector: false,
   },
 } satisfies Record<string, PageMeta>;

@@ -133,3 +133,23 @@ export function exportTheme(theme: CursorTheme, destPath: string): Promise<Expor
   }
   return invoke<ExportSummary>("export_theme", { theme, destPath });
 }
+
+/** 浏览器里演示用的数据目录路径（真实路径只有 Rust 侧知道，前端禁止自行拼接） */
+const MOCK_DATA_DIR = "C:\\Users\\demo\\AppData\\Local\\CursorStudio";
+
+/** 对应 Rust 命令 `get_data_dir`：数据目录的展示路径（只读，不创建目录） */
+export function getDataDir(): Promise<string> {
+  if (!inTauri) {
+    return Promise.resolve(MOCK_DATA_DIR);
+  }
+  return invoke<string>("get_data_dir");
+}
+
+/** 对应 Rust 命令 `open_data_dir`：在系统文件管理器打开数据目录（不存在则先创建） */
+export function openDataDir(): Promise<string> {
+  if (!inTauri) {
+    console.warn("[dev] 非 Tauri 环境，跳过打开系统目录");
+    return Promise.resolve(MOCK_DATA_DIR);
+  }
+  return invoke<string>("open_data_dir");
+}

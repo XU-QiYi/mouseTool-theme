@@ -5,13 +5,22 @@ import {
   deleteTheme as apiDeleteTheme,
   exportTheme as apiExportTheme,
   getAllThemes,
+  getDataDir as apiGetDataDir,
   importTheme as apiImportTheme,
   inTauri,
+  openDataDir as apiOpenDataDir,
   renameTheme as apiRenameTheme,
   restoreDefault as apiRestoreDefault,
 } from "@/services/theme";
 import { readableError, toast } from "@/lib/toast";
 import type { Page } from "@/lib/pages";
+import {
+  getZipMenuStatus as apiGetZipMenuStatus,
+  openMousePanel as apiOpenMousePanel,
+  setZipMenu as apiSetZipMenu,
+  takePendingImport as apiTakePendingImport,
+  type ZipMenuStatus,
+} from "@/services/system";
 import type { CursorTheme, HistoryEntry } from "@/types/theme";
 
 /** 三个页面的语义（互不重叠，各自有一套视图与任务）： */
@@ -65,6 +74,12 @@ interface ThemeStore {
   warnings: string[];
   /** 用户主动关掉了提示条；重新加载会复位 */
   warningsDismissed: boolean;
+  /** 数据目录展示路径（设置页用）；null = 还没读到 */
+  dataDir: string | null;
+  /** `.zip` 右键菜单注册状态；null = 还没读到 */
+  zipMenu: ZipMenuStatus | null;
+  /** 右键菜单状态读取失败（典型原因：前端新、Rust 旧，重启应用即恢复） */
+  zipMenuError: boolean;
 
   loadThemes: () => Promise<void>;
   applyTheme: (id: string) => Promise<void>;
@@ -73,6 +88,18 @@ interface ThemeStore {
   deleteTheme: (id: string) => Promise<void>;
   renameTheme: (id: string, newName: string) => Promise<void>;
   exportTheme: (id: string, destPath: string) => Promise<void>;
+  /** 读一次数据目录路径（幂等，拿到就不再请求） */
+  loadDataDir: () => Promise<void>;
+  /** 在系统文件管理器打开数据目录 */
+  openDataDir: () => Promise<void>;
+  /** 打开经典「鼠标属性」面板（指针选项卡） */
+  openMousePanel: () => Promise<void>;
+  /** 读一次 `.zip` 右键菜单注册状态（幂等） */
+  loadZipMenuStatus: () => Promise<void>;
+  /** 注册 / 移除 `.zip` 右键菜单（试点，决策 12） */
+  toggleZipMenu: () => Promise<void>;
+  /** 领取待导入路径并走正常导入流程；没有就静默返回 */
+  pickupPendingImport: () => Promise<void>;
   selectTheme: (id: string) => void;
   setSearchQuery: (q: string) => void;
   setCurrentPage: (p: Page) => void;
@@ -91,6 +118,9 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
   loadError: null,
   warnings: [],
   warningsDismissed: false,
+  dataDir: null,
+  zipMenu: null,
+  zipMenuError: false,
 
   loadThemes: async () => {
     set({ loading: true, loadError: null });
@@ -263,6 +293,78 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     set((state) => ({
       selection: { ...state.selection, [state.currentPage]: id },
     })),
+
+  // 静态信息，拿到一次就够；失败只留日志不弹全局错误——
+  // 路径没显示出来顶多少个提示，真打开失败时会有专门的错误提示
+  loadDataDir: async () => {
+    if (get().dataDir) return;
+    try {
+      set({ dataDir: await apiGetDataDir() });
+    } catch (err) {
+      console.warn("[loadDataDir]", readableError(err));
+    }
+  },
+
+  openDataDir: async () => {
+    try {
+      const dir = await apiOpenDataDir();
+      toast.success("已打开数据目录", inTauri ? dir : "开发模式：未真正打开系统目录");
+    } catch (err) {
+      console.error("打开数据目录失败：", err);
+      toast.error("打开失败", readableError(err));
+    }
+  },
+
+  openMousePanel: async () => {
+    try {
+      await apiOpenMousePanel();
+    } catch (err) {
+      console.error("打开鼠标属性面板失败：", err);
+      toast.error("打开失败", readableError(err));
+    }
+  },
+
+  loadZipMenuStatus: async () => {
+    if (get().zipMenu) return;
+    try {
+      set({ zipMenu: await apiGetZipMenuStatus(), zipMenuError: false });
+    } catch (err) {
+      // 卡在「读取中…」比失败更骗人：挂个错误态让界面能说清原因
+      console.warn("[loadZipMenuStatus]", readableError(err));
+      set({ zipMenuError: true });
+    }
+  },
+
+  toggleZipMenu: async () => {
+    const current = get().zipMenu;
+    if (!current) return;
+    try {
+      await apiSetZipMenu(!current.registered);
+      // 以注册表回读为准，不用本地推测值：写失败半途的状态不能靠猜
+      const next = await apiGetZipMenuStatus();
+      set({ zipMenu: next });
+      toast.success(
+        next.registered ? "已注册右键菜单" : "已移除右键菜单注册",
+        next.registered ? `.zip 右键菜单指向 ${next.exe_path}` : undefined,
+      );
+    } catch (err) {
+      console.error("右键菜单注册失败：", err);
+      toast.error("操作失败", readableError(err));
+      // 操作失败时回读真实状态，别让界面停在猜出来的值上
+      try {
+        set({ zipMenu: await apiGetZipMenuStatus(), zipMenuError: false });
+      } catch {
+        /* 回读失败就保留旧值 */
+      }
+    }
+  },
+
+  pickupPendingImport: async () => {
+    const zipPath = await apiTakePendingImport();
+    if (zipPath) {
+      await get().importTheme(zipPath);
+    }
+  },
 
   setSearchQuery: (q) => set({ searchQuery: q }),
 

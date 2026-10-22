@@ -57,6 +57,7 @@ mouseTool-theme/
 │           ├── registry.rs         ← SLOT_DEFS、注册表读写、SPI 刷新
 │           ├── cursor.rs           ← .cur/.ico/.ani 解析与缩放
 │           ├── importer.rs         ← zip 导入、槽位推断
+│           ├── inf_export.rs       ← 导出 zip 附带的通用 .inf 安装文件（决策 13）
 │           └── history.rs          ← 最近使用读写
 ├── scripts/                        ← 无头浏览器验收脚本（设计/动效/交互）
 └── docs/
@@ -80,6 +81,7 @@ App.tsx
             ├─ GalleryView      分组网格 → GalleryCard
             ├─ MyThemesView     表格（槽位覆盖率 + 导入时间 + 导出/删除）
             ├─ RecentView       按自然日分组的时间轴
+            ├─ SettingsView     设置：数据目录卡片（路径展示 + 打开入口），不依赖主题列表
             └─ ThemeInspector   图库/我的主题共用：预览、应用、导出、删除、改名
 ```
 
@@ -94,9 +96,9 @@ App.tsx
 **规则**
 
 1. 组件**不直接** `invoke`，也不自己拼路径。要数据就调 store action。
-2. `services/` 只做"把 command 包成带类型的中文错误"，不写业务判断。
+2. `services/`（`theme.ts` / `system.ts`）只做"把 command 包成带类型的中文错误"，不写业务判断。
 3. store 内统一 `try/catch`，失败弹 Toast，不向组件抛异常。
-4. `hooks/useCursorPreview` 是**只读例外**：它直连 service，但只维护自己的内存缓存，不碰全局状态——预览是纯派生数据，塞进 store 会让主题列表的任何变更都触发全量预览重算。
+4. `hooks/useCursorPreview` 与 `hooks/useDiagnostics` 是**只读例外**：直连 service，但只维护自己的内存状态，不碰全局状态——预览与诊断文本是纯派生展示数据，塞进 store 会让主题列表的任何变更都触发全量重算。
 
 **不要再犯的坑**：zustand selector 里不能 `filter`/`map`/写对象字面量，每次返回新引用会让 `useSyncExternalStore` 判定快照变化，直接无限重渲染白屏。派生数据写纯函数 + 组件内 `useMemo`。
 
@@ -114,7 +116,7 @@ App.tsx
 
 ---
 
-## 5. 命令契约（当前共 8 个）
+## 5. 命令契约（当前共 15 个）
 
 | Command | 入参（前端写法） | 返回 | 失败场景 |
 |---|---|---|---|
@@ -126,6 +128,13 @@ App.tsx
 | `delete_theme` | `themeId` | `void` | ID 非法、目录不存在、被占用 |
 | `rename_theme` | `themeId`, `newName` | `CursorTheme` | 空名、超 40 字、控制字符、json 损坏 |
 | `export_theme` | `theme`, `destPath` | `ExportSummary` | 目标目录不存在、写 zip 失败（会清掉半成品） |
+| `get_data_dir` | — | `String`（展示路径） | **不失败**（只读 `data_root()`，不创建目录） |
+| `open_data_dir` | — | `String`（实际打开的路径） | 建目录失败、系统文件管理器打开失败 |
+| `get_windows_version` | — | `String` | 读不到注册表版本键（诊断信息降级为「未知」） |
+| `open_mouse_panel` | — | `void` | rundll32 启动失败（曾试 `ms-settings:mouse` 跳新版设置页，该页面别名在本机不解析——cmd start / explorer / ShellExecuteW / Win+R 四条通路全回落主页，故收敛为经典面板） |
+| `get_zip_menu_registered` | — | `ZipMenuStatus` | **不失败**（读不到就当未注册） |
+| `set_zip_menu` | `register`（布尔） | `void` | 注册表写失败（试点功能，决策 12） |
+| `take_pending_import` | — | `String \| null` | **不失败**（无待导入 / 文件损坏都返回 null，领取即删除） |
 
 **为什么 `apply_theme` / `export_theme` 收整个 `CursorTheme` 而不是 ID**：系统方案只存在于注册表，没有磁盘目录，但同样有光标文件路径；只传 ID 就到不了它们的文件。
 
@@ -182,7 +191,6 @@ App.tsx
 |---|---|
 | 文件夹导入 | `import_theme` 只吃 `.zip` 路径（拖拽与对话框一致） |
 | `.inf` 槽位映射解析 | 只有文件名推断 |
-| 设置页 / 打开数据目录 | 侧栏「设置」是 `disabled` 占位（决策 1 的补偿项尚未落地） |
 
 > 自制方案与单光标替换**已拍板不做**（决策 10），不在缺口清单里，别当"待排期"重新提。
 > 窗口自适应也不是缺口：`tauri.conf.json` 已设 `minWidth: 1080` / `minHeight: 640` 兜底，**仍不做响应式断点**（窄窗下不重排、不收起任何一栏）。
@@ -196,3 +204,5 @@ App.tsx
 |---|---|
 | 2026-06-17 | 初稿：按 4 层前端 / 3 层 Rust / 组件树 / 7 阶段顺序写的提示词稿 |
 | 2026-10-22 | v2.0 重写：删掉全篇重复的提示词块；槽位由错误的 14 项改为 `SLOT_DEFS` 的 15 项；技术栈改为 React 19；移除 `sonner` 与"复制到 `C:\Windows\Cursors` 需 UAC"；补命令契约、类型契约、硬约束与未实现清单 |
+| 2026-10-22 | 设置模块落地：导航增至四项，新增 `get_data_dir` / `open_data_dir`（决策 11），命令契约 8 → 10，设置页从 §9 缺口清单移除 |
+| 2026-10-22 | 决策 12：设置页第二批锚点（诊断信息 / Windows 快捷入口）+ `.zip` 右键菜单试点与单实例转交；命令契约 10 → 15，`services/` 拆出 `system.ts`，只读例外补 `useDiagnostics` |
