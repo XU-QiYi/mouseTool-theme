@@ -131,3 +131,30 @@ export function setThemesDir(path: string | null): Promise<SettingsSnapshot> {
   }
   return invoke<SettingsSnapshot>("set_themes_dir", { path });
 }
+
+/** 导出备份的结果 */
+export interface ExportBackupSummary {
+  themes: number;
+  files: number;
+}
+
+/** 恢复备份的结果（合并语义：只补回缺失的） */
+export interface ImportBackupSummary {
+  themes_added: number;
+  themes_skipped: number;
+  history_added: number;
+}
+
+/** 导出全部主题与使用记录为备份 zip */
+export function exportBackup(destPath: string): Promise<ExportBackupSummary> {
+  if (!inTauri) return Promise.resolve({ themes: 0, files: 0 });
+  return invoke<ExportBackupSummary>("export_backup", { destPath });
+}
+
+/** 从备份 zip 合并恢复 */
+export function importBackup(zipPath: string): Promise<ImportBackupSummary> {
+  if (!inTauri) {
+    return Promise.resolve({ themes_added: 0, themes_skipped: 0, history_added: 0 });
+  }
+  return invoke<ImportBackupSummary>("import_backup", { zipPath });
+}

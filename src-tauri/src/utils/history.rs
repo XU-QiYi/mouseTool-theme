@@ -102,6 +102,35 @@ pub fn read_history() -> (Vec<HistoryEntry>, Vec<String>) {
     read_from(&paths::history_file())
 }
 
+/// 解析备份包里的 `history.json`（格式与主文件相同）
+pub fn parse_entries(raw: &str) -> Result<Vec<HistoryEntry>, String> {
+    serde_json::from_str::<HistoryFile>(raw)
+        .map(|file| file.entries)
+        .map_err(|err| format!("备份里的最近使用记录读不出来（{err}）"))
+}
+
+/// 把备份里的记录并进指定文件：**本地优先**，只补回本地没有的主题记录
+///
+/// 返回补回条数。合并而非覆盖——恢复备份不该顺手抹掉用户之后的新记录。
+pub fn merge_into(path: &Path, incoming: &[HistoryEntry]) -> Result<usize, String> {
+    let (mut entries, _) = read_from(path);
+    let mut added = 0usize;
+    for entry in incoming {
+        if entries.iter().any(|e| e.theme_id == entry.theme_id) {
+            continue;
+        }
+        entries.push(entry.clone());
+        added += 1;
+    }
+    if added > 0 {
+        // 「最新在前」的口径：备份条目带时间戳，按字符串比较即时间序
+        entries.sort_by(|a, b| b.applied_at.cmp(&a.applied_at));
+        entries.truncate(MAX_ENTRIES);
+        write_to(path, &entries)?;
+    }
+    Ok(added)
+}
+
 /// 记到默认位置
 pub fn record(theme: &CursorTheme) -> Result<Vec<HistoryEntry>, String> {
     record_to(&paths::history_file(), theme)

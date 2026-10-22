@@ -2,6 +2,7 @@ pub mod commands;
 pub mod models;
 pub mod utils;
 
+use commands::backup::{export_backup, import_backup};
 use commands::cursor::get_cursor_preview;
 use commands::data::{get_data_dir, open_data_dir};
 use commands::settings::{
@@ -62,7 +63,9 @@ pub fn run() {
             update_settings,
             get_autostart,
             set_autostart,
-            set_themes_dir
+            set_themes_dir,
+            export_backup,
+            import_backup
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
