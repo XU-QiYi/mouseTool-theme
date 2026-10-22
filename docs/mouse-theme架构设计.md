@@ -129,6 +129,8 @@ App.tsx
 
 **为什么 `apply_theme` / `export_theme` 收整个 `CursorTheme` 而不是 ID**：系统方案只存在于注册表，没有磁盘目录，但同样有光标文件路径；只传 ID 就到不了它们的文件。
 
+**`export_theme` 的包内清单**：光标文件按槽位重命名（`arrow.cur` / `busy.ani`），另附 `<方案名>.inf`（决策 13，`utils/inf_export.rs` 生成，UTF-16LE + BOM）——接收方没装本软件也能右键安装。导入端只认 `.cur/.ani/.ico`，`.inf` 自动忽略，不破坏「导出 → 再导入」闭环。
+
 ---
 
 ## 6. 类型契约

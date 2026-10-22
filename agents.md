@@ -21,7 +21,7 @@
 
 - **Frontend**（`src/`）：骨架（侧栏 + 页头）+ 三个独立视图 + 右侧检查器。组件不直接 `invoke`，走 store action；`services/theme.ts` 是唯一 invoke 出口（非 Tauri 环境降级 `mock.ts`）。
 - **Backend**（`src-tauri/src/commands/`）：命令编排，错误一律 `Result<T, String>` 且是**用户能照着行动**的中文。
-- **Theme**（`utils/importer.rs`、`utils/paths.rs`）：zip 导入、槽位推断、落盘。**仅 `.zip`**（侧栏对话框 + 全窗口拖拽两个入口，共用同一条链路），无文件夹导入、无 `.inf` 解析。
+- **Theme**（`utils/importer.rs`、`utils/paths.rs`）：zip 导入、槽位推断、落盘。**仅 `.zip`**（侧栏对话框 + 全窗口拖拽两个入口，共用同一条链路），无文件夹导入、无 `.inf` 解析。导出 zip 附带通用 `.inf` 安装文件（`utils/inf_export.rs`，决策 13），接收方右键即可安装。
 - **Cursor**（`utils/cursor.rs`）：`.cur`/`.ico`/`.ani` 解码。自解 ICO 目录挑最大帧、手写 RIFF 取 `LIST/fram`；**不转 GIF**。
 - **Registry**（`utils/registry.rs`）：HKCU 读写 + `SPI_SETCURSORS`。
 - **Integration**（`models/` ↔ `types/`、`capabilities/`）：前后端字段逐个同名，共用 `snake_case`，不做驼峰转换。
