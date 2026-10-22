@@ -106,9 +106,17 @@ pub fn build_inf(scheme_name: &str, files: &[(String, String)]) -> Vec<u8> {
     push_comment(&mut lines, "     安装时系统可能弹出管理员确认，选「是」即可；");
     push_comment(
         &mut lines,
-        "  3. 打开 控制面板 → 鼠标 → 指针，在「方案」下拉里选择本方案 → 应用。",
+        "  3. 安装完成后会自动打开「鼠标属性 → 指针」窗口，此时新方案已就位，",
     );
-    push_comment(&mut lines, "     若光标没有立即变化，注销后重新登录即可。");
+    push_comment(&mut lines, "     点「确定」即可生效。");
+    push_comment(
+        &mut lines,
+        "     若窗口没有弹出：打开 控制面板 → 鼠标 → 指针，在「方案」下拉里",
+    );
+    push_comment(
+        &mut lines,
+        "     选择本方案 → 应用；或注销后重新登录（登录时会自动生效）。",
+    );
     push_comment(&mut lines, "");
     push_comment(
         &mut lines,
@@ -132,6 +140,13 @@ pub fn build_inf(scheme_name: &str, files: &[(String, String)]) -> Vec<u8> {
     lines.push("[DefaultInstall]".to_string());
     lines.push("CopyFiles = Scheme.Copies".to_string());
     lines.push("AddReg = Scheme.Reg".to_string());
+    // 装完自动弹出「鼠标属性 → 指针」：逐槽位值此时已写入注册表，弹出的窗口
+    // 里新方案就是当前值，用户点「确定」即触发 SPI_SETCURSORS 立即生效。
+    // 没有这一步的话，安装只注册方案，光标要等注销重新登录才变。
+    // RunPreSetupCommands / RunPostSetupCommands 是微软文档记载的
+    // DefaultInstall 官方指令，右键「安装」会执行（命令同步执行，对话框
+    // 关闭后安装才算完成；命令失败不影响已完成的复制与注册）。
+    lines.push("RunPostSetupCommands = Finish.Commands".to_string());
     lines.push(String::new());
     lines.push("[DestinationDirs]".to_string());
     lines.push("Scheme.Copies = 10,\"%CUR_DIR%\"".to_string());
@@ -166,6 +181,13 @@ pub fn build_inf(scheme_name: &str, files: &[(String, String)]) -> Vec<u8> {
             installed(key, ext)
         ));
     }
+
+    // 方案名与 `apply_theme` 的落盘状态对齐（注册表里多一个可读的名字）
+    lines.push("HKCU,\"Control Panel\\Cursors\",SchemeName,,\"%SCHEME_NAME%\"".to_string());
+
+    lines.push(String::new());
+    lines.push("[Finish.Commands]".to_string());
+    lines.push("rundll32.exe shell32.dll,Control_RunDLL main.cpl,,1".to_string());
 
     lines.push(String::new());
     lines.push("[Strings]".to_string());
@@ -241,6 +263,16 @@ mod tests {
         assert!(text.contains("\r\nhand.ani\r\n"));
         assert!(text.contains("[Scheme.Reg]"));
         assert!(
+            text.contains("RunPostSetupCommands = Finish.Commands"),
+            "装完要自动弹出指针设置，否则安装后光标不生效"
+        );
+        assert!(text.contains("[Finish.Commands]"));
+        assert!(text.contains("rundll32.exe shell32.dll,Control_RunDLL main.cpl,,1"));
+        assert!(
+            text.contains("HKCU,\"Control Panel\\Cursors\",SchemeName,,\"%SCHEME_NAME%\""),
+            "方案名要与 apply_theme 的落盘状态对齐"
+        );
+        assert!(
             text.contains("HKCU,\"Control Panel\\Cursors\",Arrow,,\"%10%\\%CUR_DIR%\\arrow.cur\""),
             "提供的槽位要有逐槽位注册行"
         );
@@ -254,6 +286,7 @@ mod tests {
         assert!(text.contains("CUR_DIR = \"Cursors\\我的主题\""));
         assert!(text.contains("SCHEME_NAME = \"我的主题\""));
         assert!(text.contains("右键"), "头部注释要写清使用方法");
+        assert!(text.contains("点「确定」即可生效"), "注释要说明弹出窗口怎么用");
     }
 
     #[test]
