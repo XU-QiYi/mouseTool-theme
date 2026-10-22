@@ -71,8 +71,12 @@ mod tests {
     /// 测试专用键：绝不碰真实 Run 键
     const TEST_KEY: &str = "Software\\CursorStudio.Test\\Run";
 
+    /// 碰注册表的测试必须串行，否则互相踩踏（防中毒取回锁）
+    static REGISTRY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn 自启动注册与移除往返() {
+        let _guard = REGISTRY_LOCK.lock().unwrap_or_else(|err| err.into_inner());
         let _ = set_at(TEST_KEY, "TestApp", "C:\\demo\\app.exe", false); // 起点干净
 
         assert!(!status_at(TEST_KEY, "TestApp").0, "起点应未注册");
