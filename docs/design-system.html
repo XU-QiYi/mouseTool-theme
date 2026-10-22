@@ -318,12 +318,12 @@ code {
   <!-- 05 圆角 -->
   <section>
     <h2><span class="n">05</span>圆角</h2>
-    <p class="lead">基准 <code>--radius: 10px</code>，其余由倍数派生。控件小于容器，容器小于浮层。</p>
+    <p class="lead">基准 <code>--radius: 10px</code>，其余由倍数派生。控件小于容器，容器小于浮层；徽章用 4xl（26px），因为高度只有 20px，视觉上就是胶囊。</p>
     <div class="grid4">
-      <div class="demo-box" style="border-radius:calc(var(--radius)*.6)">md · 6px<br>徽章 / 小标签</div>
-      <div class="demo-box" style="border-radius:calc(var(--radius)*.8)">lg · 8px<br>按钮 / 输入框</div>
-      <div class="demo-box" style="border-radius:calc(var(--radius)*1.4)">xl · 14px<br>卡片</div>
-      <div class="demo-box" style="border-radius:999px">full<br>胶囊 / 头像</div>
+      <div class="demo-box" style="border-radius:calc(var(--radius)*.6)">sm · 6px<br>内嵌小元素</div>
+      <div class="demo-box" style="border-radius:calc(var(--radius)*.8)">md · 8px<br>小按钮上限</div>
+      <div class="demo-box" style="border-radius:var(--radius)">lg · 10px<br>按钮 / 输入框</div>
+      <div class="demo-box" style="border-radius:calc(var(--radius)*1.4)">xl · 14px<br>卡片 / 弹窗</div>
     </div>
   </section>
 
@@ -502,7 +502,7 @@ code {
   <!-- 12 落地检查 -->
   <section>
     <h2><span class="n">12</span>落地检查</h2>
-    <p class="lead">每次改动界面后跑这三条，全绿才算完成。</p>
+    <p class="lead">每次改动界面后跑这四条，全绿才算完成。design_check 与 motion_check 需要 vite 在 1420 运行，另外两条只扫源码。</p>
     <table>
       <tbody>
         <tr><td class="mono">node scripts/design_check.mjs</td><td>自动按 Tab 走一遍，查焦点环、aria 与结构，并存截图</td></tr>

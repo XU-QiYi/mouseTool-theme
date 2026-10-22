@@ -158,6 +158,7 @@ npm run dev
 |------|------|-----------|
 | `npm run build` | 仅做前端构建（TypeScript 检查 + 打包出静态文件到 `dist/`） | 想单独确认前端代码能编译通过 |
 | `npm run preview` | 本地预览构建产物（`dist/`） | 打包前确认发布版界面无误 |
+| `npm run dev:bg` / `npm run dev:stop` | 后台起 / 停 Vite：stdout 接日志文件、进程脱离终端，PID 记在 `.dev-server.pid` | 跑自动化验收脚本时（见 5.2） |
 | `npm run tauri <子命令>` | 调用 Tauri CLI（如 `npm run tauri dev` / `build` / `info`） | 一般不用单独敲 |
 
 > **坑 ③：端口 1420 被占用，启动直接报错。**
@@ -245,23 +246,38 @@ src-tauri\target\release\mousetool-theme.exe
 
 ### 5.2 自动化 UI 验证脚本（项目自带）
 
-`scripts/` 下有两个无头浏览器脚本，**前提：`npm run dev` 或 `npm run tauri dev` 已在运行**（需要 `http://localhost:1420` 可访问）。
+`scripts/` 下是项目自带的验收脚本：一部分用无头 Edge + CDP 驱动界面（前提是 `http://localhost:1420` 可访问，用 `dev:bg` 后台起最稳；前台 `npm run tauri dev` 也行，但会占住一个终端），另一部分只扫源码。
+
+| 脚本 | 验什么 | 会点「应用」吗 |
+|---|---|---|
+| `node scripts/design_check.mjs` | 按 Tab 走查键盘焦点、`aria` 属性、三栏结构，并存截图 | 不会 |
+| `node scripts/design_audit.mjs` | 静态扫描：间距/字号/图标是否出现阶梯外的值、有没有裸写时长或 `transition-all` | 不启动浏览器 |
+| `node scripts/ui_ratio.mjs` | 统计 JSX 元素构成：shadcn / 业务组件 / 原生标签 / 图标 的比例 | 不启动浏览器 |
+| `node scripts/motion_check.mjs` | 逐帧采样 Toast 与弹窗的进出场：时长、中间态、降级是否生效（28 项断言） | 不会 |
+| `node scripts/recent_check.mjs` | 「最近使用」排序、应用后置顶、删除后的提示 | 会（mock，不写系统） |
+| `node scripts/ui_check.mjs` | 点第一个主题卡 + 点应用按钮，截图 | 会（mock，不写系统） |
+| `node scripts/nav_check.mjs` | 依次点三个导航项，输出三栏结构与截图 | 不会 |
+
+> 改文档时另有一条不依赖浏览器的检查：`node scripts/doc_ref_check.mjs`。它校验 `AGENTS.md` 与 `docs/*.md` 里的 `§x` / `决策 N` 是否还指得着（章节重排后最容易静默失效），指空会列出 `文件:行号` 并以退出码 1 失败。
 
 ```powershell
-# 点击第一个主题卡片并截图，验证交互链路
-node scripts/ui_check.mjs
-
-# 依次点击三个导航项并截图，验证导航切换
-node scripts/nav_check.mjs
+# 推荐写法：起服务 → 验证 → 停服务，一条命令走完
+node scripts/dev_bg.mjs start; node scripts/design_check.mjs; node scripts/dev_bg.mjs stop
 ```
 
-**这步在干什么？** 脚本用无头 Edge 通过 CDP 协议打开页面 → 模拟点击 → 截图存到临时目录（`%TEMP%\mousetool_click.png` 等），相当于"替你点一遍"，适合改动 UI 后快速回归。
+**这步在干什么？** 脚本用无头 Edge 通过 CDP 打开页面 → 模拟点击/Tab → 采数据 → 截图存到 `%TEMP%`（如 `mousetool_click.png`、`design_focus.png`），相当于"替你点一遍"。改完界面或动效后跑一遍，比肉眼可靠。
+
+> **为什么脚本点「应用」也安全**：脚本跑的是普通浏览器里的 `localhost:1420`，没有 Tauri 后端。`services/theme.ts` 检测到非 Tauri 环境会切到 `mock.ts` 的示例数据，点「应用」只弹一条"开发模式：未真正写入系统"的提示，**不会改你的光标**。要验真实系统效果，只能在 `npm run tauri dev` 窗口或安装包里手动点。
 
 > **坑 ⑨：脚本截图里布局判断失真（如视口宽度变成 756px）。**
 > 系统 DPI 缩放会影响无头浏览器视口。脚本已内置 `--force-device-scale-factor=1` 参数来规避，自己仿写脚本时**务必带上这个参数**。
 >
 > **坑 ⑩：脚本报找不到 Edge。**
 > 脚本写死了 Edge 路径 `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`。若你的 Edge 装在别处，改脚本开头的 `EDGE` 常量即可。
+>
+> **坑 ⑪：后台起的 dev server"过一会儿就没了"。**
+> 用 `dev_bg.mjs start` 起的 vite，在**当前 bash 命令结束时**会被回收——日志里没有 error，端口只剩 `TIME_WAIT`，接着验证脚本拿到 502 并报一堆"按钮 NOT_FOUND"的假失败。所以**启动和验证必须写进同一条命令**（见上面的推荐写法）。
+> 另外**绝不要**用 `npm run dev | head` 这类管道方式起后台：管道一关，vite 写 stdout 拿到 EPIPE 会直接退出。`dev_bg.mjs` 把 stdout 接到日志文件就是为了避开这一点。
 
 ### 5.3 Rust 侧验证（改后端时）
 
@@ -289,6 +305,7 @@ cargo check
 | `tauri build` 报 TS 错误 | 类型检查不通过 | `npm run build` 清零类型错误后重打 |
 | 装到别的电脑无法运行 | 缺 WebView2 / 非 Windows | 目标机装 WebView2；仅支持 Windows |
 | 应用主题后光标没变 | 属于系统级功能，需在桌面版操作 | 确认是 `tauri dev`/安装包运行，而非浏览器预览 |
+| 验收脚本报 502 或一堆"按钮找不到" | dev server 已被回收（不是脚本坏了） | 按坑 ⑪，用 `dev:bg` 且把启动与验证写在同一条命令里 |
 
 ---
 
@@ -296,21 +313,34 @@ cargo check
 
 ```
 mouseTool-theme/
-├── package.json            ← 前端依赖与 npm 脚本（dev/build/preview/tauri）
-├── vite.config.ts          ← Vite 配置（固定端口 1420）
+├── package.json            ← 前端依赖与 npm 脚本（dev/build/preview/tauri/dev:bg）
+├── vite.config.ts          ← Vite 配置（固定端口 1420；cacheDir 已挪到系统临时目录）
 ├── index.html              ← 界面入口
 ├── src/                    ← 前端源码（React + TS + Tailwind）
-│   └── components/         ← UI 组件
+│   ├── App.tsx             ← 三栏骨架 + 页面切换
+│   ├── App.css             ← 设计 token 唯一来源（颜色/字号/间距/动效）
+│   ├── components/
+│   │   ├── layout/         ← 侧栏导航
+│   │   ├── theme/          ← 主题列表、卡片、详情、槽位网格
+│   │   ├── cursor/         ← 光标预览图、.ani 播放器、槽位卡
+│   │   └── ui/             ← shadcn 组件（button/card/badge/dialog/toast…）
+│   ├── stores/             ← zustand 全局状态
+│   ├── services/           ← 所有 invoke 封装 + 浏览器 mock
+│   ├── hooks/              ← 预览请求去重与缓存
+│   ├── types/              ← 与 Rust 结构体对应的类型
+│   └── lib/                ← toast 单例、cn()
 ├── src-tauri/              ← Rust 后端（Tauri 桌面壳）
 │   ├── tauri.conf.json     ← 窗口/打包配置（含 --no-sandbox，勿删）
 │   ├── Cargo.toml          ← Rust 依赖
 │   └── src/
-│       ├── commands/       ← 前端可调用的 Tauri 命令（导入/应用主题…）
-│       ├── utils/          ← 注册表读写、.cur/.ani 解析等系统操作
-│       └── models/         ← 数据结构
-├── scripts/                ← UI 自动验证脚本（ui_check / nav_check）
+│       ├── commands/       ← 前端可调用的 Tauri 命令（8 个）
+│       ├── models/         ← 数据结构（前后端契约）
+│       └── utils/          ← paths 数据目录 / registry 注册表 / cursor 解析 / importer 导入 / history 历史
+├── scripts/                ← 验收脚本（设计/动效/交互/文档引用/后台起服务）
 └── docs/                   ← 项目文档（本文件所在）
 ```
+
+各目录之间怎么通信、每条命令收什么参数，见 `mouse-theme架构设计.md`。
 
 ---
 
@@ -318,8 +348,8 @@ mouseTool-theme/
 
 1. **两个命令走天下**：日常 `npm run tauri dev`，发布 `npm run tauri build`。其余命令都是这两条的零件。
 2. **报错先看是"前端层"还是"Rust 层"**：界面白屏/样式错 → 查 `src/`；功能按钮没反应/注册表不生效 → 查 `src-tauri/src/`。`npm run build` 和 `cargo check` 是各自的快速体检命令。
-3. **环境问题占新手坑的一多半**：终端要重开、C++ 工具链要装、代理要绕、端口要空——把本文的坑 ①～⑩ 过一遍，能少走几天弯路。
+3. **环境问题占新手坑的一多半**：终端要重开、C++ 工具链要装、代理要绕、端口要空——把本文的坑 ①～⑪ 过一遍，能少走几天弯路。
 
 ---
 
-*文档版本：2026-10-21，基于项目当前实际配置（Tauri 2 / React 19 / Vite 7 / Rust 1.95）整理。配置如有变更请同步更新本文。*
+*文档版本：2026-10-22，基于项目当前实际配置（Tauri 2 / React 19 / Vite 7 / Rust 1.95）整理；脚本清单、目录结构与 `package.json` / `tauri.conf.json` 已逐项核对。配置如有变更请同步更新本文。*

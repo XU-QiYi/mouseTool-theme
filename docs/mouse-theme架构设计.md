@@ -1,717 +1,197 @@
-```
-技术栈：
-- 前端：React 18 + TypeScript + Tailwind CSS 4
-- UI 组件库：shadcn/ui
-- 桌面框架：Tauri 2
-- 状态管理：Zustand
-- 后端语言：Rust
+# 架构设计 · 鼠标光标主题管理工具
 
-核心功能：
-1. 读取 Windows 注册表中已安装的光标方案并展示
-2. 预览光标文件（.cur 和 .ani 格式）
-3. 一键应用光标方案到系统
-4. 导入/导出光标主题包
-5. 单个光标文件替换
-6. 还原系统默认光标
-```
+**版本**：v2.0
+**日期**：2026-10-22
 
-## 架构约束提示词
+> 本文描述**代码现在长什么样**，不是愿望清单。没实现的能力统一收在 §9。
+> 权威顺序：`mouse-theme决策记录.md` > `mouse-theme需求描述.md` > 本文。
+> 仓库根目录的 `AGENTS.md` 是同一套事实的压缩速查版（给 AI 用，每次会话自动注入）；**改架构时两处一起改**，别只改一边。
+>
+> 上一版是提示词粘贴稿（每段重复两遍、槽位 14 项且顺序错、`sonner`、UAC 复制系统目录），已整体作废。
 
-text
+---
 
-```
-请严格按照以下架构约束进行设计和编码：
+## 1. 总览
 
-【分层架构】
-整个项目分为 4 层，每一层只和相邻层通信，不允许跨层调用：
+| 关注点 | 选型 | 落点 |
+|---|---|---|
+| 界面 | React 19 + TypeScript 5.8 + Tailwind CSS 4 | `src/` |
+| UI 组件 | shadcn/ui（base-nova 风格，底层 `@base-ui/react`） | `src/components/ui/` |
+| 状态 | zustand 5 | `src/stores/themeStore.ts` |
+| 桌面壳 | Tauri 2（WebView2） | `src-tauri/` |
+| 系统能力 | Rust：`winreg` / `windows` / `image` / `zip` | `src-tauri/src/` |
+| 构建 | Vite 7 + `tsc` | `vite.config.ts`、`package.json` |
 
-第 1 层 - 页面层（pages/）
-  职责：组合组件，管理页面级布局
-  依赖：只能引用 components/ 和 stores/
-  规则：不直接调用 services/，不直接调用 invoke()
+**进程边界**：界面全部跑在 WebView2 里，**不具备任何系统权限**；注册表、文件、光标解码全部在 Rust 侧。两条进程之间只有 Tauri command 一条通路，没有"前端直接读文件"的旁路。
 
-第 2 层 - 组件层（components/）
-  职责：UI 渲染和用户交互
-  依赖：只能引用 stores/ 和 types/
-  规则：不直接调用 services/，通过 store 的 action 间接触发
+---
 
-第 3 层 - 状态管理层（stores/）
-  职责：管理全局状态，协调 UI 与数据
-  依赖：只能引用 services/ 和 types/
-  规则：每个 store 的 action 内部调用 service，然后更新 state
-
-第 4 层 - 服务层（services/）
-  职责：封装所有 Tauri invoke 调用
-  依赖：只能引用 @tauri-apps/api 和 types/
-  规则：每个函数对应一个 Rust command，返回类型与 Rust 端一一对应
-
-【Rust 后端架构】
-Rust 代码分为 3 层：
-
-第 1 层 - commands/（命令层）
-  职责：接收前端参数，编排业务逻辑，返回结果
-  规则：每个文件对应一个功能模块，函数上方标注 #[tauri::command]
-
-第 2 层 - models/（模型层）
-  职责：定义所有数据结构（struct + enum）
-  规则：所有结构体必须 derive Serialize 和 Deserialize
-
-第 3 层 - utils/（工具层）
-  职责：纯函数，处理具体的技术操作
-  包括：注册表读写、文件操作、光标文件解析、Windows API 调用
-  规则：不依赖 commands 层，可以被任意 command 调用
-
-【类型系统】
-前端 types/ 目录和 Rust models/ 目录中的数据结构必须保持一致。
-前端的 CursorTheme、CursorSlot 等类型要和 Rust 端的同名结构体字段完全对应，
-确保 invoke 调用时序列化/反序列化不会出错。
-请严格按照以下架构约束进行设计和编码：
-
-【分层架构】
-整个项目分为 4 层，每一层只和相邻层通信，不允许跨层调用：
-
-第 1 层 - 页面层（pages/）
-  职责：组合组件，管理页面级布局
-  依赖：只能引用 components/ 和 stores/
-  规则：不直接调用 services/，不直接调用 invoke()
-
-第 2 层 - 组件层（components/）
-  职责：UI 渲染和用户交互
-  依赖：只能引用 stores/ 和 types/
-  规则：不直接调用 services/，通过 store 的 action 间接触发
-
-第 3 层 - 状态管理层（stores/）
-  职责：管理全局状态，协调 UI 与数据
-  依赖：只能引用 services/ 和 types/
-  规则：每个 store 的 action 内部调用 service，然后更新 state
-
-第 4 层 - 服务层（services/）
-  职责：封装所有 Tauri invoke 调用
-  依赖：只能引用 @tauri-apps/api 和 types/
-  规则：每个函数对应一个 Rust command，返回类型与 Rust 端一一对应
-
-【Rust 后端架构】
-Rust 代码分为 3 层：
-
-第 1 层 - commands/（命令层）
-  职责：接收前端参数，编排业务逻辑，返回结果
-  规则：每个文件对应一个功能模块，函数上方标注 #[tauri::command]
-
-第 2 层 - models/（模型层）
-  职责：定义所有数据结构（struct + enum）
-  规则：所有结构体必须 derive Serialize 和 Deserialize
-
-第 3 层 - utils/（工具层）
-  职责：纯函数，处理具体的技术操作
-  包括：注册表读写、文件操作、光标文件解析、Windows API 调用
-  规则：不依赖 commands 层，可以被任意 command 调用
-
-【类型系统】
-前端 types/ 目录和 Rust models/ 目录中的数据结构必须保持一致。
-前端的 CursorTheme、CursorSlot 等类型要和 Rust 端的同名结构体字段完全对应，
-确保 invoke 调用时序列化/反序列化不会出错。
-```
-
-## 功能模块提示词
-
-### 模块一：注册表操作
-
-text
+## 2. 目录结构（与仓库一致）
 
 ```
-请实现 Windows 注册表操作模块，要求：
-
-1. 读取路径：HKEY_CURRENT_USER\Control Panel\Cursors\Schemes
-   - 这个键下每个值的名称是方案名
-   - 值的内容是逗号分隔的光标文件路径字符串
-   - 路径顺序对应以下 15 种光标类型（按注册表默认顺序）：
-     Arrow, AppStarting, Wait, Help, Crosshair, IBeam,
-     NWPen, SizeAll, SizeNESW, SizeNS, SizeNWSE, SizeWE,
-     UpArrow, Hand
-
-2. 写入路径：HKEY_CURRENT_USER\Control Panel\Cursors
-   - 需要为每种光标类型设置对应的文件路径值
-   - 写入后必须调用 SystemParametersInfoW(SPI_SETCURSORS) 立即生效
-
-3. 在 Schemes 子键下同时写入方案记录
-   - 格式：方案名 → 逗号分隔的路径列表
-
-使用的 Rust crate：
-- winreg = "0.52"（注册表操作）
-- windows = "0.56"（SystemParametersInfoW 调用）
-
-注意事项：
-- 读取注册表不需要管理员权限
-- 写入 HKCU 不需要管理员权限
-- 但复制文件到 C:\Windows\Cursors 需要管理员权限
-- SystemParametersInfoW 调用需要在主线程或安全的上下文中执行
+mouseTool-theme/
+├── src/
+│   ├── App.tsx                     ← 骨架：侧栏 + 页头 + 当前视图 +（按页）检查器
+│   ├── App.css                     ← 设计 token 唯一来源（颜色/字号/间距/动效）
+│   ├── components/
+│   │   ├── layout/                 ← Sidebar / PageHeader / DataWarning / EmptyState
+│   │   ├── views/                  ← GalleryView / MyThemesView / RecentView（三页各自的视图）
+│   │   ├── theme/                  ← GalleryCard / ThemeInspector / ThemeNameField / DeleteThemeDialog / CursorGrid
+│   │   ├── cursor/                 ← CursorSlotCard / CursorPreviewImage / AniPlayer
+│   │   └── ui/                     ← shadcn 组件（button/card/badge/dialog/toast…）
+│   ├── hooks/                      ← useCursorPreview / useImportTheme / useExportTheme
+│   ├── services/
+│   │   ├── theme.ts                ← 全部 invoke 封装
+│   │   └── mock.ts                 ← 浏览器直开时的假数据（非 Tauri 环境）
+│   ├── stores/themeStore.ts        ← 唯一全局状态（页面 / 按页选中 / 搜索 / 警告）
+│   ├── lib/                        ← pages（页面清单）、slots（槽位统计）、themes（筛选与分组）、toast、cn()
+│   └── types/                      ← 与 Rust 结构体逐字段对应
+├── src-tauri/
+│   ├── tauri.conf.json             ← 窗口/打包配置（含 --no-sandbox，勿删）
+│   ├── capabilities/default.json   ← 前端可用的插件权限
+│   └── src/
+│       ├── commands/               ← cursor.rs / theme.rs：命令层
+│       ├── models/theme.rs         ← 数据结构
+│       └── utils/
+│           ├── paths.rs            ← 数据目录唯一来源
+│           ├── registry.rs         ← SLOT_DEFS、注册表读写、SPI 刷新
+│           ├── cursor.rs           ← .cur/.ico/.ani 解析与缩放
+│           ├── importer.rs         ← zip 导入、槽位推断
+│           └── history.rs          ← 最近使用读写
+├── scripts/                        ← 无头浏览器验收脚本（设计/动效/交互）
+└── docs/
 ```
 
-```
-请实现 Windows 注册表操作模块，要求：
+**没有 `pages/`，但有一个 `views/`。** 三个页面各是独立视图（网格 / 表格 / 时间轴），共用同一套骨架：`Sidebar` + `PageHeader` + 内容区 +（图库与我的主题才有的）`ThemeInspector`。它们**刻意不复用同一个列表**——复用列表再叠过滤条件，正是"切页看不出变化"的根因。
 
-1. 读取路径：HKEY_CURRENT_USER\Control Panel\Cursors\Schemes
-   - 这个键下每个值的名称是方案名
-   - 值的内容是逗号分隔的光标文件路径字符串
-   - 路径顺序对应以下 15 种光标类型（按注册表默认顺序）：
-     Arrow, AppStarting, Wait, Help, Crosshair, IBeam,
-     NWPen, SizeAll, SizeNESW, SizeNS, SizeNWSE, SizeWE,
-     UpArrow, Hand
+**加页面只改两处**：`lib/pages.ts` 的 `PAGE_META`（导航文案 / 页头文案 / 搜索框 / 计数口径 / 有无检查器）+ `App.tsx` 的 `VIEWS`（页面 → 视图组件）。`Page` 类型由 `PAGE_META` 的键推导，`Sidebar` / `PageHeader` / `App` 都从这份表取值，不再各自维护一份导航清单；两处都是 `Record<Page, …>`，漏写视图会编译失败而不是运行时白屏。
 
-2. 写入路径：HKEY_CURRENT_USER\Control Panel\Cursors
-   - 需要为每种光标类型设置对应的文件路径值
-   - 写入后必须调用 SystemParametersInfoW(SPI_SETCURSORS) 立即生效
+---
 
-3. 在 Schemes 子键下同时写入方案记录
-   - 格式：方案名 → 逗号分隔的路径列表
-
-使用的 Rust crate：
-- winreg = "0.52"（注册表操作）
-- windows = "0.56"（SystemParametersInfoW 调用）
-
-注意事项：
-- 读取注册表不需要管理员权限
-- 写入 HKCU 不需要管理员权限
-- 但复制文件到 C:\Windows\Cursors 需要管理员权限
-- SystemParametersInfoW 调用需要在主线程或安全的上下文中执行
-```
-
-### 模块二：光标文件解析
-
-text
+## 3. 前端分层
 
 ```
-请实现光标文件解析模块，要求：
-
-1. 解析 .cur 文件
-   - .cur 本质是 ICO 格式，包含文件头 + 图像数据
-   - 需要提取：宽度、高度、位深度、热区坐标（hotspot）
-   - 输出为 PNG 格式的 base64 字符串，供前端渲染
-
-2. 解析 .ani 文件
-   - .ani 基于 RIFF 容器格式
-   - 需要提取：帧序列、每帧持续时间（rate）、总帧数
-   - 输出为 PNG 帧数组的 base64 字符串列表 + 帧率信息
-   - 前端用 canvas 逐帧播放
-
-3. 输入输出接口：
-   - 输入：文件系统路径（String）
-   - 输出：CursorPreview { is_animated: bool, image: String, frames: Vec<String>, rate_ms: u32 }
-
-使用的 Rust crate：
-- image = "0.25"（图片解码）
-- base64 = "0.22"（编码）
-
-注意：
-- 某些 .cur 文件内嵌的图像格式可能是 BMP 或 PNG，需要兼容处理
-- 高分辨率光标可能包含多种尺寸（16/32/48/256px），优先输出最大的
-- 解析失败不应导致程序崩溃，返回空预览即可
+App.tsx
+  ├─ Sidebar                    导航（带计数）、导入入口、常驻「当前光标」状态卡、外观三态
+  └─ main
+       ├─ PageHeader            标题 / 这一页做什么 / 该页搜索 / 计数
+       ├─ DataWarning           部分数据源失败时的常驻提示（可关、可重试）
+       └─ [data-view=<page>]    当前视图（换页整块淡入）
+            ├─ GalleryView      分组网格 → GalleryCard
+            ├─ MyThemesView     表格（槽位覆盖率 + 导入时间 + 导出/删除）
+            ├─ RecentView       按自然日分组的时间轴
+            └─ ThemeInspector   图库/我的主题共用：预览、应用、导出、删除、改名
 ```
 
-```
-请实现光标文件解析模块，要求：
-
-1. 解析 .cur 文件
-   - .cur 本质是 ICO 格式，包含文件头 + 图像数据
-   - 需要提取：宽度、高度、位深度、热区坐标（hotspot）
-   - 输出为 PNG 格式的 base64 字符串，供前端渲染
-
-2. 解析 .ani 文件
-   - .ani 基于 RIFF 容器格式
-   - 需要提取：帧序列、每帧持续时间（rate）、总帧数
-   - 输出为 PNG 帧数组的 base64 字符串列表 + 帧率信息
-   - 前端用 canvas 逐帧播放
-
-3. 输入输出接口：
-   - 输入：文件系统路径（String）
-   - 输出：CursorPreview { is_animated: bool, image: String, frames: Vec<String>, rate_ms: u32 }
-
-使用的 Rust crate：
-- image = "0.25"（图片解码）
-- base64 = "0.22"（编码）
-
-注意：
-- 某些 .cur 文件内嵌的图像格式可能是 BMP 或 PNG，需要兼容处理
-- 高分辨率光标可能包含多种尺寸（16/32/48/256px），优先输出最大的
-- 解析失败不应导致程序崩溃，返回空预览即可
-```
-
-### 模块三：主题管理
-
-text
+**数据流是单向的：**
 
 ```
-请实现主题管理模块，包含以下功能：
-
-【本地存储结构】
-用户导入的主题存储在 %LOCALAPPDATA%\CursorStudio\themes\ 目录下：
-  themes/
-  ├── {theme-id-1}/
-  │   ├── theme.json          ← 主题元数据
-  │   └── cursors/            ← 光标文件副本
-  │       ├── arrow.cur
-  │       ├── hand.ani
-  │       └── ...
-  └── {theme-id-2}/
-      └── ...
-
-theme.json 格式：
-{
-  "id": "uuid",
-  "name": "主题名称",
-  "description": "描述",
-  "created_at": "ISO 8601",
-  "updated_at": "ISO 8601",
-  "is_built_in": false,
-  "cursors": [
-    {
-      "registry_key": "Arrow",
-      "display_name": "正常选择",
-      "english_name": "Normal Select",
-      "file_path": "cursors/arrow.cur",
-      "file_type": "cur"
-    }
-  ]
-}
-
-【功能清单】
-
-1. 获取所有主题
-   - 合并系统注册表方案（标记 is_built_in: true）
-   - 和本地 themes/ 目录下的用户主题
-   - 系统方案的 ID 格式：sys_{方案名}
-   - 用户主题的 ID 格式：UUID
-
-2. 导入主题
-   - 支持导入文件夹（包含 theme.json + cursors/ 子目录）
-   - 支持导入 zip 压缩包（解压后同上结构）
-   - 自动生成 UUID 作为主题 ID
-   - 复制光标文件到本地 themes/{id}/cursors/
-
-3. 应用主题
-   - 系统内置主题：直接修改注册表中的光标路径
-   - 用户导入主题：
-     a. 先把光标文件复制到 C:\Windows\Cursors（需要 UAC 提权）
-     b. 修改注册表指向系统目录下的新路径
-     c. 调用 SystemParametersInfoW 刷新
-
-4. 导出主题
-   - 将主题文件夹打包为 zip
-   - 包含 theme.json + cursors/ 下所有文件
-
-5. 删除主题
-   - 不允许删除系统内置主题
-   - 用户主题：删除本地 themes/{id}/ 目录
-
-6. 还原默认
-   - 将注册表中每种光标类型重置为 Windows 默认文件名
-   - 路径：C:\Windows\Cursors\arrow.cur 等
-   - 调用 SystemParametersInfoW 刷新
+组件事件 → store action → services/theme.ts → invoke → Rust
+                ↑                                        │
+                └──────────── set(state) ←───────────────┘
 ```
 
-```
-请实现主题管理模块，包含以下功能：
+**规则**
 
-【本地存储结构】
-用户导入的主题存储在 %LOCALAPPDATA%\CursorStudio\themes\ 目录下：
-  themes/
-  ├── {theme-id-1}/
-  │   ├── theme.json          ← 主题元数据
-  │   └── cursors/            ← 光标文件副本
-  │       ├── arrow.cur
-  │       ├── hand.ani
-  │       └── ...
-  └── {theme-id-2}/
-      └── ...
+1. 组件**不直接** `invoke`，也不自己拼路径。要数据就调 store action。
+2. `services/` 只做"把 command 包成带类型的中文错误"，不写业务判断。
+3. store 内统一 `try/catch`，失败弹 Toast，不向组件抛异常。
+4. `hooks/useCursorPreview` 是**只读例外**：它直连 service，但只维护自己的内存缓存，不碰全局状态——预览是纯派生数据，塞进 store 会让主题列表的任何变更都触发全量预览重算。
 
-theme.json 格式：
-{
-  "id": "uuid",
-  "name": "主题名称",
-  "description": "描述",
-  "created_at": "ISO 8601",
-  "updated_at": "ISO 8601",
-  "is_built_in": false,
-  "cursors": [
-    {
-      "registry_key": "Arrow",
-      "display_name": "正常选择",
-      "english_name": "Normal Select",
-      "file_path": "cursors/arrow.cur",
-      "file_type": "cur"
-    }
-  ]
-}
+**不要再犯的坑**：zustand selector 里不能 `filter`/`map`/写对象字面量，每次返回新引用会让 `useSyncExternalStore` 判定快照变化，直接无限重渲染白屏。派生数据写纯函数 + 组件内 `useMemo`。
 
-【功能清单】
+---
 
-1. 获取所有主题
-   - 合并系统注册表方案（标记 is_built_in: true）
-   - 和本地 themes/ 目录下的用户主题
-   - 系统方案的 ID 格式：sys_{方案名}
-   - 用户主题的 ID 格式：UUID
+## 4. Rust 分层
 
-2. 导入主题
-   - 支持导入文件夹（包含 theme.json + cursors/ 子目录）
-   - 支持导入 zip 压缩包（解压后同上结构）
-   - 自动生成 UUID 作为主题 ID
-   - 复制光标文件到本地 themes/{id}/cursors/
+| 层 | 职责 | 约束 |
+|---|---|---|
+| `commands/` | 接参数、编排、返回 | 每个函数标 `#[tauri::command]`，错误统一 `Result<T, String>`（中文） |
+| `models/` | `struct` 定义 | 全部 `Serialize + Deserialize`，字段名即前后端契约（`snake_case`） |
+| `utils/` | 纯技术操作 | 不知道"主题"的业务语义，只管注册表/文件/二进制 |
 
-3. 应用主题
-   - 系统内置主题：直接修改注册表中的光标路径
-   - 用户导入主题：
-     a. 先把光标文件复制到 C:\Windows\Cursors（需要 UAC 提权）
-     b. 修改注册表指向系统目录下的新路径
-     c. 调用 SystemParametersInfoW 刷新
+`utils` 只被 `commands` 调用，不反向依赖。注册表相关的测试必须**全局串行**（`Mutex`），且用 `unwrap_or_else(|e| e.into_inner())` 防中毒连锁失败。
 
-4. 导出主题
-   - 将主题文件夹打包为 zip
-   - 包含 theme.json + cursors/ 下所有文件
+---
 
-5. 删除主题
-   - 不允许删除系统内置主题
-   - 用户主题：删除本地 themes/{id}/ 目录
+## 5. 命令契约（当前共 8 个）
 
-6. 还原默认
-   - 将注册表中每种光标类型重置为 Windows 默认文件名
-   - 路径：C:\Windows\Cursors\arrow.cur 等
-   - 调用 SystemParametersInfoW 刷新
-```
+| Command | 入参（前端写法） | 返回 | 失败场景 |
+|---|---|---|---|
+| `get_all_themes` | — | `ThemesResult` | 只有聚合本身崩溃才 `Err`；单个来源失败走 `warnings` |
+| `get_cursor_preview` | `filePath` | `CursorPreview` | **不失败**，解析不出来返回空帧 |
+| `import_theme` | `zipPath` | `CursorTheme` | 超过 50MB、无光标文件、认不出槽位、写盘失败 |
+| `apply_theme` | `theme`（整个对象） | `ApplyOutcome` | 注册表写失败；历史写失败只进 `warning` |
+| `restore_default` | — | `void` | 清空注册表失败 |
+| `delete_theme` | `themeId` | `void` | ID 非法、目录不存在、被占用 |
+| `rename_theme` | `themeId`, `newName` | `CursorTheme` | 空名、超 40 字、控制字符、json 损坏 |
+| `export_theme` | `theme`, `destPath` | `ExportSummary` | 目标目录不存在、写 zip 失败（会清掉半成品） |
 
-### 模块四：前端状态管理
+**为什么 `apply_theme` / `export_theme` 收整个 `CursorTheme` 而不是 ID**：系统方案只存在于注册表，没有磁盘目录，但同样有光标文件路径；只传 ID 就到不了它们的文件。
 
-text
+---
 
-```
-请使用 Zustand 实现前端状态管理，要求：
+## 6. 类型契约
 
-【themeStore 结构】
-状态：
-  - themes: CursorTheme[]         // 所有主题
-  - activeThemeId: string | null  // 当前系统正在使用的主题 ID
-  - selectedThemeId: string | null // 界面中选中的主题 ID
-  - searchQuery: string           // 搜索关键词
-  - currentPage: "library" | "imported" | "recent"  // 当前页面
-  - loading: boolean              // 加载状态
+前端 `src/types/` 与 `src-tauri/src/models/theme.rs` **逐字段对齐**，字段名共用 `snake_case`（不做驼峰转换）。
 
-派生数据（用 getter 函数实现）：
-  - selectedTheme()     → 根据 selectedThemeId 返回对应主题对象
-  - filteredThemes()    → 根据 currentPage 和 searchQuery 过滤主题列表
+| 类型 | 关键字段 | 说明 |
+|---|---|---|
+| `CursorSlot` | `registry_key`、`display_name`、`english_name`、`file_path`、`file_type` | `file_path` 是绝对路径，直接写进注册表 |
+| `CursorTheme` | `id`、`name`、`description`、`created_at`、`updated_at`、`is_built_in`、`cursors` | `id`：`sys_<名>` 或 UUID |
+| `ThemesResult` | `themes`、`warnings`、`active_theme_id`、`recent` | 部分成功的载体 |
+| `ApplyOutcome` | `recent`、`warning` | 主操作成功就不回滚 |
+| `CursorPreview` | `is_animated`、`image`、`frames`、`rate_ms`、`hotspot` | base64 不含 `data:` 前缀 |
+| `HistoryEntry` | `theme_id`、`name`、`is_built_in`、`applied_at` | 名称是**快照** |
+| `ExportSummary` | `file_count`、`skipped` | 跳过原因给界面提示 |
 
-Action：
-  - loadThemes()        → 调用 service 获取数据，更新 themes 和 activeThemeId
-  - selectTheme(id)     → 更新 selectedThemeId
-  - applyTheme(id)      → 调用 service 应用主题，更新 activeThemeId
-  - deleteTheme(id)     → 调用 service 删除，从 themes 中移除
-  - importTheme(path)   → 调用 service 导入，追加到 themes
-  - restoreDefault()    → 调用 service 还原，清空 activeThemeId
-  - setSearchQuery(q)   → 更新 searchQuery
-  - setCurrentPage(p)   → 更新 currentPage
+---
 
-【数据流规则】
-1. 组件不直接调用 service，必须通过 store 的 action
-2. Action 内部：先调 service → 拿到结果 → 更新 state
-3. 异常处理在 action 内部统一 catch，不向上抛出
-4. loadThemes 在 App 初始化时调用一次
-```
+## 7. 关键流程
 
-```
-请使用 Zustand 实现前端状态管理，要求：
+**启动**：`loadThemes()` → `get_all_themes` → 后端分别读「注册表方案」与「磁盘主题」，任一来源失败只降级为 warning → 拼成一张列表 → 读注册表当前槽位，双向比对反推 `active_theme_id`（读不到就置 `null` 并追加 warning）→ 读 `history.json` → 一次性返回 `ThemesResult`。
 
-【themeStore 结构】
-状态：
-  - themes: CursorTheme[]         // 所有主题
-  - activeThemeId: string | null  // 当前系统正在使用的主题 ID
-  - selectedThemeId: string | null // 界面中选中的主题 ID
-  - searchQuery: string           // 搜索关键词
-  - currentPage: "library" | "imported" | "recent"  // 当前页面
-  - loading: boolean              // 加载状态
+**应用**：点「应用此主题」→ `apply_theme(theme)` → 按 `SLOT_DEFS` 写 15 个槽位值 + `SchemeName`（不写 `Schemes`）→ `SPI_SETCURSORS`（只 `SPIF_SENDCHANGE`）→ 追加 `history.json` → 返回最新 `recent` → store 更新 `activeThemeId` + `recent`。
 
-派生数据（用 getter 函数实现）：
-  - selectedTheme()     → 根据 selectedThemeId 返回对应主题对象
-  - filteredThemes()    → 根据 currentPage 和 searchQuery 过滤主题列表
+**导入**：对话框选 `.zip` → `import_theme` → 解压到临时目录 → 扫 `.cur/.ani` → 文件名推断槽位 → 落盘 `themes/<uuid>/` → 返回主题 → store 追加并切回图库页。
 
-Action：
-  - loadThemes()        → 调用 service 获取数据，更新 themes 和 activeThemeId
-  - selectTheme(id)     → 更新 selectedThemeId
-  - applyTheme(id)      → 调用 service 应用主题，更新 activeThemeId
-  - deleteTheme(id)     → 调用 service 删除，从 themes 中移除
-  - importTheme(path)   → 调用 service 导入，追加到 themes
-  - restoreDefault()    → 调用 service 还原，清空 activeThemeId
-  - setSearchQuery(q)   → 更新 searchQuery
-  - setCurrentPage(p)   → 更新 currentPage
+**删除**：按钮禁用（使用中/系统方案）→ store 二次拦截 → 后端 `Uuid::parse_str` 校验 → `remove_dir_all`。
 
-【数据流规则】
-1. 组件不直接调用 service，必须通过 store 的 action
-2. Action 内部：先调 service → 拿到结果 → 更新 state
-3. 异常处理在 action 内部统一 catch，不向上抛出
-4. loadThemes 在 App 初始化时调用一次
-```
+---
 
-### 模块五：前端组件设计
+## 8. 硬约束（改代码前先读）
 
-text
+1. **槽位唯一来源**是 `utils/registry.rs` 的 `SLOT_DEFS`（15 项，顺序固定）。解析系统方案的逗号路径时按位置取，顺序错一项就会整套串位；导入、导出、界面排列也都以它为序。
+2. **数据目录唯一来源**是 `utils/paths.rs::data_root()`。任何地方硬编码 `%LOCALAPPDATA%\CursorStudio` 都算 bug。
+3. **多来源必须部分成功**：`get_all_themes` 不能因为注册表读不到就让用户主题一起消失。
+4. **`active_theme_id` 只从注册表反推**。内存或 localStorage 记的 active 一重启就过期，会让已应用的主题还能再点一次「应用」。
+5. **删改类命令必须校验 UUID**：`theme_dir(id)` 是字符串拼接，不校验时传 `../` 就能越出数据目录。
+6. **导出包内文件名按槽位重命名**，因为导入端靠文件名反推槽位；用源文件名会破坏"导出→再导入"闭环。
+7. **重命名只改 `theme.json`**，目录名保持 UUID。
+8. **预览不落盘**：单帧最长边 128px、动态光标最多 32 帧，缓存是前端内存 `Map`（按路径去重 + 请求合并）。
+9. **不加新依赖**：`@base-ui/react` 已覆盖 toast/dialog/menu/popover，优先手写封装（决策 6）。
+10. **`--no-sandbox` 不能删**：本机 WebView2 沙箱初始化失败会表现为"窗口正常但纯白不绘制"（决策 5）。
 
-```
-请按以下组件树结构实现前端界面：
+---
 
-App
-├── Sidebar（左侧导航栏，固定宽度 w-56）
-│   ├── Logo 区域：应用名 + 版本号
-│   ├── 导入主题按钮：调用系统文件夹选择器
-│   ├── 导航菜单：主题图库 / 已导入 / 最近使用
-│   │   每个菜单项对应 setCurrentPage()
-│   └── 底部：应用设置入口
-│
-├── ThemeList（中间列表区，固定宽度 w-72，可滚动）
-│   ├── 搜索框：输入时更新 searchQuery
-│   └── ThemeCard[]：遍历 filteredThemes()
-│       ├── 光标预览图标（取第一个光标的预览图）
-│       ├── 主题名称
-│       ├── 更新时间
-│       └── 如果是 activeThemeId 显示"当前使用"徽章
-│       点击时调用 selectTheme(id)
-│
-└── ThemeDetail（右侧详情区，flex-1 填满剩余宽度）
-    ├── 顶部区域（flex 布局）
-    │   ├── 左：主题封面大图
-    │   └── 右：主题名 + 描述 + "应用此主题"按钮 + "导出为 ZIP"按钮
-    ├── CursorGrid（光标预览网格，grid-cols-4）
-    │   └── CursorSlotCard[]：遍历 selectedTheme().cursors
-    │       ├── 光标预览图
-    │       ├── 中文名称
-    │       ├── 英文名称
-    │       └── 如果是 .ani 格式显示 ANI 标签
-    │       点击时弹出文件选择器替换该光标
-    ├── 底部信息：最后修改时间
-    └── 操作区：删除此主题（红色） + 还原系统默认
+## 9. 未实现 / 已知缺口
 
-【组件规则】
-1. 所有 UI 组件（Button, Card, Badge, Dialog 等）从 shadcn/ui 引入
-2. 图标从 lucide-react 引入
-3. 自定义组件放在 src/components/cursor/ 和 src/components/theme/ 下
-4. 布局组件放在 src/components/layout/ 下
-5. 组件只负责渲染，业务逻辑放在 store 的 action 中
-6. Toast 提示使用 sonner 库
-```
+| 项 | 当前状态 |
+|---|---|
+| 文件夹导入 | `import_theme` 只吃 `.zip` 路径 |
+| 拖拽 `.zip` 导入 | 无窗口级 drop 处理，只有文件对话框 |
+| `.inf` 槽位映射解析 | 只有文件名推断 |
+| 设置页 / 打开数据目录 | 侧栏「设置」是 `disabled` 占位（决策 1 的补偿项尚未落地） |
 
-```
-请按以下组件树结构实现前端界面：
+> 自制方案与单光标替换**已拍板不做**（决策 10），不在缺口清单里，别当"待排期"重新提。
+> 窗口自适应也不是缺口：`tauri.conf.json` 已设 `minWidth: 1080` / `minHeight: 640` 兜底，**仍不做响应式断点**（窄窗下不重排、不收起任何一栏）。
+> 表内这些缺口在 `mouse-theme需求描述.md` §9 有对应的"开工前要先定什么"，别在文档里写成"已支持"。
 
-App
-├── Sidebar（左侧导航栏，固定宽度 w-56）
-│   ├── Logo 区域：应用名 + 版本号
-│   ├── 导入主题按钮：调用系统文件夹选择器
-│   ├── 导航菜单：主题图库 / 已导入 / 最近使用
-│   │   每个菜单项对应 setCurrentPage()
-│   └── 底部：应用设置入口
-│
-├── ThemeList（中间列表区，固定宽度 w-72，可滚动）
-│   ├── 搜索框：输入时更新 searchQuery
-│   └── ThemeCard[]：遍历 filteredThemes()
-│       ├── 光标预览图标（取第一个光标的预览图）
-│       ├── 主题名称
-│       ├── 更新时间
-│       └── 如果是 activeThemeId 显示"当前使用"徽章
-│       点击时调用 selectTheme(id)
-│
-└── ThemeDetail（右侧详情区，flex-1 填满剩余宽度）
-    ├── 顶部区域（flex 布局）
-    │   ├── 左：主题封面大图
-    │   └── 右：主题名 + 描述 + "应用此主题"按钮 + "导出为 ZIP"按钮
-    ├── CursorGrid（光标预览网格，grid-cols-4）
-    │   └── CursorSlotCard[]：遍历 selectedTheme().cursors
-    │       ├── 光标预览图
-    │       ├── 中文名称
-    │       ├── 英文名称
-    │       └── 如果是 .ani 格式显示 ANI 标签
-    │       点击时弹出文件选择器替换该光标
-    ├── 底部信息：最后修改时间
-    └── 操作区：删除此主题（红色） + 还原系统默认
+---
 
-【组件规则】
-1. 所有 UI 组件（Button, Card, Badge, Dialog 等）从 shadcn/ui 引入
-2. 图标从 lucide-react 引入
-3. 自定义组件放在 src/components/cursor/ 和 src/components/theme/ 下
-4. 布局组件放在 src/components/layout/ 下
-5. 组件只负责渲染，业务逻辑放在 store 的 action 中
-6. Toast 提示使用 sonner 库
-```
+## 10. 变更记录
 
-------
-
-## 开发顺序提示词
-
-text
-
-```
-请按照以下顺序逐步实现，每完成一个阶段可以独立运行和验证：
-
-【阶段 1】项目初始化（验证环境）
-1. 用 create-tauri-app 创建 Tauri + React + TypeScript 项目
-2. 配置 Tailwind CSS 4 + Vite 插件
-3. 初始化 shadcn/ui
-4. 验证 npm run tauri dev 能正常启动窗口
-
-【阶段 2】后端基础（验证数据读取）
-1. 在 Cargo.toml 中添加 winreg、windows、serde 依赖
-2. 实现注册表读取函数，列出系统光标方案
-3. 创建 Tauri command get_all_themes
-4. 在 main.rs 中注册 command
-5. 在 React 中 invoke 调用，console.log 打印结果
-
-【阶段 3】前端基础布局（验证界面）
-1. 实现 Sidebar 组件（导航菜单）
-2. 实现 ThemeList + ThemeCard 组件（连接 store）
-3. 实现 ThemeDetail + CursorGrid + CursorSlotCard 组件
-4. 搭建三栏布局
-5. 接入 Zustand store
-
-【阶段 4】光标预览（验证图片解析）
-1. 在 Cargo.toml 中添加 image、base64 依赖
-2. 实现 get_cursor_preview command
-3. CursorSlotCard 中显示光标预览图
-4. 处理文件不存在的异常情况
-
-【阶段 5】应用光标方案（验证核心功能）
-1. 实现 apply_theme command（写注册表 + SystemParametersInfoW）
-2. "应用此主题"按钮连接 store action
-3. 验证点击后系统光标立即变化
-4. 实现 restore_default command
-5. "还原系统默认"按钮连接
-
-【阶段 6】导入导出（验证文件操作）
-1. 添加 tauri-plugin-dialog 依赖
-2. 前端集成文件夹选择器
-3. 实现 import_theme command（解压 + 复制 + 写 theme.json）
-4. 实现 export_theme command（打包 zip）
-5. 导入后列表自动刷新
-
-【阶段 7】体验完善
-1. 添加加载状态（loading spinner）
-2. 添加空状态提示（没有主题时的占位图）
-3. 添加 Toast 提示（成功/失败）
-4. 搜索过滤功能
-5. 页面切换功能
-6. 窗口尺寸适配
-请按照以下顺序逐步实现，每完成一个阶段可以独立运行和验证：
-
-【阶段 1】项目初始化（验证环境）
-1. 用 create-tauri-app 创建 Tauri + React + TypeScript 项目
-2. 配置 Tailwind CSS 4 + Vite 插件
-3. 初始化 shadcn/ui
-4. 验证 npm run tauri dev 能正常启动窗口
-
-【阶段 2】后端基础（验证数据读取）
-1. 在 Cargo.toml 中添加 winreg、windows、serde 依赖
-2. 实现注册表读取函数，列出系统光标方案
-3. 创建 Tauri command get_all_themes
-4. 在 main.rs 中注册 command
-5. 在 React 中 invoke 调用，console.log 打印结果
-
-【阶段 3】前端基础布局（验证界面）
-1. 实现 Sidebar 组件（导航菜单）
-2. 实现 ThemeList + ThemeCard 组件（连接 store）
-3. 实现 ThemeDetail + CursorGrid + CursorSlotCard 组件
-4. 搭建三栏布局
-5. 接入 Zustand store
-
-【阶段 4】光标预览（验证图片解析）
-1. 在 Cargo.toml 中添加 image、base64 依赖
-2. 实现 get_cursor_preview command
-3. CursorSlotCard 中显示光标预览图
-4. 处理文件不存在的异常情况
-
-【阶段 5】应用光标方案（验证核心功能）
-1. 实现 apply_theme command（写注册表 + SystemParametersInfoW）
-2. "应用此主题"按钮连接 store action
-3. 验证点击后系统光标立即变化
-4. 实现 restore_default command
-5. "还原系统默认"按钮连接
-
-【阶段 6】导入导出（验证文件操作）
-1. 添加 tauri-plugin-dialog 依赖
-2. 前端集成文件夹选择器
-3. 实现 import_theme command（解压 + 复制 + 写 theme.json）
-4. 实现 export_theme command（打包 zip）
-5. 导入后列表自动刷新
-
-【阶段 7】体验完善
-1. 添加加载状态（loading spinner）
-2. 添加空状态提示（没有主题时的占位图）
-3. 添加 Toast 提示（成功/失败）
-4. 搜索过滤功能
-5. 页面切换功能
-6. 窗口尺寸适配
-```
-
-## 调试与验证提示词
-
-text
-
-```
-在开发过程中，每个阶段完成后请执行以下验证：
-
-【阶段 1 验证】
-□ npm run tauri dev 能启动窗口
-□ 窗口中显示 React 页面内容
-
-【阶段 2 验证】
-□ Rust 能编译通过
-□ invoke 返回的数组中包含 "Windows Default" 等已知方案名
-□ 每个方案包含正确的光标路径
-
-【阶段 3 验证】
-□ 左侧导航栏可点击切换
-□ 中间列表显示主题卡片
-□ 点击卡片后右侧显示详情
-□ 光标网格显示 14 个槽位
-
-【阶段 4 验证】
-□ .cur 文件显示为可见的光标图片
-□ .ani 文件不导致程序崩溃（可以先显示第一帧或占位图）
-□ 不存在的文件路径显示占位图标
-
-【阶段 5 验证】
-□ 点击"应用此主题"后系统鼠标光标实际发生变化
-□ 点击"还原系统默认"后光标恢复为 Windows 默认
-□ 在系统设置 > 鼠标中能看到方案已更新
-
-【阶段 6 验证】
-□ 导入一个光标主题文件夹后出现在列表中
-□ 导入的光标可以正常预览
-□ 应用导入的主题后系统光标变化
-□ 导出生成的 zip 包含完整文件结构
-在开发过程中，每个阶段完成后请执行以下验证：
-
-【阶段 1 验证】
-□ npm run tauri dev 能启动窗口
-□ 窗口中显示 React 页面内容
-
-【阶段 2 验证】
-□ Rust 能编译通过
-□ invoke 返回的数组中包含 "Windows Default" 等已知方案名
-□ 每个方案包含正确的光标路径
-
-【阶段 3 验证】
-□ 左侧导航栏可点击切换
-□ 中间列表显示主题卡片
-□ 点击卡片后右侧显示详情
-□ 光标网格显示 14 个槽位
-
-【阶段 4 验证】
-□ .cur 文件显示为可见的光标图片
-□ .ani 文件不导致程序崩溃（可以先显示第一帧或占位图）
-□ 不存在的文件路径显示占位图标
-
-【阶段 5 验证】
-□ 点击"应用此主题"后系统鼠标光标实际发生变化
-□ 点击"还原系统默认"后光标恢复为 Windows 默认
-□ 在系统设置 > 鼠标中能看到方案已更新
-
-【阶段 6 验证】
-□ 导入一个光标主题文件夹后出现在列表中
-□ 导入的光标可以正常预览
-□ 应用导入的主题后系统光标变化
-□ 导出生成的 zip 包含完整文件结构
-```
+| 日期 | 变更 |
+|---|---|
+| 2026-06-17 | 初稿：按 4 层前端 / 3 层 Rust / 组件树 / 7 阶段顺序写的提示词稿 |
+| 2026-10-22 | v2.0 重写：删掉全篇重复的提示词块；槽位由错误的 14 项改为 `SLOT_DEFS` 的 15 项；技术栈改为 React 19；移除 `sonner` 与"复制到 `C:\Windows\Cursors` 需 UAC"；补命令契约、类型契约、硬约束与未实现清单 |

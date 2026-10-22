@@ -27,9 +27,11 @@
 
 - 滚动条、右键菜单、拖拽反馈、快捷键，**先对齐系统**，再谈自创。
 - 自绘控件必须回答一个问题：它比系统原生好在哪？答不上来就用原生。
-- 深色模式跟随系统，不自建开关。
+- 深色模式**默认跟随系统**，允许在侧栏「外观」里手动覆盖成浅色 / 深色（选回「跟随系统」即恢复自动）。手动覆盖是一次显式的用户决定，此后不再被系统顶掉。
 
 > 反例记录：左栏曾用 `ScrollArea` 自绘滚动条，右栏用系统滚动条，同屏两种。按本原则，**应统一到系统原生**，而不是把两处都改成自绘。
+>
+> 补充（2026-10-22）：滚动条仍由系统画，但用 `scroll-thin` 把宽度压到 **6px**、轨道透明、**拇指平时完全隐形，指针进入容器才浮出**。原因：15px 的经典滚动条在 320px 的检查器里会被当成一条进度条。**不做**的是"自绘轨道、自绘箭头、自定义滚动行为"——滚动手感必须还是系统的。
 
 ### 原则二：Token 优先
 
@@ -118,7 +120,17 @@
 
 ### 圆角
 
-`--radius: 10px` 为基准，派生：`md 6px`（徽章）、`lg 8px`（按钮/输入）、`xl 14px`（卡片）、`full`（胶囊）。
+`--radius: 10px` 为基准，其余按倍数派生（`App.css` 里是 `calc()`）：
+
+| Token | px | 用在 |
+|---|---|---|
+| `rounded-sm` | 6（0.6×） | 内嵌小元素，如卡内预览块 |
+| `rounded-md` | 8（0.8×） | 小尺寸按钮的圆角上限（`min(--radius-md, 10~12px)`） |
+| `rounded-lg` | 10（1×） | **按钮、输入框** |
+| `rounded-xl` | 14（1.4×） | **卡片、弹窗** |
+| `rounded-4xl` | 26（2.6×） | 徽章：高度只有 20px，视觉上就是胶囊 |
+
+小尺寸控件别套 `rounded-xl`——14px 圆角落在 24px 高的元素上会变成药丸，和旁边的按钮不是一套。
 
 ### 层次
 
@@ -188,12 +200,16 @@
 | 重命名等轻量编辑 | 原地变成输入框，自动全选；Enter 保存、Esc 取消、失焦保存；值没变则不请求 |
 | 操作结果反馈 | 用 Toast，不要只 `console.error` |
 | 错误文案 | 中文主句说人话 + 括号里放技术细节；能指导下一步就写上去 |
+| 可滚动容器 | 一律加 `scroll-thin`：6px 宽、轨道透明、拇指 hover 才显形，`scrollbar-gutter: stable` 保证滚动条出现时内容不横向跳。**别用 `scrollbar-width: thin`**——它在 Chromium 里仍走经典样式（上下带箭头、常显） |
+| 面板分隔条 | 6px 宽、`cursor-col-resize`、`role="separator"` + `aria-valuenow`；拖动改宽度、双击复位、`←/→` 每次 16px、`Home/End` 到边界。宽度只在会话内有效，不落盘 |
+| 深色模式 | 三态：跟随系统（默认）/ 浅色 / 深色，状态在 `lib/theme-mode.ts` 一处，落盘 `cursorstudio.theme-mode`；切浅/深时同步调 Tauri `setTheme` 让标题栏一致。**组件里不写 `dark:` 前缀**，颜色全部走 token |
+| 外观切换控件 | 侧栏底部，一行「外观」+ 三个图标按钮（Monitor / Sun / Moon），`role="group"` + `aria-pressed`；28px 命中区，当前项用 `sidebar-accent` + `shadow-raised` + 描边 |
 
 ---
 
 ## 5. 审计与回归
 
-改完界面跑这三条，全绿才算完成：
+改完界面跑这四条，全绿才算完成：
 
 ```bash
 node scripts/design_check.mjs   # 自动按 Tab 走一遍，查焦点环/aria/结构，并存截图
@@ -202,7 +218,7 @@ node scripts/ui_ratio.mjs       # shadcn 与原生标签比例是否合理
 node scripts/motion_check.mjs   # 逐帧采样：进出场时长、中间态、降级是否生效
 ```
 
-`design_check.mjs` 需要 vite 在 1420 运行。它不会点「应用此主题」，不会改系统光标。
+`design_check.mjs` / `motion_check.mjs` 需要 vite 在 1420 运行；`design_audit.mjs` / `ui_ratio.mjs` 只扫源码，不用起服务。脚本跑在普通浏览器里，走的是 mock 数据，**点「应用」不会改系统光标**。
 
 **统计必须分维度。** 只看"图标有 7 种尺寸"会误判为混乱；拆成"内联图标"和"占位图形"两组后，尺寸与容器完全匹配，无需返工。同理，"原生标签占 69.5%" 拆开看，95% 是 shadcn 不覆盖的布局与排版。
 
@@ -216,3 +232,8 @@ node scripts/motion_check.mjs   # 逐帧采样：进出场时长、中间态、�
 | 2026-10-21 | v1.1 首次落地。侧栏导航改用 `buttonVariants` + `aria-current`；主题卡补 `focus-ring` 并把 `border` 改为 `ring`；滚动条统一回系统原生（`ScrollArea` 停用）；`text-[10px]/[11px]` 归入 `text-3xs/2xs`；清除 `transition-all` 与 `hover:shadow-sm` |
 | 2026-10-21 | v1.2 修正焦点环。`--ring` 由 `oklch(0.708)` 调深至 `oklch(0.55)`，`button/badge/input` 与 `focus-ring` 去掉了 `/50` 透明度（原件对比仅 1.3:1，不达 3:1）。**这是对 shadcn 上游样式的有意偏离，重新 add 组件后需重打。** |
 | 2026-10-21 | v1.3 动效系统化。新增 `--motion-*` 四档时长与 `ease-exit`；Toast/Dialog 补齐进出场，Toast 增补堆叠 FLIP；`transition-all` 全部改为显式属性列表（含 shadcn 的 button/badge）；新增 `docs/motion.md` 与 `scripts/motion_check.mjs`。**button/badge/input 的过渡属性是对上游的再次偏离，重新 add 后需重打。** |
+| 2026-10-22 | v1.4 文档校正（无视觉变更）。§5 审计口径由"三条"改为四条（补回 `motion_check`），并区分"需起服务"与"只扫源码"两类脚本 |
+| 2026-10-22 | v1.5 导航与内容结构重构。三个导航项对应三种视图（分组网格 / 数据表 / 时间轴），不再共用一张列表；侧栏加导航计数与常驻「当前光标」状态卡；新增 `PageHeader`（标题/说明/该页搜索/计数）、`DataWarning`（数据源降级常驻条）、`EmptyState`；右侧检查器承载预览与操作，动作条固定在头部下方。以下两条口径随之落定：①**同屏同类控件仍须同源**（表格行、时间轴行内的操作按钮一律用 `<Button>`）；②**选中的强反馈只能有一个**——图库用 2px ring，表格用整行高 2px 竖线 + `accent` 底（`accent` 与背景仅 3% 明度差，单靠底色不够） |
+| 2026-10-22 | v1.6 检查器可调宽 + 滚动条口径。新增 `InspectorResizer`（拖拽 / 双击复位 / 键盘，280–560px，宽度不落盘）；新增 `scroll-thin` utility，滚动容器统一用它（原生 thin + gutter stable）；检查器内容压缩：徽章行改一行文字、四行 `dl` 改一行脚注、槽位卡 72→64px、网格按宽度 `auto-fill`，使 15 槽位在 1200×760 窗口内**不再需要滚动** |
+| 2026-10-22 | v1.7 深色模式接通 + 滚动条改为 hover 显形。`lib/theme-mode.ts` 把 `prefers-color-scheme` 映射成 `html.dark`（首帧前落 class，并随系统切换），`:root` / `.dark` 补 `color-scheme` 让原生控件同步；`scroll-thin` 由 `scrollbar-width: thin` 改为 `::-webkit-scrollbar`：6px、轨道透明、拇指默认透明、`hover` 与 `hover thumb` 分两级显形 —— `thin` 在 Chromium 里仍是带箭头的经典样式，会被当成进度条 |
+| 2026-10-22 | v1.8 外观从"只跟随系统"改为三态（跟随系统 / 浅色 / 深色）。侧栏底部新增「外观」分段控件；手动覆盖落盘并调 Tauri `setTheme` 同步标题栏；原则一的"不自建开关"改为"默认跟随系统、允许显式覆盖"。`design_check` 扩到 18 条断言（含覆盖优先级与刷新恢复） |
