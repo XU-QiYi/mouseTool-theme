@@ -174,6 +174,9 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
         selection: { ...state.selection, gallery: theme.id, mine: theme.id },
         // 有搜索词时新方案可能被过滤掉，清空免得「导入了却看不见」
         searchQuery: "",
+        // 整体读取失败后仍能导入成功，说明数据目录还活着：
+        // 有数据了再挂着「读取失败」的错误态是在骗人
+        loadError: null,
       }));
       toast.success(`已导入「${theme.name}」`, `共 ${theme.cursors.length} 个光标槽位`);
     } catch (err) {

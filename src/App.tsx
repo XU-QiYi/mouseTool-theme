@@ -4,6 +4,7 @@ import type { ComponentType } from "react";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { DataWarning } from "@/components/layout/DataWarning";
+import { DropOverlay } from "@/components/layout/DropOverlay";
 import { LoadErrorState } from "@/components/layout/LoadErrorState";
 import { InspectorResizer } from "@/components/layout/InspectorResizer";
 import { ThemeInspector } from "@/components/theme/ThemeInspector";
@@ -11,6 +12,7 @@ import { GalleryView } from "@/components/views/GalleryView";
 import { MyThemesView } from "@/components/views/MyThemesView";
 import { RecentView } from "@/components/views/RecentView";
 import { Toaster } from "@/components/ui/toaster";
+import { useDragDropImport } from "@/hooks/useDragDropImport";
 import { useInspectorWidth } from "@/hooks/useInspectorWidth";
 import { PAGE_META, type Page } from "@/lib/pages";
 import { selectSelectedTheme, useThemeStore } from "@/stores/themeStore";
@@ -35,6 +37,7 @@ function App() {
   const selectedTheme = useThemeStore(selectSelectedTheme);
   const loadError = useThemeStore((s) => s.loadError);
   const [inspectorWidth, resizeInspector] = useInspectorWidth();
+  const { dragActive } = useDragDropImport();
 
   useEffect(() => {
     loadThemes();
@@ -75,6 +78,7 @@ function App() {
           </div>
         </main>
       </div>
+      <DropOverlay active={dragActive} />
       <Toaster />
     </>
   );
