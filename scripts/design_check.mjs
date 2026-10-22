@@ -158,6 +158,8 @@ try {
   );
 
   await switchTo("设置");
+  // 进设置后侧栏是分组导航：数据目录/诊断在「数据」分组里（决策 14）
+  await switchTo("数据");
   const settingsState = await evaluate(`(() => {
     return JSON.stringify({
       路径已显示: !!document.querySelector("[data-data-dir]")?.textContent,
@@ -172,6 +174,8 @@ try {
     Buffer.from(shotSettings.result.data, "base64"),
   );
 
+  // 返回主导航再回图库：设置形态下侧栏是「返回 + 分组」，没有「主题图库」按钮
+  await switchTo("返回");
   await switchTo("主题图库");
 
   // 2. 键盘焦点：按 Tab 走入界面，截取焦点态
@@ -427,6 +431,24 @@ try {
   writeFileSync(join(OUT_DIR, "design_deleted.png"), Buffer.from(shot6.result.data, "base64"));
 
   // 9. 外观三态：跟随系统（默认）/ 浅色 / 深色，手动覆盖优先于系统
+  // 控件在「设置 → 通用 → 应用主题」（决策 14 从侧栏迁入），先切过去
+  const openThemeSettings = async () => {
+    await evaluate(`(() => {
+      const btn = [...document.querySelectorAll("nav button")].find((b) => b.textContent.trim().startsWith("设置"));
+      btn?.click();
+      return !!btn;
+    })()`);
+    await sleep(450);
+    // 分组记忆着上次停留的位置（可能是「数据」），显式点回「通用」
+    await evaluate(`(() => {
+      const btn = [...document.querySelectorAll('nav[aria-label="设置导航"] button')].find((b) => b.textContent.trim().startsWith("通用"));
+      btn?.click();
+      return !!btn;
+    })()`);
+    await sleep(350);
+  };
+  await openThemeSettings();
+
   const luminance = (css) => {
     const m = /oklch\(([\d.]+)/.exec(css ?? "");
     return m ? Number(m[1]) : NaN;
@@ -435,10 +457,10 @@ try {
     JSON.parse(
       await evaluate(`(() => {
         const cs = getComputedStyle(document.body);
-        const active = [...document.querySelectorAll('[aria-label="外观"] button')]
-          .find((b) => b.getAttribute("aria-pressed") === "true");
+        const active = [...document.querySelectorAll('[aria-label="应用主题"] [role="radio"]')]
+          .find((b) => b.getAttribute("aria-checked") === "true");
         return JSON.stringify({
-          mode: active?.getAttribute("aria-label") ?? null,
+          mode: active?.textContent.trim() ?? null,
           hasClass: document.documentElement.classList.contains("dark"),
           bg: cs.backgroundColor,
           fg: cs.color,
@@ -449,7 +471,7 @@ try {
     );
   const clickMode = async (label) => {
     await evaluate(
-      `[...document.querySelectorAll('[aria-label="外观"] button')].find((b) => b.getAttribute("aria-label") === "${label}")?.click()`,
+      `[...document.querySelectorAll('[aria-label="应用主题"] [role="radio"]')].find((b) => b.textContent.includes("${label}"))?.click()`,
     );
     await sleep(350);
   };
@@ -492,10 +514,11 @@ try {
   const backToSystem = await readTheme();
   assert("回到跟随系统后随系统变浅", backToSystem.hasClass === false && backToSystem.stored === "system", `L=${luminance(backToSystem.bg)}`);
 
-  // 持久化：刷新后应恢复上次选的模式
+  // 持久化：刷新后应恢复上次选的模式（刷新落在图库，需再进设置读控件态）
   await clickMode("深色");
   await send("Page.reload", {});
   await sleep(2800);
+  await openThemeSettings();
   const restored = await readTheme();
   assert("刷新后恢复上次选择", restored.mode === "深色" && restored.hasClass === true, `${restored.mode} / dark=${restored.hasClass}`);
 

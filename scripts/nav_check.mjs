@@ -164,6 +164,26 @@ try {
     s.view === "settings" && s.galleryCards === 0 && !s.table && s.timelineRows === 0 && s.inspector === false && !s.search,
     `数据卡=${s.view === "settings" ? "有" : "无"}`,
   );
+
+  // 设置分组导航：侧栏切成「返回 + 分组」，点分组换内容页（决策 14）
+  const groupNav = await evaluate(`(() => {
+    const nav = document.querySelector('nav[aria-label="设置导航"]');
+    return nav ? [...nav.querySelectorAll("button")].map((b) => b.textContent.trim()).join("/") : "NO_SETTINGS_NAV";
+  })()`);
+  check(
+    "进设置后侧栏切成「返回 + 分组」",
+    groupNav.includes("返回") && groupNav.includes("通用") && groupNav.includes("关于"),
+    groupNav,
+  );
+
+  await evaluate(`(() => {
+    const btn = [...document.querySelectorAll('nav[aria-label="设置导航"] button')].find((b) => b.textContent.trim().startsWith("关于"));
+    btn?.click();
+    return !!btn;
+  })()`);
+  await sleep(500);
+  const aboutTitle = await evaluate(`document.querySelector("h1")?.textContent?.trim() ?? ""`);
+  check("点分组切换设置内容页", aboutTitle.includes("关于"), aboutTitle);
   check("四页标题互不相同", new Set([g.title, m.title, r.title, s.title]).size === 4, [g.title, m.title, r.title, s.title].join(" / "));
   check("四页说明互不相同", new Set([g.hint, m.hint, r.hint, s.hint]).size === 4);
   check("图库与我的主题各有检查器", g.inspector && m.inspector);
