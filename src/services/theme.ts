@@ -79,7 +79,22 @@ export function restoreDefault(): Promise<void> {
 /** 对应 Rust 命令 `import_theme`：导入 zip 主题包，返回新主题 */
 export function importTheme(zipPath: string): Promise<CursorTheme> {
   if (!inTauri) {
-    return Promise.reject(new Error("浏览器环境不支持导入，请在桌面应用中使用"));
+    // 浏览器里没有文件系统：用示例槽位生成一份新主题，
+    // 让「导入 → 列表新增 → 检查器选中」这条链路在开发与自动化验收里能走通。
+    // 名称取自文件名（含 zip 后缀也兜得住），与后端「文件名 stem 作主题名」的口径一致
+    const fileName = zipPath.split(/[\\/]/).pop() ?? "theme.zip";
+    const name = fileName.replace(/\.zip$/i, "") || "未命名主题";
+    const sample = MOCK_THEMES.find((t) => !t.is_built_in) ?? MOCK_THEMES[0];
+    const now = stamp();
+    return Promise.resolve({
+      id: crypto.randomUUID(),
+      name,
+      description: `导入自 ${fileName}`,
+      created_at: now,
+      updated_at: now,
+      is_built_in: false,
+      cursors: sample.cursors,
+    });
   }
   return invoke<CursorTheme>("import_theme", { zipPath });
 }
