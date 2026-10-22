@@ -7,7 +7,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::models::{ApplyOutcome, CursorSlot, CursorTheme, ThemesResult};
-use crate::utils::{history, importer, paths, registry};
+use crate::utils::{history, importer, inf_export, paths, registry};
 
 /// `export_theme` 的返回值：跳过项要说清是哪个槽位，否则用户不知道少了什么
 #[derive(Debug, Serialize)]
@@ -234,6 +234,10 @@ pub fn rename_theme(theme_id: String, new_name: String) -> Result<CursorTheme, S
 /// 文件名按槽位重命名（`arrow.cur` / `busy.ani`），这样对方导入时能靠文件名
 /// 反推槽位，形成「导出→再导入」的闭环。系统方案（注册表）同样能导出，
 /// 因为它们也有光标文件路径。
+///
+/// 包根额外附带 `<方案名>.inf`（决策 13）：接收方没装本软件时，解压后右键
+/// 安装即可把方案装进 Windows。生成逻辑在 `utils/inf_export`；导入端只认
+/// `.cur/.ani/.ico`，会自动忽略这个文件，闭环不受影响。
 #[tauri::command]
 pub fn export_theme(theme: CursorTheme, dest_path: String) -> Result<ExportSummary, String> {
     let dest = Path::new(&dest_path);
@@ -250,6 +254,8 @@ pub fn export_theme(theme: CursorTheme, dest_path: String) -> Result<ExportSumma
     let mut seen: HashSet<&str> = HashSet::new();
     let mut file_count = 0usize;
     let mut skipped: Vec<String> = Vec::new();
+    // 能进 .inf 的槽位：(槽位键名, 扩展名)
+    let mut inf_files: Vec<(String, String)> = Vec::new();
 
     for slot in &theme.cursors {
         if !seen.insert(slot.registry_key.as_str()) {
@@ -279,6 +285,12 @@ pub fn export_theme(theme: CursorTheme, dest_path: String) -> Result<ExportSumma
             .write_all(&data)
             .map_err(|err| format!("写入压缩包失败（{err}）"))?;
         file_count += 1;
+
+        // .ico 不能被 Windows 当作光标加载：照常导出，但不进 .inf，
+        // 否则装出来的方案在「应用」时这些槽位会失效
+        if matches!(ext.as_str(), "cur" | "ani") {
+            inf_files.push((slot.registry_key.clone(), ext.clone()));
+        }
     }
 
     if file_count == 0 {
@@ -286,6 +298,17 @@ pub fn export_theme(theme: CursorTheme, dest_path: String) -> Result<ExportSumma
         drop(writer);
         let _ = fs::remove_file(dest);
         return Err("没有可导出的光标文件，源文件可能已被移动或删除".to_string());
+    }
+
+    // 附带通用安装文件：接收方没装本软件也能右键安装（决策 13）
+    if !inf_files.is_empty() {
+        let inf_name = format!("{}.inf", inf_export::sanitize_scheme_name(&theme.name));
+        writer
+            .start_file(inf_name, options)
+            .map_err(|err| format!("打包失败（{err}）"))?;
+        writer
+            .write_all(&inf_export::build_inf(&theme.name, &inf_files))
+            .map_err(|err| format!("写入压缩包失败（{err}）"))?;
     }
 
     writer
@@ -510,14 +533,40 @@ mod tests {
         assert_eq!(summary.file_count, 1);
         assert!(summary.skipped.is_empty(), "不该有跳过项");
 
-        // 包内文件名必须是槽位名（小写），导入才能反推
+        // 包内 = 槽位命名的光标文件 + 通用安装文件
         let file = fs::File::open(&zip_path).expect("打开导出的 zip");
         let mut archive = zip::ZipArchive::new(file).expect("解析导出的 zip");
-        assert_eq!(archive.len(), 1);
-        assert_eq!(archive.by_index(0).unwrap().name(), "sizenwse.cur");
+        assert_eq!(archive.len(), 2, "光标文件 + .inf，不应有其它内容");
+
+        let mut inf_bytes = Vec::new();
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i).unwrap();
+            let mut buf = Vec::new();
+            std::io::Read::read_to_end(&mut entry, &mut buf).unwrap();
+            if entry.name().ends_with(".inf") {
+                inf_bytes = buf;
+            } else {
+                assert_eq!(entry.name(), "sizenwse.cur", "光标文件必须按槽位命名");
+            }
+        }
+        assert!(
+            archive.by_name("导出测试.inf").is_ok(),
+            ".inf 应以方案名命名（zip 2.x 对非 ASCII 名自动置 UTF-8 标志）"
+        );
+
+        // .inf 字节层面：UTF-16LE BOM；内容层面：方案串与槽位路径齐全
+        assert_eq!(&inf_bytes[..2], &[0xFF, 0xFE], "必须是 UTF-16LE BOM 开头");
+        let units: Vec<u16> = inf_bytes[2..]
+            .chunks_exact(2)
+            .map(|p| u16::from_le_bytes([p[0], p[1]]))
+            .collect();
+        let inf_text = String::from_utf16(&units).expect(".inf 必须是合法 UTF-16");
+        assert!(inf_text.contains("signature=\"$CHICAGO$\""));
+        assert!(inf_text.contains("%10%\\%CUR_DIR%\\sizenwse.cur"));
+        assert!(inf_text.contains("SCHEME_NAME = \"导出测试\""));
         drop(archive);
 
-        // 闭环：再导入应还原成 SizeNWSE
+        // 闭环：再导入仍只认光标文件，.inf 自动忽略，槽位还原不变
         let reimported =
             importer::import_zip(zip_path.to_str().unwrap()).expect("重新导入应成功");
         assert_eq!(reimported.cursors.len(), 1);
@@ -545,6 +594,49 @@ mod tests {
             !Path::new(&zip_path).exists(),
             "失败时不能留下空压缩包"
         );
+    }
+
+    /// 把一份真实导出的 .inf 抽到系统临时目录，方便用记事本打开人工检查
+    /// 格式（UTF-16LE 在记事本里正常显示），也可以拿去做右键安装的真机验收
+    #[test]
+    fn 导出的_inf_样例落到临时目录供人工检查() {
+        let cur = std::fs::read(r"C:\Windows\Cursors\aero_arrow.cur").expect("需要系统光标文件");
+        let ani = std::fs::read(r"C:\Windows\Cursors\荧1.0\arrow.ani").expect("需要系统动态光标");
+
+        let src_dir = std::env::temp_dir().join("cursortheme-inf-sample-src");
+        fs::create_dir_all(&src_dir).expect("建临时源目录");
+        let arrow_path = src_dir.join("a.cur");
+        let wait_path = src_dir.join("b.ani");
+        fs::write(&arrow_path, &cur).expect("写入临时光标");
+        fs::write(&wait_path, &ani).expect("写入临时光标");
+
+        let theme = theme_with_slots(
+            "sample",
+            "样例方案",
+            &[
+                ("Arrow", arrow_path.to_str().unwrap()),
+                ("Wait", wait_path.to_str().unwrap()),
+            ],
+        );
+        let zip_path = std::env::temp_dir().join("cursortheme-inf-sample.zip");
+        export_theme(theme, zip_path.to_string_lossy().into_owned()).expect("导出应成功");
+
+        let file = fs::File::open(&zip_path).expect("打开导出的 zip");
+        let mut archive = zip::ZipArchive::new(file).expect("解析导出的 zip");
+        let bytes = {
+            let mut entry = archive.by_name("样例方案.inf").expect("应有 .inf");
+            let mut buf = Vec::new();
+            std::io::Read::read_to_end(&mut entry, &mut buf).expect("读取 .inf");
+            buf
+        };
+        drop(archive);
+
+        let sample = std::env::temp_dir().join("cursortheme-导出样例.inf");
+        fs::write(&sample, &bytes).expect("写样例");
+
+        fs::remove_dir_all(&src_dir).ok();
+        fs::remove_file(&zip_path).ok();
+        println!("样例已写到 {}", sample.display());
     }
 
     /// 删除是破坏性操作：既要真的把目录删掉，重复删除也要给人话而不是崩溃
