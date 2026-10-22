@@ -405,6 +405,82 @@ try {
   const shot6 = await send("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(OUT_DIR, "design_deleted.png"), Buffer.from(shot6.result.data, "base64"));
 
+  // 9. 外观三态：跟随系统（默认）/ 浅色 / 深色，手动覆盖优先于系统
+  const luminance = (css) => {
+    const m = /oklch\(([\d.]+)/.exec(css ?? "");
+    return m ? Number(m[1]) : NaN;
+  };
+  const readTheme = async () =>
+    JSON.parse(
+      await evaluate(`(() => {
+        const cs = getComputedStyle(document.body);
+        const active = [...document.querySelectorAll('[aria-label="外观"] button')]
+          .find((b) => b.getAttribute("aria-pressed") === "true");
+        return JSON.stringify({
+          mode: active?.getAttribute("aria-label") ?? null,
+          hasClass: document.documentElement.classList.contains("dark"),
+          bg: cs.backgroundColor,
+          fg: cs.color,
+          scheme: getComputedStyle(document.documentElement).colorScheme,
+          stored: localStorage.getItem("cursorstudio.theme-mode"),
+        });
+      })()`),
+    );
+  const clickMode = async (label) => {
+    await evaluate(
+      `[...document.querySelectorAll('[aria-label="外观"] button')].find((b) => b.getAttribute("aria-label") === "${label}")?.click()`,
+    );
+    await sleep(350);
+  };
+  const emulate = async (value) => {
+    await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value }] });
+    await sleep(400);
+  };
+  const shotMode = async (file) => {
+    const shot = await send("Page.captureScreenshot", { format: "png" });
+    writeFileSync(join(OUT_DIR, file), Buffer.from(shot.result.data, "base64"));
+  };
+
+  // 先归一化到「跟随系统」，避免上一次跑剩下的偏好影响判断
+  await clickMode("跟随系统");
+  const initial = await readTheme();
+  assert("默认模式是「跟随系统」", initial.mode === "跟随系统" && initial.stored === "system", initial.mode);
+  assert("系统为浅色时按浅色渲染", initial.hasClass === false && luminance(initial.bg) > 0.9, `L=${luminance(initial.bg)}`);
+
+  await emulate("dark");
+  const followed = await readTheme();
+  assert("跟随系统：系统转深色就跟着变", followed.hasClass === true, followed.bg);
+  assert("深色背景 L < 0.3", luminance(followed.bg) < 0.3, `L=${luminance(followed.bg)}`);
+  assert("深色文字 L > 0.9", luminance(followed.fg) > 0.9, `L=${luminance(followed.fg)}`);
+  assert("深色下 color-scheme 为 dark（原生控件同步）", followed.scheme === "dark", followed.scheme);
+  await shotMode("design_dark.png");
+
+  await clickMode("浅色");
+  const forcedLight = await readTheme();
+  assert("手动选浅色：系统是深色也保持浅色", forcedLight.hasClass === false && forcedLight.stored === "light", `dark=${forcedLight.hasClass}`);
+
+  await clickMode("深色");
+  const forcedDark = await readTheme();
+  assert("手动选深色：立即生效并记住", forcedDark.hasClass === true && forcedDark.stored === "dark", forcedDark.stored);
+  await emulate("light");
+  const stillDark = await readTheme();
+  assert("手动深色不被系统浅色顶掉", stillDark.hasClass === true, `dark=${stillDark.hasClass}`);
+
+  await clickMode("跟随系统");
+  await emulate("light");
+  const backToSystem = await readTheme();
+  assert("回到跟随系统后随系统变浅", backToSystem.hasClass === false && backToSystem.stored === "system", `L=${luminance(backToSystem.bg)}`);
+
+  // 持久化：刷新后应恢复上次选的模式
+  await clickMode("深色");
+  await send("Page.reload", {});
+  await sleep(2800);
+  const restored = await readTheme();
+  assert("刷新后恢复上次选择", restored.mode === "深色" && restored.hasClass === true, `${restored.mode} / dark=${restored.hasClass}`);
+
+  // 收尾：还原成跟随系统，避免污染下一次运行
+  await clickMode("跟随系统");
+
   console.log(
     "截图:",
     join(OUT_DIR, "design_confirm.png"),

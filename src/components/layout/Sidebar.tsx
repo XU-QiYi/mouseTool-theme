@@ -1,4 +1,5 @@
-import { FolderDown, MousePointer2, RotateCcw, Settings } from "lucide-react";
+import { FolderDown, Monitor, Moon, MousePointer2, RotateCcw, Settings, Sun } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -6,8 +7,15 @@ import { CursorPreviewImage } from "@/components/cursor/CursorPreviewImage";
 import { useImportTheme } from "@/hooks/useImportTheme";
 import { PAGE_META, PAGE_ORDER, type PageMeta } from "@/lib/pages";
 import { coverSlot, slotStats } from "@/lib/slots";
+import { setThemeMode, useThemeMode, type ThemeMode } from "@/lib/theme-mode";
 import { cn } from "@/lib/utils";
 import { useThemeStore } from "@/stores/themeStore";
+
+const THEME_MODES: { value: ThemeMode; label: string; icon: LucideIcon }[] = [
+  { value: "system", label: "跟随系统", icon: Monitor },
+  { value: "light", label: "浅色", icon: Sun },
+  { value: "dark", label: "深色", icon: Moon },
+];
 
 export function Sidebar() {
   const currentPage = useThemeStore((s) => s.currentPage);
@@ -22,6 +30,7 @@ export function Sidebar() {
   const loadError = useThemeStore((s) => s.loadError);
   const importing = useThemeStore((s) => s.importing);
   const { picking, pick } = useImportTheme();
+  const themeMode = useThemeMode();
 
   const cover = activeTheme ? coverSlot(activeTheme) : undefined;
   const stats = activeTheme ? slotStats(activeTheme) : null;
@@ -133,6 +142,34 @@ export function Sidebar() {
             <RotateCcw data-icon="inline-start" />
             还原系统默认
           </Button>
+        </div>
+      </div>
+
+      {/* 外观：默认跟随系统，手动选浅/深就是覆盖，直到选回「跟随系统」 */}
+      <div className="flex items-center justify-between px-3 pb-3">
+        <span className="text-2xs text-muted-foreground">外观</span>
+        <div role="group" aria-label="外观" className="flex items-center gap-0.5">
+          {THEME_MODES.map(({ value, label, icon: Icon }) => {
+            const active = themeMode === value;
+            return (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setThemeMode(value)}
+                aria-pressed={active}
+                aria-label={label}
+                title={label}
+                className={cn(
+                  "focus-ring grid size-7 place-items-center rounded-md transition-[color,background-color,box-shadow] duration-(--motion-fast) ease-standard",
+                  active
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-raised ring-1 ring-sidebar-border"
+                    : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
+                )}
+              >
+                <Icon className="size-4" />
+              </button>
+            );
+          })}
         </div>
       </div>
 
