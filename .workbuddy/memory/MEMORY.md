@@ -115,3 +115,20 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy CARGO_HTTP_PROXY="
 - `ThemeList`/`ThemeCard`/`ThemeDetail` 已删除，别再按"列表+详情+过滤条件"加页面
 - 窗口最小 1080×640（`tauri.conf.json`，224+280+440=944 的依据）；**不做响应式断点**，窄窗不重排不收起；`design_check` 会断言这两个值
 - 验收：`nav_check` 断言三页结构签名（同构即失败）；`design_check` 覆盖表格/时间轴/删除链 + 检查器宽度/不溢出/最小窗口；均已跑绿
+
+## 应用图标（2026-10-22 接入）
+- 目录分工三段：`assets/icon/`=设计源（icon.svg / icon-master-2048.png / prompt.txt / 设计说明.md / build_assets.py / preview.png）· `src-tauri/icons/`=打包成品 · `public/`=favicon。**`src-tauri/icons/` 只放 Tauri 真正消费的文件**，别再往里塞设计稿
+- **`assets/icon/build_assets.py` 是唯一产出入口**，改色/调比例后重跑即可一键重建全部成品（需 Pillow）。它同时输出设计母版到 assets/、成品到 src-tauri/icons/ 与 public/
+- ICNS 由脚本手搓字节写出（Pillow 不支持该容器）：`icns` 魔数 + 总长 + 若干 `[类型4B + 块长(含头8B) + PNG数据]`，PNG 直接内嵌合法
+- 侧栏品牌位用 `src/components/brand/BrandMark.tsx`（**单色指针**，currentColor 跟随主题），**不要用完整应用图标**：那图标四个形状缩到 20px 时指针与青蓝卡片糊成一团（实证：1024→20px 再最近邻放大 12 倍）；加石墨底板更糟——深色模式下底板融进背景。`design_check` 有断言「侧栏品牌位用品牌指针」守着
+- 窗口标题与 productName 已从 `mousetool-theme` 改成「鼠标主题工具」
+
+## 提交拆分约定（2026-10-22 建立）
+- 一个提交只做一件事；**同一文件混两件事时做 hunk 级拆分**（先摘掉其中一处 → 提交 → 补回 → 再提交）
+- **拆分的正确做法**：不手写 patch（`@@` 行数头极易算错），而是「生成中间态文件 → `git add` → 提交 → 恢复最终态」。
+  - 生成中间态必须**二进制读写**（`read_bytes`/`write_bytes`）：仓库里 CRLF 与 LF 混用，文本模式读写会统一行尾 → git 判定整文件改动
+  - 临时文件放 `C:\Users\LeoGene\AppData\Local\Temp`（Git Bash 的 `/tmp` Python 看不到，要用绝对 Windows 路径）
+- **验收标准**：每个提交单独 `git checkout` 出来都能 `tsc --noEmit` 通过 + `doc_ref_check` 0 错。用临时 worktree + node_modules 目录联接逐个验
+- 提交后核对**内容零差异**（对比最终态快照，忽略行尾符）—— 漏掉的文件会在这里暴露（本次就漏了 `index.html` 的 favicon 与 `public/*.svg` 的删除）
+- 备份分支：`backup/pre-icon-split-20261022`、`backup/pre-rebase-20261022`、`backup/pre-split-20261022`（确认无误后可删）
+- 仓库 git 身份沿用历史提交：`AccountingUser <2499172954@qq.com>`（仓库级 config，不动全局）
