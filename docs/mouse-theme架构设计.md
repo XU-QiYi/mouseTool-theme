@@ -39,7 +39,7 @@ mouseTool-theme/
 │   │   ├── theme/                  ← GalleryCard / ThemeInspector / ThemeNameField / DeleteThemeDialog / CursorGrid
 │   │   ├── cursor/                 ← CursorSlotCard / CursorPreviewImage / AniPlayer
 │   │   └── ui/                     ← shadcn 组件（button/card/badge/dialog/toast…）
-│   ├── hooks/                      ← useCursorPreview / useImportTheme / useExportTheme
+│   ├── hooks/                      ← useCursorPreview / useImportTheme / useExportTheme / useDragDropImport
 │   ├── services/
 │   │   ├── theme.ts                ← 全部 invoke 封装
 │   │   └── mock.ts                 ← 浏览器直开时的假数据（非 Tauri 环境）
@@ -153,7 +153,7 @@ App.tsx
 
 **应用**：点「应用此主题」→ `apply_theme(theme)` → 按 `SLOT_DEFS` 写 15 个槽位值 + `SchemeName`（不写 `Schemes`）→ `SPI_SETCURSORS`（只 `SPIF_SENDCHANGE`）→ 追加 `history.json` → 返回最新 `recent` → store 更新 `activeThemeId` + `recent`。
 
-**导入**：对话框选 `.zip` → `import_theme` → 解压到临时目录 → 扫 `.cur/.ani` → 文件名推断槽位 → 落盘 `themes/<uuid>/` → 返回主题 → store 追加并切回图库页。
+**导入**：对话框选 `.zip` 或拖入窗口任意位置（Tauri drag-drop 事件给路径，前端只做数量/扩展名校验，拖入时有全窗遮罩反馈）→ `import_theme` → 解压到临时目录 → 扫 `.cur/.ani` → 文件名推断槽位 → 落盘 `themes/<uuid>/`（失败时连半成品目录一起清理）→ 返回主题 → store 追加并选中。
 
 **删除**：按钮禁用（使用中/系统方案）→ store 二次拦截 → 后端 `Uuid::parse_str` 校验 → `remove_dir_all`。
 
@@ -178,8 +178,7 @@ App.tsx
 
 | 项 | 当前状态 |
 |---|---|
-| 文件夹导入 | `import_theme` 只吃 `.zip` 路径 |
-| 拖拽 `.zip` 导入 | 无窗口级 drop 处理，只有文件对话框 |
+| 文件夹导入 | `import_theme` 只吃 `.zip` 路径（拖拽与对话框一致） |
 | `.inf` 槽位映射解析 | 只有文件名推断 |
 | 设置页 / 打开数据目录 | 侧栏「设置」是 `disabled` 占位（决策 1 的补偿项尚未落地） |
 

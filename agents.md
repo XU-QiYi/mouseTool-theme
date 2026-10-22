@@ -21,7 +21,7 @@
 
 - **Frontend**（`src/`）：骨架（侧栏 + 页头）+ 三个独立视图 + 右侧检查器。组件不直接 `invoke`，走 store action；`services/theme.ts` 是唯一 invoke 出口（非 Tauri 环境降级 `mock.ts`）。
 - **Backend**（`src-tauri/src/commands/`）：命令编排，错误一律 `Result<T, String>` 且是**用户能照着行动**的中文。
-- **Theme**（`utils/importer.rs`、`utils/paths.rs`）：zip 导入、槽位推断、落盘。**仅 `.zip`**，无文件夹导入、无 `.inf` 解析、无拖拽。
+- **Theme**（`utils/importer.rs`、`utils/paths.rs`）：zip 导入、槽位推断、落盘。**仅 `.zip`**（侧栏对话框 + 全窗口拖拽两个入口，共用同一条链路），无文件夹导入、无 `.inf` 解析。
 - **Cursor**（`utils/cursor.rs`）：`.cur`/`.ico`/`.ani` 解码。自解 ICO 目录挑最大帧、手写 RIFF 取 `LIST/fram`；**不转 GIF**。
 - **Registry**（`utils/registry.rs`）：HKCU 读写 + `SPI_SETCURSORS`。
 - **Integration**（`models/` ↔ `types/`、`capabilities/`）：前后端字段逐个同名，共用 `snake_case`，不做驼峰转换。
@@ -84,7 +84,7 @@
 
 | 项 | 现状 |
 |---|---|
-| 文件夹导入 / 拖拽 `.zip` | 只有侧栏按钮 + 文件对话框 |
+| 文件夹导入 | 对话框与拖拽都只收 `.zip` |
 | `.inf` 槽位映射 | 仅文件名推断 |
 | 设置页 / 打开数据目录 | 侧栏「设置」是 `disabled` 占位 |
 
@@ -114,7 +114,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy CARGO_HTTP_PROXY="
 node scripts/dev_bg.mjs start; node scripts/nav_check.mjs; node scripts/design_check.mjs; node scripts/motion_check.mjs; node scripts/dev_bg.mjs stop
 ```
 
-`design_audit.mjs` / `ui_ratio.mjs` 只扫源码；`nav_check` / `design_check` / `recent_check` / `ui_check` 走交互链路。`nav_check` 逐页断言**结构签名**（网格 / 表格 / 时间轴、有无检查器与搜索框），三页同构会直接失败——这是防止"切页看不出变化"回潮的那道闸。
+`design_audit.mjs` / `ui_ratio.mjs` 只扫源码；`nav_check` / `design_check` / `recent_check` / `ui_check` / `dnd_check` 走交互链路。`nav_check` 逐页断言**结构签名**（网格 / 表格 / 时间轴、有无检查器与搜索框），三页同构会直接失败——这是防止"切页看不出变化"回潮的那道闸。
 碰注册表的测试必须全局 `Mutex` 串行（`unwrap_or_else(|e| e.into_inner())` 防中毒），改用户设置的用例用"备份 + `catch_unwind` + 恢复"，断言失败也要还原。
 
 动了文档、尤其是本文件的 `§x` / `决策 N` 引用，跑 `node scripts/doc_ref_check.mjs`：指空会列出 `文件:行号` 并以退出码 1 失败（不需要 dev server）。
