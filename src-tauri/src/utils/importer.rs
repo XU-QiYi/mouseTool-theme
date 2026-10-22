@@ -178,14 +178,18 @@ fn import_zip_as(zip_path: &str, theme_id: &str) -> Result<CursorTheme, String> 
             // 失败时也不能留半成品主题目录：cursors/ 可能已经建了一半，
             // 残留的无 theme.json 目录会让下次启动多一条「跳过主题目录」的 warning
             let theme_dir = paths::theme_dir(theme_id);
-            if fs::remove_dir_all(&theme_dir).is_err() {
+            match fs::remove_dir_all(&theme_dir) {
+                // extract/识别阶段的失败发生在落盘之前，目录可能根本没建过：
+                // NotFound = 没有东西可清理，不是清理失败，别把用户支去删一个
+                // 从不存在的目录
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(err),
                 // 清不掉要说明，别让人对着一个来历不明的坏目录发呆；原始错误优先
-                return Err(format!(
+                Err(_) => Err(format!(
                     "{err}；另外，残留文件清理失败，可手动删除 {} 目录",
                     theme_dir.display()
-                ));
+                )),
+                Ok(()) => Err(err),
             }
-            Err(err)
         }
     }
 }
@@ -448,5 +452,46 @@ mod tests {
 
         assert!(outcome.is_err(), "cursors 被文件占住应导入失败");
         assert!(!theme_dir.exists(), "失败后不能残留半成品主题目录");
+    }
+
+    /// 回归测试：落盘前的失败（认不出文件名、非 zip）发生在主题目录创建之前，
+    /// NotFound 不是「清理失败」——不能把用户支去删一个根本不存在的目录
+    #[test]
+    fn 落盘前的失败不应谎报清理失败() {
+        use std::io::Write;
+
+        let cur = std::fs::read(r"C:\Windows\Cursors\aero_arrow.cur").expect("需要系统光标文件");
+
+        // 场景一：光标文件名认不出来，picked 为空，主题目录从未创建
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut buffer);
+            let options = zip::write::SimpleFileOptions::default();
+            writer.start_file("cursors/随便起的名字.cur", options).expect("写入条目");
+            writer.write_all(&cur).expect("写入数据");
+            writer.finish().expect("完成压缩");
+        }
+        let unnamed = std::env::temp_dir().join("cursortheme-unnamed-test.zip");
+        std::fs::write(&unnamed, buffer.into_inner()).expect("保存测试包");
+
+        let err = import_zip(unnamed.to_str().unwrap()).unwrap_err();
+        std::fs::remove_file(&unnamed).ok();
+        assert!(err.contains("认不出来"), "实际：{err}");
+        assert!(
+            !err.contains("清理失败"),
+            "目录从未创建，不该报清理失败。实际：{err}"
+        );
+
+        // 场景二：根本不是 zip，同样在落盘前失败
+        let bad = std::env::temp_dir().join("cursortheme-not-zip-again.zip");
+        std::fs::write(&bad, "仍然不是 zip".as_bytes()).expect("写入测试文件");
+
+        let err = import_zip(bad.to_str().unwrap()).unwrap_err();
+        std::fs::remove_file(&bad).ok();
+        assert!(err.contains("不是有效的 ZIP"), "实际：{err}");
+        assert!(
+            !err.contains("清理失败"),
+            "同上，不该报清理失败。实际：{err}"
+        );
     }
 }
