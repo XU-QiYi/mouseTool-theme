@@ -2,7 +2,7 @@
 // 用法：node scripts/dev_bg.mjs start; node scripts/design_check.mjs; node scripts/dev_bg.mjs stop
 //      （必须与 dev server 写在同一条命令里，跨命令的 vite 会被回收）
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const EDGE = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
@@ -75,6 +75,15 @@ try {
     console.log(`  ${ok ? "✓" : "✗"} ${name}${detail ? " · " + detail : ""}`);
     if (!ok) process.exitCode = 1;
   };
+
+  // 0. 静态配置：窗口最小尺寸（检查器最小 280 + 正文 440 + 侧栏 224 ≈ 944，留出余量）
+  const winConfig =
+    JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8")).app?.windows?.[0] ?? {};
+  assert(
+    "窗口最小尺寸 ≥ 1080×640",
+    winConfig.minWidth >= 1080 && winConfig.minHeight >= 640,
+    `${winConfig.minWidth}×${winConfig.minHeight}`,
+  );
 
   // 1. 结构断言（逐条查，任何一条出错都能定位）
   const checks = {
