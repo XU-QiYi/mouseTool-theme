@@ -1,0 +1,186 @@
+// 验证拖拽导入：遮罩显隐 / 合法 zip 走通成功链路 / 类型与数量校验 / 非文件静默
+// 前置：vite 已在 1420（与 dev_bg 同一条命令里跑）。走浏览器 mock 通路（HTML5 DnD）。
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const EDGE = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
+const PORT = 9229;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const edge = spawn(EDGE, [
+  "--headless=new",
+  "--disable-gpu",
+  "--force-device-scale-factor=1",
+  "--window-size=1200,800",
+  `--remote-debugging-port=${PORT}`,
+  "--user-data-dir=" + (process.env.TEMP ?? ".") + "\\edge_headless_profile",
+  "about:blank",
+]);
+
+const results = [];
+const check = (name, ok, detail) => {
+  results.push({ name, ok });
+  console.log(`${ok ? "[PASS]" : "[FAIL]"} ${name}${detail ? `  ${detail}` : ""}`);
+};
+
+try {
+  let targets = null;
+  for (let i = 0; i < 40; i++) {
+    await sleep(300);
+    try {
+      const res = await fetch(`http://127.0.0.1:${PORT}/json/list`);
+      targets = await res.json();
+      if (targets.some((t) => t.type === "page")) break;
+    } catch {}
+  }
+  const page = targets.find((t) => t.type === "page");
+  const ws = new WebSocket(page.webSocketDebuggerUrl);
+  await new Promise((ok, err) => {
+    ws.onopen = ok;
+    ws.onerror = err;
+  });
+
+  let id = 0;
+  const pending = new Map();
+  const pageErrors = [];
+  ws.onmessage = (ev) => {
+    const d = JSON.parse(ev.data);
+    if (d.method === "Runtime.exceptionThrown") {
+      pageErrors.push(d.params?.exceptionDetails?.exception?.description ?? d.params?.exceptionDetails?.text);
+    }
+    if (d.id && pending.has(d.id)) {
+      pending.get(d.id)(d);
+      pending.delete(d.id);
+    }
+  };
+  const send = (method, params = {}) =>
+    new Promise((ok) => {
+      const i = ++id;
+      pending.set(i, ok);
+      ws.send(JSON.stringify({ id: i, method, params }));
+    });
+  const evaluate = async (expression) => {
+    const res = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
+    if (res.result?.exceptionDetails) {
+      throw new Error(res.result.exceptionDetails.exception?.description ?? "页面内执行失败");
+    }
+    return res.result?.result?.value;
+  };
+
+  await send("Page.enable");
+  await send("Runtime.enable");
+  await send("Page.navigate", { url: "http://localhost:1420" });
+  for (let i = 0; i < 80; i++) {
+    await sleep(300);
+    if (await evaluate(`Boolean(window.__toast)`).catch(() => false)) break;
+  }
+
+  // 合成拖拽事件：related 传 "body" 表示窗口内元素间切换，withFile=false 模拟非文件拖入
+  const drag = (type, names, related = null, withFile = true) =>
+    evaluate(`(() => {
+      const dt = new DataTransfer();
+      for (const name of ${JSON.stringify(names)}) {
+        if (${withFile}) dt.items.add(new File(["x"], name, { type: "application/zip" }));
+      }
+      window.dispatchEvent(new DragEvent(${JSON.stringify(type)}, {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: dt,
+        relatedTarget: ${related === "body" ? "document.body" : "null"},
+      }));
+      return "OK";
+    })()`);
+
+  const overlayOpacity = () =>
+    evaluate(`(() => {
+      const el = document.querySelector("[data-drop-overlay]");
+      return el ? Number(getComputedStyle(el).opacity) : -1;
+    })()`);
+  const waitOpacity = async (expected) => {
+    for (let i = 0; i < 20; i++) {
+      if ((await overlayOpacity()) === expected) return true;
+      await sleep(100);
+    }
+    return (await overlayOpacity()) === expected;
+  };
+
+  // base-ui 把新 toast 前插到栈顶：DOM 里第一条就是最新的
+  const firstToast = () => evaluate(`document.querySelector('[data-slot="toast"]')?.innerText ?? ""`);
+  const waitToast = async (needle) => {
+    for (let i = 0; i < 30; i++) {
+      const text = await firstToast();
+      if (text.includes(needle)) return text;
+      await sleep(100);
+    }
+    return await firstToast();
+  };
+  const themeCount = () => evaluate(`window.__themeStore.getState().themes.length`);
+  const screenshot = async (name) => {
+    const shot = await send("Page.captureScreenshot", { format: "png" });
+    const out = join(process.env.TEMP ?? ".", name);
+    writeFileSync(out, Buffer.from(shot.result.data, "base64"));
+    console.log("screenshot:", out);
+  };
+
+  // 1. 遮罩显隐
+  check("初始遮罩不可见", (await overlayOpacity()) === 0);
+
+  await drag("dragenter", []);
+  check("拖入窗口遮罩亮起", await waitOpacity(1));
+
+  await screenshot("dnd_overlay.png");
+
+  await drag("dragleave", [], "body");
+  await sleep(150);
+  check("窗口内移动不收遮罩", (await overlayOpacity()) === 1);
+
+  await drag("dragleave", []);
+  check("拖出窗口遮罩收起", await waitOpacity(0));
+
+  // 2. 合法 zip：成功提示 + 列表新增 + 检查器选中
+  const before = await themeCount();
+  await drag("drop", ["我的新主题.zip"]);
+  const okText = await waitToast("已导入");
+  check("合法 zip 出现成功提示", okText.includes("已导入") && okText.includes("我的新主题"), okText);
+  check("主题列表新增一条", (await themeCount()) === before + 1, `${before} -> ${await themeCount()}`);
+  check(
+    "新主题在检查器中选中",
+    await evaluate(`Boolean(window.__themeStore.getState().selection.gallery && window.__themeStore.getState().selection.mine)`),
+  );
+
+  // 3. 类型校验
+  await drag("drop", ["arrow.cur"]);
+  const curText = await waitToast("只支持");
+  check("非 zip 文件被拒绝", curText.includes("只支持 .zip 主题包") && !curText.includes("文件夹"), curText);
+
+  await drag("drop", ["光标合集"]);
+  const dirText = await waitToast("文件夹");
+  check("文件夹拖入有明确说明", dirText.includes("整个文件夹暂不支持"), dirText);
+
+  // 4. 数量校验
+  await drag("drop", ["a.zip", "b.zip"]);
+  const multiText = await waitToast("一次只能");
+  check("多个文件一次只收一个", multiText.includes("一次只能导入一个主题包"), multiText);
+
+  // 5. 非文件拖入（文本、网页元素）：静默忽略，不弹错
+  await drag("drop", [], null, false);
+  await sleep(500);
+  const silentText = await firstToast();
+  check(
+    "非文件拖入静默忽略",
+    silentText.includes("一次只能导入一个主题包"),
+    `最新一条仍是上一条错误：「${silentText.slice(0, 30)}」`,
+  );
+
+  await screenshot("dnd_final.png");
+  check("运行期无 JS 异常", pageErrors.length === 0, pageErrors.join(" | "));
+
+  ws.close();
+} finally {
+  edge.kill();
+}
+
+const failed = results.filter((r) => !r.ok);
+console.log(`\n[拖拽导入] ${results.length - failed.length}/${results.length} 通过`);
+if (failed.length) process.exitCode = 1;
