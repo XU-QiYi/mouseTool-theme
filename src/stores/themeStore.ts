@@ -14,6 +14,7 @@ import {
 } from "@/services/theme";
 import { readableError, toast } from "@/lib/toast";
 import type { Page } from "@/lib/pages";
+import type { SettingsSection } from "@/lib/settings-sections";
 import {
   getZipMenuStatus as apiGetZipMenuStatus,
   openMousePanel as apiOpenMousePanel,
@@ -64,6 +65,10 @@ interface ThemeStore {
   searchQuery: string;
   /** 当前页面 */
   currentPage: Page;
+  /** 设置页当前分组（进设置后侧栏按它切换内容页） */
+  settingsSection: SettingsSection;
+  /** 从哪个页面进的设置：「返回」回到那里，而不是硬编码回图库 */
+  previousPage: Page | null;
   /** 加载状态（只用于"首次加载/重载"，导入有自己的 importing） */
   loading: boolean;
   /** 导入进行中：不复用 loading，否则导入时整个列表会变成骨架 */
@@ -103,6 +108,9 @@ interface ThemeStore {
   selectTheme: (id: string) => void;
   setSearchQuery: (q: string) => void;
   setCurrentPage: (p: Page) => void;
+  setSettingsSection: (s: SettingsSection) => void;
+  /** 从设置返回进入前的页面（没有上下文就回图库） */
+  backFromSettings: () => void;
   dismissWarnings: () => void;
 }
 
@@ -113,6 +121,8 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
   selection: NO_SELECTION,
   searchQuery: "",
   currentPage: "gallery",
+  settingsSection: "general",
+  previousPage: null,
   loading: false,
   importing: false,
   loadError: null,
@@ -370,7 +380,26 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
 
   // 切页清空搜索词：三页的搜索范围不同，沿用上一个页面的关键词
   // 会让用户看到「明明是空的」的列表，却以为是数据没了
-  setCurrentPage: (p) => set({ currentPage: p, searchQuery: "" }),
+  // 进设置时记住来路，「返回」才有地方可回；已经在设置里再点设置不覆盖
+  setCurrentPage: (p) =>
+    set((state) => ({
+      currentPage: p,
+      searchQuery: "",
+      previousPage:
+        p === "settings"
+          ? state.currentPage === "settings"
+            ? state.previousPage
+            : state.currentPage
+          : state.previousPage,
+    })),
+
+  setSettingsSection: (s) => set({ settingsSection: s }),
+
+  backFromSettings: () =>
+    set((state) => ({
+      currentPage: state.previousPage ?? "gallery",
+      searchQuery: "",
+    })),
 
   dismissWarnings: () => set({ warningsDismissed: true }),
 }));

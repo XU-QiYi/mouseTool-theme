@@ -1,5 +1,4 @@
-import { FolderDown, Monitor, Moon, MousePointer2, RotateCcw, Sun } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { ArrowLeft, FolderDown, MousePointer2, RotateCcw } from "lucide-react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -7,18 +6,54 @@ import { BrandMark } from "@/components/brand/BrandMark";
 import { CursorPreviewImage } from "@/components/cursor/CursorPreviewImage";
 import { useImportTheme } from "@/hooks/useImportTheme";
 import { PAGE_META, PAGE_ORDER, type PageMeta } from "@/lib/pages";
+import {
+  SETTINGS_SECTIONS,
+  SETTINGS_SECTION_ORDER,
+  type SettingsSectionMeta,
+} from "@/lib/settings-sections";
 import { coverSlot, slotStats } from "@/lib/slots";
-import { setThemeMode, useThemeMode, type ThemeMode } from "@/lib/theme-mode";
 import { cn } from "@/lib/utils";
 import { useThemeStore } from "@/stores/themeStore";
 
-const THEME_MODES: { value: ThemeMode; label: string; icon: LucideIcon }[] = [
-  { value: "system", label: "跟随系统", icon: Monitor },
-  { value: "light", label: "浅色", icon: Sun },
-  { value: "dark", label: "深色", icon: Moon },
-];
-
+/**
+ * 侧栏两种形态：
+ *
+ * - 主导航（图库 / 我的主题 / 最近使用 / 设置）+ 常驻状态卡——主题管理的上下文；
+ * - 设置分组（通用 / 快捷键 / 数据 / 系统集成 / 关于）+ 返回——进设置后侧栏
+ *   整体切换成分组列表，点分组换内容页，返回键回到来路页面。
+ *
+ * 外观三态已迁入「设置 → 通用」（决策 14），侧栏不再放主题开关。
+ */
 export function Sidebar() {
+  const currentPage = useThemeStore((s) => s.currentPage);
+  const inSettings = currentPage === "settings";
+
+  return (
+    <aside className="flex w-56 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
+      <Brand />
+
+      {inSettings ? <SettingsNav /> : <MainNav />}
+
+      <Separator />
+      <div className="h-3" />
+    </aside>
+  );
+}
+
+function Brand() {
+  return (
+    <div className="flex items-center gap-2 px-4 pt-5 pb-4">
+      <BrandMark className="size-5 shrink-0" />
+      <div className="min-w-0">
+        <p className="truncate text-sm leading-tight font-medium">鼠标主题工具</p>
+        <p className="text-2xs text-muted-foreground">v0.1.0</p>
+      </div>
+    </div>
+  );
+}
+
+/** 主导航：四页 + 导入按钮 + 常驻状态卡 */
+function MainNav() {
   const currentPage = useThemeStore((s) => s.currentPage);
   const setCurrentPage = useThemeStore((s) => s.setCurrentPage);
   const themes = useThemeStore((s) => s.themes);
@@ -31,21 +66,12 @@ export function Sidebar() {
   const loadError = useThemeStore((s) => s.loadError);
   const importing = useThemeStore((s) => s.importing);
   const { picking, pick } = useImportTheme();
-  const themeMode = useThemeMode();
 
   const cover = activeTheme ? coverSlot(activeTheme) : undefined;
   const stats = activeTheme ? slotStats(activeTheme) : null;
 
   return (
-    <aside className="flex w-56 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
-      <div className="flex items-center gap-2 px-4 pt-5 pb-4">
-        <BrandMark className="size-5 shrink-0" />
-        <div className="min-w-0">
-          <p className="truncate text-sm leading-tight font-medium">鼠标主题工具</p>
-          <p className="text-2xs text-muted-foreground">v0.1.0</p>
-        </div>
-      </div>
-
+    <>
       <div className="px-3 pb-4">
         <Button className="w-full" onClick={pick} disabled={picking || importing}>
           <FolderDown data-icon="inline-start" />
@@ -145,38 +171,62 @@ export function Sidebar() {
           </Button>
         </div>
       </div>
+    </>
+  );
+}
 
-      {/* 外观：默认跟随系统，手动选浅/深就是覆盖，直到选回「跟随系统」 */}
-      <div className="flex items-center justify-between px-3 pb-3">
-        <span className="text-2xs text-muted-foreground">外观</span>
-        <div role="group" aria-label="外观" className="flex items-center gap-0.5">
-          {THEME_MODES.map(({ value, label, icon: Icon }) => {
-            const active = themeMode === value;
-            return (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setThemeMode(value)}
-                aria-pressed={active}
-                aria-label={label}
-                title={label}
-                className={cn(
-                  "focus-ring grid size-7 place-items-center rounded-md transition-[color,background-color,box-shadow] duration-(--motion-fast) ease-standard",
-                  active
-                    ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-raised ring-1 ring-sidebar-border"
-                    : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
-                )}
-              >
-                <Icon className="size-4" />
-              </button>
-            );
-          })}
-        </div>
-      </div>
+/** 设置导航：返回 + 分组列表（点分组换内容页） */
+function SettingsNav() {
+  const settingsSection = useThemeStore((s) => s.settingsSection);
+  const setSettingsSection = useThemeStore((s) => s.setSettingsSection);
+  const backFromSettings = useThemeStore((s) => s.backFromSettings);
 
-      <Separator />
+  return (
+    <nav aria-label="设置导航" className="flex-1 space-y-0.5 px-3">
+      <button
+        type="button"
+        onClick={backFromSettings}
+        className={cn(
+          buttonVariants({ variant: "ghost" }),
+          "h-auto w-full justify-start gap-2.5 px-3 py-2 text-muted-foreground hover:bg-sidebar-accent/50",
+        )}
+      >
+        <ArrowLeft className="size-4 shrink-0" />
+        <span className="truncate">返回</span>
+      </button>
 
-      <div className="h-3" />
-    </aside>
+      <div className="h-2" />
+
+      {SETTINGS_SECTION_ORDER.map((key) => {
+        // 标注成 SettingsSectionMeta：字面量收窄后，缺字段的分组过不了编译
+        const meta: SettingsSectionMeta = SETTINGS_SECTIONS[key];
+        const isCurrent = settingsSection === key;
+        const Icon = meta.icon;
+        return (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setSettingsSection(key)}
+            aria-current={isCurrent ? "page" : undefined}
+            className={cn(
+              buttonVariants({ variant: "ghost" }),
+              "relative h-auto w-full justify-start gap-2.5 px-3 py-2",
+              isCurrent
+                ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                : "text-muted-foreground hover:bg-sidebar-accent/50",
+            )}
+          >
+            {isCurrent && (
+              <span
+                aria-hidden
+                className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-primary"
+              />
+            )}
+            <Icon className="size-4 shrink-0" />
+            <span className="truncate">{meta.label}</span>
+          </button>
+        );
+      })}
+    </nav>
   );
 }

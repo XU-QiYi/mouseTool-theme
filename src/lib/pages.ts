@@ -74,8 +74,10 @@ export const PAGE_META = {
   settings: {
     label: "设置",
     icon: Settings,
+    // 标题/说明实际由 settings-sections 的当前分组接管（PageHeader），
+    // 这里是兜底：分组元数据万一没取到，页头也不能开天窗
     title: "设置",
-    hint: "数据目录与应用数据维护",
+    hint: "应用偏好、数据维护与系统集成",
     dependsOnThemes: false,
     hasInspector: false,
   },
