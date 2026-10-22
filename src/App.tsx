@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { ComponentType } from "react";
 
 import { Sidebar } from "@/components/layout/Sidebar";
@@ -17,7 +17,11 @@ import { useDragDropImport } from "@/hooks/useDragDropImport";
 import { useInspectorWidth } from "@/hooks/useInspectorWidth";
 import { PAGE_META, type Page, type PageMeta } from "@/lib/pages";
 import { initShortcuts } from "@/lib/shortcuts";
+import { toast } from "@/lib/toast";
+import { checkForUpdates } from "@/lib/update-check";
+import { inTauri } from "@/services/theme";
 import { selectSelectedTheme, useThemeStore } from "@/stores/themeStore";
+import { useSettingsStore } from "@/stores/settingsStore";
 import "./App.css";
 
 /**
@@ -40,16 +44,37 @@ function App() {
   const selectedTheme = useThemeStore(selectSelectedTheme);
   const loadError = useThemeStore((s) => s.loadError);
   const pickupPendingImport = useThemeStore((s) => s.pickupPendingImport);
+  const settings = useSettingsStore((s) => s.settings);
+  const loadSettings = useSettingsStore((s) => s.loadSettings);
   const [inspectorWidth, resizeInspector] = useInspectorWidth();
   const { dragActive } = useDragDropImport();
+  const updateChecked = useRef(false);
 
   useEffect(() => {
     loadThemes();
-  }, [loadThemes]);
+    loadSettings();
+  }, [loadThemes, loadSettings]);
 
   // 应用内快捷键（Ctrl+1~4 切页 / Ctrl+O 导入 / Ctrl+F 搜索）：
   // 注册一次，卸载时注销；开关在「设置 → 快捷键」
   useEffect(() => initShortcuts(), []);
+
+  // 启动时自动检查更新（「设置 → 通用」可关）：只在发现新版本时提示，
+  // 检查失败静默——启动不是报错的场合。每次启动最多查一次
+  useEffect(() => {
+    if (updateChecked.current || !settings) return;
+    updateChecked.current = true;
+    if (!inTauri || !settings.auto_check_update) return;
+    let alive = true;
+    void checkForUpdates().then((outcome) => {
+      if (alive && outcome.status === "update-available") {
+        toast.info(outcome.message, "在「设置 → 关于」里点「检查更新」前往下载");
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [settings]);
 
   // 右键菜单 / 二次启动转交的待导入路径：启动时领一次，
   // 之后每次窗口聚焦再领（第二个实例写完文件会拉起本窗口）
