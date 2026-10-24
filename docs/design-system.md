@@ -198,6 +198,11 @@
 | 导航当前项 | 必须带 `aria-current="page"` |
 | 原生元素需要焦点环 | 加 `focus-ring` utility |
 | 删除等不可恢复操作 | 必须先过 `AlertDialog` 确认 |
+| 迁移 / 恢复备份 | 执行前先确认（来源、目标、数量），执行中禁用关闭与重复提交，并显示阶段进度 |
+| 分段控件 | `role="radiogroup"` + roving tabindex：`←/→` 循环、`Home/End` 到首尾，焦点跟随选中项，只有当前项可 Tab 进入 |
+| 标题层级 | 页面 `h1` → 分组 `h2` → 卡片 `h3`，不跳级；字号不是标题层级的替代品 |
+| 忙碌状态 | `disabled` + `aria-busy` + 文案变成「应用中… / 删除中… / 改名中…」，busy 按动作与主题分别记 |
+| 装饰性图片 | 旁边已有文字说明的光标预览图一律 `alt=""`，不让读屏重复念文件名 |
 | 确认弹窗文案 | 说清删什么、删几个、能不能恢复（例：「会连同 6 个光标文件一起删除，无法撤销」） |
 | 重命名等轻量编辑 | 原地变成输入框，自动全选；Enter 保存、Esc 取消、失焦保存；值没变则不请求 |
 | 操作结果反馈 | 用 Toast，不要只 `console.error` |
@@ -205,7 +210,7 @@
 | 可滚动容器 | 一律加 `scroll-thin`：6px 宽、轨道透明、拇指 hover 才显形，`scrollbar-gutter: stable` 保证滚动条出现时内容不横向跳。**别用 `scrollbar-width: thin`**——它在 Chromium 里仍走经典样式（上下带箭头、常显） |
 | 面板分隔条 | 6px 宽、`cursor-col-resize`、`role="separator"` + `aria-valuenow`；拖动改宽度、双击复位、`←/→` 每次 16px、`Home/End` 到边界。宽度只在会话内有效，不落盘 |
 | 深色模式 | 三态：跟随系统（默认）/ 浅色 / 深色，状态在 `lib/theme-mode.ts` 一处，落盘 `cursorstudio.theme-mode`；切浅/深时同步调 Tauri `setTheme` 让标题栏一致。**组件里不写 `dark:` 前缀**，颜色全部走 token |
-| 外观切换控件 | 侧栏底部，一行「外观」+ 三个图标按钮（Monitor / Sun / Moon），`role="group"` + `aria-pressed`；28px 命中区，当前项用 `sidebar-accent` + `shadow-raised` + 描边 |
+| 外观切换控件 | 「设置 → 通用」，一行「外观」+ 三个图标按钮（Monitor / Sun / Moon），`role="group"` + `aria-pressed`；28px 命中区，当前项用 `sidebar-accent` + `shadow-raised` + 描边 |
 
 ---
 
@@ -215,7 +220,7 @@
 
 ```bash
 node scripts/design_check.mjs   # 自动按 Tab 走一遍，查焦点环/aria/结构，并存截图
-node scripts/design_audit.mjs   # 间距/字号/图标是否出现阶梯外的值
+node scripts/design_audit.mjs   # 间距/字号/图标是否出现阶梯外的值；有违规退出码 1
 node scripts/ui_ratio.mjs       # shadcn 与原生标签比例是否合理
 node scripts/motion_check.mjs   # 逐帧采样：进出场时长、中间态、降级是否生效
 ```
@@ -240,3 +245,4 @@ node scripts/motion_check.mjs   # 逐帧采样：进出场时长、中间态、�
 | 2026-10-22 | v1.7 深色模式接通 + 滚动条改为 hover 显形。`lib/theme-mode.ts` 把 `prefers-color-scheme` 映射成 `html.dark`（首帧前落 class，并随系统切换），`:root` / `.dark` 补 `color-scheme` 让原生控件同步；`scroll-thin` 由 `scrollbar-width: thin` 改为 `::-webkit-scrollbar`：6px、轨道透明、拇指默认透明、`hover` 与 `hover thumb` 分两级显形 —— `thin` 在 Chromium 里仍是带箭头的经典样式，会被当成进度条 |
 | 2026-10-22 | v1.8 外观从"只跟随系统"改为三态（跟随系统 / 浅色 / 深色）。侧栏底部新增「外观」分段控件；手动覆盖落盘并调 Tauri `setTheme` 同步标题栏；原则一的"不自建开关"改为"默认跟随系统、允许显式覆盖"。`design_check` 扩到 18 条断言（含覆盖优先级与刷新恢复） |
 | 2026-10-24 | v1.9 Toast 倒计时条。卡片底边内侧 2px 细条（`h-0.5`，状态色与左侧标识条同族），`scaleX 1→0` 表示剩余寿命；时长 = 该条 toast 超时、缓动强制 `linear` —— **动效硬规则的唯一例外**（读数不是装饰，见 motion.md §2）；挂起与 base-ui 计时器同进退（`data-expanded` + 窗口焦点镜像）。`motion_check` 增至 33 项断言 |
+| 2026-10-25 | v2.0 无障碍与交互安全。§4 补分段控件键盘模型、标题层级、忙碌状态、装饰图 `alt=""`、迁移 / 恢复确认；外观切换控件位置更正为「设置 → 通用」（决策 14 已迁走）；`design_audit.mjs` 违规时以退出码 1 失败 |

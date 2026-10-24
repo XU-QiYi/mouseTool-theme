@@ -17,7 +17,13 @@ pub struct ZipMenuStatus {
 /// 注意 Win11 的 `ProductName` 仍是 "Windows 10..."（微软没改），所以用
 /// `CurrentBuildNumber >= 22000` 判大版本，`DisplayVersion` 给出 23H2/24H2。
 #[tauri::command]
-pub fn get_windows_version() -> Result<String, String> {
+pub async fn get_windows_version() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(windows_version)
+        .await
+        .map_err(|err| format!("读取系统版本任务异常退出（{err}）"))?
+}
+
+fn windows_version() -> Result<String, String> {
     use winreg::enums::HKEY_LOCAL_MACHINE;
     use winreg::RegKey;
 
@@ -53,33 +59,50 @@ pub fn get_windows_version() -> Result<String, String> {
 /// ShellExecuteW / 用户手按 Win+R 在本机全回落设置主页——页面别名在这台
 /// 系统上不解析（2026-10-22 实证）。经典面板全系统可用，收敛于此。
 #[tauri::command]
-pub fn open_mouse_panel() -> Result<(), String> {
-    std::process::Command::new("rundll32")
-        .args(["shell32.dll,Control_RunDLL", "main.cpl,,1"])
-        .spawn()
-        .map(|_| ())
-        .map_err(|err| format!("打开鼠标属性面板失败（{err}）"))
+pub async fn open_mouse_panel() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        std::process::Command::new("rundll32")
+            .args(["shell32.dll,Control_RunDLL", "main.cpl,,1"])
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| format!("打开鼠标属性面板失败（{err}）"))
+    })
+    .await
+    .map_err(|err| format!("打开鼠标属性面板任务异常退出（{err}）"))?
 }
 
 /// 右键菜单当前是否已注册
 #[tauri::command]
-pub fn get_zip_menu_registered() -> Result<ZipMenuStatus, String> {
-    let (registered, exe_path) = integration::zip_menu_status();
-    Ok(ZipMenuStatus { registered, exe_path })
+pub async fn get_zip_menu_registered() -> Result<ZipMenuStatus, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let (registered, exe_path) = integration::zip_menu_status();
+        Ok(ZipMenuStatus {
+            registered,
+            exe_path,
+        })
+    })
+    .await
+    .map_err(|err| format!("读取右键菜单状态任务异常退出（{err}）"))?
 }
 
 /// 注册 / 移除 `.zip` 右键菜单（试点：先看效果再定去留，见决策 12）
 #[tauri::command]
-pub fn set_zip_menu(register: bool) -> Result<(), String> {
-    if register {
-        integration::register_zip_menu().map(|_| ())
-    } else {
-        integration::unregister_zip_menu()
-    }
+pub async fn set_zip_menu(register: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if register {
+            integration::register_zip_menu().map(|_| ())
+        } else {
+            integration::unregister_zip_menu()
+        }
+    })
+    .await
+    .map_err(|err| format!("右键菜单任务异常退出（{err}）"))?
 }
 
 /// 领取待导入的 zip 路径（右键菜单 / 二次启动转交），领取即消费
 #[tauri::command]
-pub fn take_pending_import() -> Option<String> {
-    integration::take_pending_import()
+pub async fn take_pending_import() -> Option<String> {
+    tauri::async_runtime::spawn_blocking(integration::take_pending_import)
+        .await
+        .unwrap_or(None)
 }

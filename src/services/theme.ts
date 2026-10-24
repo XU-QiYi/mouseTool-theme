@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 import type { ApplyOutcome, CursorTheme, HistoryEntry, ThemesResult } from "@/types/theme";
 import type { CursorPreview } from "@/types/cursor";
@@ -6,6 +7,14 @@ import { MOCK_RECENT, MOCK_THEMES } from "@/services/mock";
 
 /** 是否运行在 Tauri 容器里（浏览器里打开时为 false） */
 export const inTauri = "__TAURI_INTERNALS__" in window;
+
+/** 长耗时任务的进度载荷；与 Rust `utils::progress::TaskProgress` 一一对应 */
+export interface TaskProgress {
+  stage: string;
+  current: number;
+  total: number;
+  message: string;
+}
 
 /** 浏览器预览用的「上一次使用时间」，格式与 Rust 侧一致（本地时区、分钟精度） */
 function stamp(): string {
@@ -77,7 +86,10 @@ export function restoreDefault(): Promise<void> {
 }
 
 /** 对应 Rust 命令 `import_theme`：导入 .zip 包或整个文件夹（决策 16），返回新主题 */
-export function importTheme(sourcePath: string): Promise<CursorTheme> {
+export async function importTheme(
+  sourcePath: string,
+  onProgress?: (progress: TaskProgress) => void,
+): Promise<CursorTheme> {
   if (!inTauri) {
     // 浏览器里没有文件系统：用示例槽位生成一份新主题，
     // 让「导入 → 列表新增 → 检查器选中」这条链路在开发与自动化验收里能走通。
@@ -86,7 +98,13 @@ export function importTheme(sourcePath: string): Promise<CursorTheme> {
     const name = fileName.replace(/\.zip$/i, "") || "未命名主题";
     const sample = MOCK_THEMES.find((t) => !t.is_built_in) ?? MOCK_THEMES[0];
     const now = stamp();
-    return Promise.resolve({
+    onProgress?.({
+      stage: "done",
+      current: 1,
+      total: 1,
+      message: "导入完成（开发模式）",
+    });
+    return {
       id: crypto.randomUUID(),
       name,
       description: `导入自 ${fileName}`,
@@ -94,9 +112,20 @@ export function importTheme(sourcePath: string): Promise<CursorTheme> {
       updated_at: now,
       is_built_in: false,
       cursors: sample.cursors,
+    };
+  }
+
+  let unlisten: (() => void) | undefined;
+  if (onProgress) {
+    unlisten = await listen<TaskProgress>("import-progress", (event) => {
+      onProgress(event.payload);
     });
   }
-  return invoke<CursorTheme>("import_theme", { sourcePath });
+  try {
+    return await invoke<CursorTheme>("import_theme", { sourcePath });
+  } finally {
+    unlisten?.();
+  }
 }
 
 /** 对应 Rust 命令 `delete_theme`：删除已导入主题及其光标文件目录 */

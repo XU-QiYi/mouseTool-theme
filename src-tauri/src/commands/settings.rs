@@ -43,8 +43,10 @@ fn snapshot(state: &settings::AppSettings) -> SettingsSnapshot {
 
 /// 读取全部行为设置
 #[tauri::command]
-pub fn get_settings() -> Result<SettingsSnapshot, String> {
-    Ok(snapshot(&settings::read()))
+pub async fn get_settings() -> Result<SettingsSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(|| Ok(snapshot(&settings::read())))
+        .await
+        .map_err(|err| format!("读取设置任务异常退出（{err}）"))?
 }
 
 /// 局部更新行为设置（只传要改的字段），返回更新后的快照
@@ -52,39 +54,53 @@ pub fn get_settings() -> Result<SettingsSnapshot, String> {
 /// 关闭行为变更要同步托盘的有无：切到「最小化到托盘」时托盘必须出现，
 /// 切回「直接退出」时立即摘掉，不能等下次重启。
 #[tauri::command]
-pub fn update_settings(
+pub async fn update_settings(
     app: AppHandle,
     close_behavior: Option<String>,
     auto_check_update: Option<bool>,
     shortcuts_enabled: Option<bool>,
 ) -> Result<SettingsSnapshot, String> {
-    let mut state = settings::read();
-    if let Some(raw) = close_behavior {
-        state.close_behavior = CloseBehavior::parse(&raw)?;
-    }
-    if let Some(flag) = auto_check_update {
-        state.auto_check_update = flag;
-    }
-    if let Some(flag) = shortcuts_enabled {
-        state.shortcuts_enabled = flag;
-    }
-    settings::write(&state)?;
+    let updated = tauri::async_runtime::spawn_blocking(move || {
+        let mut state = settings::read();
+        if let Some(raw) = close_behavior {
+            state.close_behavior = CloseBehavior::parse(&raw)?;
+        }
+        if let Some(flag) = auto_check_update {
+            state.auto_check_update = flag;
+        }
+        if let Some(flag) = shortcuts_enabled {
+            state.shortcuts_enabled = flag;
+        }
+        settings::write(&state)?;
+        Ok::<_, String>(snapshot(&state))
+    })
+    .await
+    .map_err(|err| format!("保存设置任务异常退出（{err}）"))??;
+
     tray::sync(&app);
-    Ok(snapshot(&state))
+    Ok(updated)
 }
 
 /// 开机自启动状态
 #[tauri::command]
-pub fn get_autostart() -> Result<AutostartStatus, String> {
-    let (enabled, exe_path) = autostart::status();
-    Ok(AutostartStatus { enabled, exe_path })
+pub async fn get_autostart() -> Result<AutostartStatus, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let (enabled, exe_path) = autostart::status();
+        Ok(AutostartStatus { enabled, exe_path })
+    })
+    .await
+    .map_err(|err| format!("读取自启动状态任务异常退出（{err}）"))?
 }
 
 /// 开启 / 关闭开机自启动，返回操作后的状态（以注册表回读为准）
 #[tauri::command]
-pub fn set_autostart(enable: bool) -> Result<AutostartStatus, String> {
-    let (enabled, exe_path) = autostart::set(enable)?;
-    Ok(AutostartStatus { enabled, exe_path })
+pub async fn set_autostart(enable: bool) -> Result<AutostartStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (enabled, exe_path) = autostart::set(enable)?;
+        Ok(AutostartStatus { enabled, exe_path })
+    })
+    .await
+    .map_err(|err| format!("设置自启动任务异常退出（{err}）"))?
 }
 
 /// 更换主题存储目录的结果：设置快照 + 搬运报告
@@ -99,20 +115,24 @@ pub struct ThemesDirChangeResult {
 /// 确认对话框用它展示源、目标、主题数量与体积；校验不过在这里就给出人话，
 /// 用户不会点了「开始迁移」才发现目录选错。
 #[tauri::command]
-pub fn preview_themes_dir(path: Option<String>) -> Result<ThemesDirPlan, String> {
-    themes_dir::preview(path.as_deref())
+pub async fn preview_themes_dir(path: Option<String>) -> Result<ThemesDirPlan, String> {
+    tauri::async_runtime::spawn_blocking(move || themes_dir::preview(path.as_deref()))
+        .await
+        .map_err(|err| format!("预检任务异常退出（{err}）"))?
 }
 
 /// 更换主题存储目录（`None` = 回默认），现有主题一起搬过去
 ///
 /// 复制、校验、切换都在后台线程执行，进度通过 `themes-dir-progress` 事件推给
-/// 界面；命令返回时要么全部成功，要么已回滚到原目录。
+/// 界面；命令返回时要么全部成功，要么已回滚到原目录。迁移与导入 / 备份恢复
+/// 共用一把重操作锁，避免同时搬运同一批文件。
 #[tauri::command]
 pub async fn set_themes_dir(
     app: AppHandle,
     path: Option<String>,
 ) -> Result<ThemesDirChangeResult, String> {
     let report = tauri::async_runtime::spawn_blocking(move || {
+        let _guard = ops::try_begin("迁移主题目录")?;
         let emitter = app.clone();
         themes_dir::change(path, move |progress| {
             let _ = emitter.emit("themes-dir-progress", progress);

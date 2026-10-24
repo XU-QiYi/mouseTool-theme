@@ -4,7 +4,7 @@
 > 原则：**事实以代码为准**。本文件与代码不一致时改本文件，不要改代码迁就文档；更不要把没实现的东西写成已支持。
 
 **技术栈**：Tauri 2 + React 19 + TypeScript + Vite 7 + Tailwind 4 + shadcn/ui（base-nova / `@base-ui/react`）+ zustand 5 + Rust。
-**现状**：功能已跑通，23 个 Tauri 命令全部实现并注册，不是脚手架（没有 `greet` 示例）。
+**现状**：功能已跑通，23 个 Tauri 命令全部实现并注册；除纯路径计算的 `get_data_dir` 外，I/O 命令都是 `async` + `spawn_blocking`。不是脚手架（没有 `greet` 示例）。
 
 ## 先读哪份（冲突时从上往下取）
 
@@ -20,7 +20,7 @@
 ## 职责边界（同一仓库，不是独立进程）
 
 - **Frontend**（`src/`）：骨架（侧栏 + 页头）+ 四个独立视图（含设置）+ 右侧检查器。组件不直接 `invoke`，走 store action；`services/`（`theme.ts` / `system.ts` / `settings.ts`）是唯一 invoke 出口（非 Tauri 环境降级 mock）。
-- **Backend**（`src-tauri/src/commands/`）：命令编排，错误一律 `Result<T, String>` 且是**用户能照着行动**的中文。
+- **Backend**（`src-tauri/src/commands/`）：命令编排，错误一律 `Result<T, String>` 且是**用户能照着行动**的中文。所有 I/O 走 `spawn_blocking`；导入 / 备份 / 迁移取 `utils/ops.rs` 的 `try_begin` 互斥锁并发 `*-progress` 事件（决策 19）。前端传来的结构先过 `utils/validation.rs`（槽位白名单、路径包含、`dest_path`、`theme.id`），归档读取只走 `utils/limits.rs`（决策 18）。
 - **Theme**（`utils/importer.rs`、`utils/inf_parse.rs`、`utils/paths.rs`、`utils/theme_paths.rs`）：zip / 文件夹导入、槽位映射、落盘。**收 `.zip` 与整个主题文件夹两个入口共用同一条链路**（`importer::import_source` 分发，决策 16；侧栏对话框只收 `.zip`，拖拽两种都收）；包内带 `.inf` 时槽位按说明书映射、优先于文件名推断，没带或解析失败才退回文件名推断（`inf_parse.rs`，决策 15）。导出 zip 附带通用 `.inf` 安装文件（`utils/inf_export.rs`，决策 13），接收方右键即可安装。**磁盘上的 `theme.json` 只存相对主题目录的槽位路径**（`cursors/arrow.cur`），运行时统一由 `theme_paths::resolve_theme` 拼绝对路径；旧绝对路径兼容读取，备份导出/恢复也走同一套相对化（决策 17）。主题存储目录可换（`utils/themes_dir.rs`）：暂存复制 + 内容校验 + 原子切换 + 失败回滚，详见硬约束 18。
 - **Cursor**（`utils/cursor.rs`）：`.cur`/`.ico`/`.ani` 解码。自解 ICO 目录挑最大帧、手写 RIFF 取 `LIST/fram`；**不转 GIF**。
 - **Registry**（`utils/registry.rs`）：HKCU 读写 + `SPI_SETCURSORS`。
@@ -63,6 +63,7 @@
 - `get_data_dir` 只读不建目录；`open_data_dir` 才 `ensure_dir` + 调 opener。前端**禁止**用 `localDataDir()` 自己拼 `CursorStudio`（硬约束 1）。
 - `take_pending_import` 领取即删除（右键菜单 `--import` 转交通路），App 在启动与聚焦两个时机调用；`take_pending_import` 损坏返回 null 不报错。
 - `update_settings` 是**补丁语义**（只传要改的字段）；关闭行为变更会同步托盘有无。`preview_themes_dir` 只校验与统计、不碰文件；`set_themes_dir` 返回 `{ settings, report }`，执行中通过 `themes-dir-progress` 事件报阶段，整体成功前不改设置；`import_backup` 是合并恢复，不覆盖已有。
+- 除纯路径计算的 `get_data_dir` 外，所有命令都是 `async` + `spawn_blocking`；`import_theme` / `export_backup` / `import_backup` / `set_themes_dir` 额外取 `ops::try_begin` 锁，并分别发 `import-progress` / `backup-progress` / `themes-dir-progress`。第二个重操作会立刻失败，不要改成排队。
 
 **③ 注册表写入范围**
 只写 `Cursors` 下 15 个槽位值 + `SchemeName`（+ 键默认值），未提供的槽位写**空字符串**。**不写** `Cursors\Schemes`（那是系统"已保存方案"列表，写进去会让用户的下拉框多出条目）。光标文件留在 `%LOCALAPPDATA%` 原地，**不复制进 `C:\Windows\Cursors`**。
@@ -89,6 +90,12 @@
 16. 外观三态（跟随系统 / 浅色 / 深色）只由 `lib/theme-mode.ts` 管：`html.dark` + 落盘 `cursorstudio.theme-mode` + `setTheme` 同步标题栏。**组件里不写 `dark:` 前缀**，颜色全走 token；手选浅/深后不再跟系统，选回「跟随系统」才恢复。控件在「设置 → 通用」（决策 14，已从侧栏迁走）；改这段先看 `design_check` 的 18 条断言。
 17. 设置的持久化分三处，别做大一统：行为类 `settings.json`（Rust 也要读：关闭行为、主题目录、开关）、外观 `localStorage`（首帧同步读）、自启动 `HKCU\...\Run`（注册表即真相）。
 18. 主题槽位路径**磁盘存相对、运行时用绝对**：`theme.json` / 备份 zip 里只准出现相对主题目录的路径（`utils/theme_paths.rs` 的 `to_storage` / `write_theme_json`），读盘后必须 `resolve_theme` 再交给预览/应用。主题目录迁移只走 `utils/themes_dir.rs`：目标先 canonicalize，拒绝 UNC / 重解析点 / 数据目录内部（默认除外）/ 祖先 / 互相嵌套 / 非空目录（含同名主题）；内容先写同级 `.cursorstudio-migrate-<uuid>` 暂存区、逐文件哈希校验后原子改名；注册表重绑或设置写入失败必须回滚，源目录只在全部成功后删除。
+19. 归档读取只走 `utils/limits.rs`：主题包 `THEME_LIMITS`（50MB / 单文件 20MB / 512 条目 / 8 层）、备份 `BACKUP_LIMITS`（1GiB / 64MB / 4096 / 10 层）共用 `ArchiveBudget`、`copy_bounded`（64KB 流式）、`safe_relative_parts`；文件夹导入用 `ScanBudget`。**禁止一次性读整个条目**，超限必须清理解压临时目录与半成品主题目录。预览源文件 8MB、光标文件 20MB 上限同理。
+20. 前端传来的 `CursorTheme` / 路径一律视为不可信：槽位必须命中 15 个白名单、`theme.id` 必须是规范 UUID 且等于目录名与 `theme.json` 里的 id、光标文件 canonicalize 后必须在主题目录或 `%SystemRoot%\Cursors` 内、`dest_path` 父目录存在且后缀正确。校验只在 `utils/validation.rs` 做，别在组件里复制。
+21. 重操作必须后台 + 互斥：导入、备份导出 / 恢复、主题目录迁移都要 `spawn_blocking` + `ops::try_begin`（`try_lock` 立即失败，不排队）+ 阶段进度事件；`spawn_blocking` 的 JoinError 也要转成中文错误，不能 `.unwrap()`。
+22. 前端安全基线：`main.tsx` 必须保留 `ErrorBoundary`；外链只走 `lib/open-external.ts` 的 `https://github.com` 白名单；检查更新必须 8 秒超时；busy 按 `动作:ID` 记且 `finally` 释放；导出默认文件名必须过 `sanitizeFileName`（Windows 非法字符 / 保留名）。
+23. 无障碍基线：标题 `h1 → h2 → h3` 不跳级；`Segmented` 保持 radiogroup + roving tabindex（方向键 / Home / End）；`.ani` 播放必须响应 `prefers-reduced-motion`（降级画一帧）；装饰性预览图 `alt=""`；时间用 `<time dateTime>`。
+24. 测试**不碰真实环境**：数据根用 `paths::use_test_roots` 指向临时目录，注册表测试用 `TEST_CURSORS_KEY`（`Software\CursorStudio.Tests\...`，结束删除），光标用 `test_support` 生成 fixture；注册表用例仍全局串行。CI 四道闸 `build` / `cargo test` / `design_audit` / `doc_ref_check` 不得删减。
 
 ---
 
@@ -109,7 +116,7 @@
 ```powershell
 npm run build              # tsc + vite，类型错会拦下
 cd src-tauri; cargo check  # 后端快速反馈
-cargo test                 # 单元测试；注册表用例会短暂改光标，自带备份/恢复
+cargo test                 # 单元测试；数据根与注册表都已隔离，不碰真实光标（决策 21）
 ```
 
 cargo 拉包被系统代理挡住时（本机 Clash 常关）：
@@ -121,16 +128,18 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy CARGO_HTTP_PROXY="
 界面/动效脚本跑在浏览器里、走 mock，不写系统光标；**必须与 dev server 同一条命令**：
 
 ```powershell
-node scripts/dev_bg.mjs start; node scripts/nav_check.mjs; node scripts/design_check.mjs; node scripts/motion_check.mjs; node scripts/migration_check.mjs; node scripts/dev_bg.mjs stop
+node scripts/dev_bg.mjs start; node scripts/nav_check.mjs; node scripts/design_check.mjs; node scripts/motion_check.mjs; node scripts/migration_check.mjs; node scripts/recent_check.mjs; node scripts/ui_check.mjs; node scripts/dnd_check.mjs; node scripts/dev_bg.mjs stop
 ```
 
 `design_audit.mjs` / `ui_ratio.mjs` 只扫源码；`nav_check` / `design_check` / `recent_check` / `ui_check` / `dnd_check` / `migration_check` 走交互链路。`migration_check` 用浏览器 mock 注入预检失败与设置写入失败（`?mock-migrate-error` / `?mock-migrate-fail=settings`），断言确认框信息、执行期锁、进度、失败回滚与恢复默认。`nav_check` 逐页断言**结构签名**（网格 / 表格 / 时间轴 / 设置面板、有无检查器与搜索框），页面间同构会直接失败——这是防止"切页看不出变化"回潮的那道闸。
-碰注册表的测试必须全局 `Mutex` 串行（`unwrap_or_else(|e| e.into_inner())` 防中毒），改用户设置的用例用"备份 + `catch_unwind` + 恢复"，断言失败也要还原。
+碰注册表的测试只写隔离键（`Software\CursorStudio.Tests\...`；自启动 / 右键菜单用各自的 `TEST_KEY`），数据根指向临时目录，不备份 / 还原用户设置；隔离键让用例可以并行，只有共享同一个键的用例才需自行串行（防中毒取回锁：`unwrap_or_else(|e| e.into_inner())`）。
 
-动了文档、尤其是本文件的 `§x` / `决策 N` 引用，跑 `node scripts/doc_ref_check.mjs`：指空会列出 `文件:行号` 并以退出码 1 失败（不需要 dev server）。
+动了文档、尤其是本文件的 `§x` / `决策 N` 引用，跑 `node scripts/doc_ref_check.mjs`：指空会列出 `文件:行号` 并以退出码 1 失败（不需要 dev server）。`node scripts/design_audit.mjs` 发现违规同样以退出码 1 失败。
+
+CI 在 `.github/workflows/ci.yml`：`windows-latest` 上跑 `npm ci` → `npm run build` → `cargo test` → `design_audit` → `doc_ref_check`。
 
 ---
 
 ## 其余口径
 
-Windows 10/11 x64；全程无 UAC；应用主题 < 500ms；预览单帧最长边 128px、最多 32 帧；数据在 `%LOCALAPPDATA%\CursorStudio\`（`themes/` + `history.json`），卸载不删；仅简体中文，不做多语言。
+Windows 10/11 x64；全程无 UAC；应用主题 < 500ms；预览单帧最长边 128px、最多 32 帧；数据在 `%LOCALAPPDATA%\CursorStudio\`（`themes/` + `history.json`），卸载不删；主题包 50MB / 备份 1GiB 上限，预览源文件 8MB；仅简体中文，不做多语言。

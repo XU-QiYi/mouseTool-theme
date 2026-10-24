@@ -154,9 +154,17 @@ try {
   const curText = await waitToast("只支持");
   check("非 zip 文件被拒绝", curText.includes("只支持 .zip 主题包") && !curText.includes("文件夹"), curText);
 
-  await drag("drop", ["光标合集"]);
-  const dirText = await waitToast("文件夹");
-  check("文件夹拖入有明确说明", dirText.includes("整个文件夹暂不支持"), dirText);
+  // 文件夹导入（决策 16）：完整路径不再按扩展名拦，交给后端权威校验。
+  // 浏览器 mock 拿不到路径、File.name 里也塞不进反斜杠，这里直接问校验函数，
+  // 否则会把「浏览器通路只收 zip」误当成「文件夹不支持」。
+  const verdicts = await evaluate(`import('/src/hooks/useDragDropImport.ts').then((m) => ({
+    folder: m.validateDrop([{ name: "光标合集", path: "D:\\\\Themes\\\\光标合集" }]),
+    zip: m.validateDrop([{ name: "主题.zip", path: "D:\\\\Themes\\\\主题.zip" }]),
+    browser: m.validateDrop([{ name: "arrow.cur", path: "arrow.cur" }]),
+  }))`);
+  check("完整路径的文件夹放行（后端校验）", verdicts.folder === null, String(verdicts.folder));
+  check("完整路径的 zip 放行", verdicts.zip === null, String(verdicts.zip));
+  check("浏览器文件名通路仍只收 zip", verdicts.browser === "只支持 .zip 主题包", String(verdicts.browser));
 
   // 4. 数量校验
   await drag("drop", ["a.zip", "b.zip"]);

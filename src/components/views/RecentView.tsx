@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/layout/EmptyState";
-import { buildRecentItems, groupRecentByDay, timeOfDay } from "@/lib/themes";
+import { buildRecentItems, groupRecentByDay, appliedAtMachine, timeOfDay } from "@/lib/themes";
 import { cn } from "@/lib/utils";
 import { useThemeStore } from "@/stores/themeStore";
 import type { RecentItem } from "@/lib/themes";
@@ -47,7 +47,7 @@ export function RecentView() {
       <div className="flex min-h-0 flex-1 items-center justify-center">
         <EmptyState
           icon={History}
-          title="还没有切换记录"
+          title="还没有使用记录"
           description="应用任意一个主题后，这里会按时间留下一条记录，方便随时切回去"
           action={
             <Button variant="outline" onClick={() => setCurrentPage("gallery")}>
@@ -112,7 +112,7 @@ function Row({ item, active, first, last, onApply }: RowProps) {
       className="grid grid-cols-[48px_16px_1fr_auto] gap-x-2 rounded-lg py-2 transition-[background-color] duration-(--motion-fast) ease-standard hover:bg-muted/50"
     >
       <time
-        dateTime={entry.applied_at}
+        dateTime={appliedAtMachine(entry.applied_at)}
         className="pt-0.5 text-right text-2xs text-muted-foreground tabular-nums"
       >
         {timeOfDay(entry.applied_at)}

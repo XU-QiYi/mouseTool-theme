@@ -127,3 +127,15 @@ export function timeOfDay(appliedAt: string): string {
   const time = appliedAt.split(" ")[1];
   return time && /^\d{1,2}:\d{2}$/.test(time) ? time : appliedAt;
 }
+
+/**
+ * `applied_at` → `<time dateTime>` 可用的机器可读格式
+ *
+ * 后端存的是本地时区 `YYYY-MM-DD HH:mm`，HTML 的 datetime 属性要求日期与时间
+ * 之间用 `T`；原样塞进去是无效值，读屏与工具拿不到时间语义。
+ */
+export function appliedAtMachine(appliedAt: string): string {
+  const match = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})(:\d{2})?$/.exec(appliedAt);
+  if (!match) return appliedAt;
+  return `${match[1]}T${match[2]}${match[3] ?? ""}`;
+}

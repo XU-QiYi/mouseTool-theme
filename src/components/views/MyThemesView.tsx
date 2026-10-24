@@ -12,7 +12,7 @@ import { useImportTheme } from "@/hooks/useImportTheme";
 import { coverage, coverSlot, slotStats } from "@/lib/slots";
 import { mineThemes } from "@/lib/themes";
 import { cn } from "@/lib/utils";
-import { useThemeStore } from "@/stores/themeStore";
+import { actionBusyKey, useThemeStore } from "@/stores/themeStore";
 import type { CursorTheme } from "@/types/theme";
 
 /**
@@ -30,8 +30,9 @@ export function MyThemesView() {
   const activeThemeId = useThemeStore((s) => s.activeThemeId);
   const selectedId = useThemeStore((s) => s.selection.mine);
   const selectTheme = useThemeStore((s) => s.selectTheme);
+  const busy = useThemeStore((s) => s.busy);
   const { picking, pick } = useImportTheme();
-  const { exporting, pickAndExport } = useExportTheme();
+  const { isExporting, pickAndExport } = useExportTheme();
 
   const [pendingDelete, setPendingDelete] = useState<CursorTheme | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -118,6 +119,8 @@ export function MyThemesView() {
           {rows.map((theme) => {
             const selected = theme.id === selectedId;
             const isActive = theme.id === activeThemeId;
+            const exporting = isExporting(theme.id);
+            const deleting = Boolean(busy[actionBusyKey("delete", theme.id)]);
             const stats = slotStats(theme);
             const cover = coverSlot(theme);
             const [importDate, importTime] = theme.updated_at
@@ -196,7 +199,7 @@ export function MyThemesView() {
                       aria-label={`导出「${theme.name}」`}
                       title={exporting ? "导出中…" : "导出 ZIP"}
                       onClick={() => pickAndExport(theme)}
-                      disabled={exporting}
+                      disabled={exporting || deleting}
                       className="text-muted-foreground"
                     >
                       <Archive />
@@ -205,9 +208,15 @@ export function MyThemesView() {
                       variant="ghost"
                       size="icon-xs"
                       aria-label={`删除「${theme.name}」`}
-                      title={isActive ? "正在使用这个主题，请先切换到其它主题" : "删除此主题"}
+                      title={
+                        deleting
+                          ? "删除中…"
+                          : isActive
+                            ? "正在使用这个主题，请先切换到其它主题"
+                            : "删除此主题"
+                      }
                       onClick={() => requestDelete(theme)}
-                      disabled={isActive}
+                      disabled={isActive || deleting}
                       className="text-muted-foreground hover:text-destructive"
                     >
                       <Trash2 />

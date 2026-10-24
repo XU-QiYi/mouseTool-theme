@@ -13,7 +13,7 @@ import {
 } from "@/lib/settings-sections";
 import { coverSlot, slotStats } from "@/lib/slots";
 import { cn } from "@/lib/utils";
-import { useThemeStore } from "@/stores/themeStore";
+import { actionBusyKey, useThemeStore } from "@/stores/themeStore";
 
 /**
  * 侧栏两种形态：
@@ -65,10 +65,13 @@ function MainNav() {
   const restoreDefault = useThemeStore((s) => s.restoreDefault);
   const loadError = useThemeStore((s) => s.loadError);
   const importing = useThemeStore((s) => s.importing);
+  const importProgress = useThemeStore((s) => s.importProgress);
+  const busy = useThemeStore((s) => s.busy);
   const { picking, pick } = useImportTheme();
 
   const cover = activeTheme ? coverSlot(activeTheme) : undefined;
   const stats = activeTheme ? slotStats(activeTheme) : null;
+  const restoring = Boolean(busy[actionBusyKey("restore", "default")]);
 
   return (
     <>
@@ -77,6 +80,19 @@ function MainNav() {
           <FolderDown data-icon="inline-start" />
           {picking ? "选择中…" : importing ? "导入中…" : "导入主题"}
         </Button>
+        {importing && importProgress && (
+          <p
+            data-import-progress
+            aria-live="polite"
+            className="mt-1.5 truncate text-2xs text-muted-foreground"
+            title={importProgress.message}
+          >
+            {importProgress.message}
+            {importProgress.total > 0
+              ? `（${Math.min(importProgress.current, importProgress.total)}/${importProgress.total}）`
+              : ""}
+          </p>
+        )}
       </div>
 
       <nav aria-label="主导航" className="flex-1 space-y-0.5 px-3">
@@ -163,11 +179,18 @@ function MainNav() {
             size="xs"
             className="mt-2 w-full justify-start text-muted-foreground"
             onClick={restoreDefault}
-            disabled={!activeThemeId}
-            title={activeThemeId ? "还原系统默认光标" : "当前已是系统默认"}
+            disabled={!activeThemeId || restoring}
+            aria-busy={restoring}
+            title={
+              restoring
+                ? "正在还原…"
+                : activeThemeId
+                  ? "还原系统默认光标"
+                  : "当前已是系统默认"
+            }
           >
             <RotateCcw data-icon="inline-start" />
-            还原系统默认
+            {restoring ? "还原中…" : "还原系统默认"}
           </Button>
         </div>
       </div>

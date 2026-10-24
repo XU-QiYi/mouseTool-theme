@@ -9,7 +9,7 @@ import { DeleteThemeDialog } from "@/components/theme/DeleteThemeDialog";
 import { ThemeNameField } from "@/components/theme/ThemeNameField";
 import { useExportTheme } from "@/hooks/useExportTheme";
 import { coverage, coverSlot, slotStats } from "@/lib/slots";
-import { useThemeStore } from "@/stores/themeStore";
+import { actionBusyKey, useThemeStore } from "@/stores/themeStore";
 import type { CursorTheme } from "@/types/theme";
 
 interface ThemeInspectorProps {
@@ -54,10 +54,14 @@ function EmptyInspector({ style }: { style: CSSProperties }) {
 function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSProperties }) {
   const activeThemeId = useThemeStore((s) => s.activeThemeId);
   const applyTheme = useThemeStore((s) => s.applyTheme);
-  const { exporting, pickAndExport } = useExportTheme();
+  const busy = useThemeStore((s) => s.busy);
+  const { isExporting, pickAndExport } = useExportTheme();
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   const isActive = theme.id === activeThemeId;
+  const applying = Boolean(busy[actionBusyKey("apply", theme.id)]);
+  const deleting = Boolean(busy[actionBusyKey("delete", theme.id)]);
+  const exporting = isExporting(theme.id);
   const stats = slotStats(theme);
   const cover = coverSlot(theme);
 
@@ -115,9 +119,14 @@ function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSPropert
                 当前使用中
               </div>
             ) : (
-              <Button className="flex-1" onClick={() => applyTheme(theme.id)}>
+              <Button
+                className="flex-1"
+                onClick={() => applyTheme(theme.id)}
+                disabled={applying || deleting}
+                aria-busy={applying}
+              >
                 <Check data-icon="inline-start" />
-                应用此主题
+                {applying ? "应用中…" : "应用此主题"}
               </Button>
             )}
             <Button
@@ -126,7 +135,7 @@ function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSPropert
               aria-label="导出 ZIP"
               title={exporting ? "导出中…" : "导出 ZIP"}
               onClick={() => pickAndExport(theme)}
-              disabled={exporting}
+              disabled={exporting || deleting}
             >
               <Archive />
             </Button>
@@ -134,9 +143,9 @@ function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSPropert
               variant="outline"
               size="icon"
               aria-label="删除此主题"
-              title={deleteHint}
+              title={deleting ? "删除中…" : deleteHint}
               onClick={() => setConfirmOpen(true)}
-              disabled={!canDelete}
+              disabled={!canDelete || deleting || applying}
             >
               <Trash2 />
             </Button>

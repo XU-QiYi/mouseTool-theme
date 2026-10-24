@@ -29,7 +29,33 @@ pub const SLOT_DEFS: [(&str, &str, &str); 15] = [
 ];
 
 const CURSORS_KEY: &str = r"Control Panel\Cursors";
-const SCHEMES_KEY: &str = r"Control Panel\Cursors\Schemes";
+
+// 测试用线程内覆盖：用例只读写 HKCU 下的隔离键，不碰真实光标设置。
+// 与 `paths` 的测试覆盖同一套思路：cargo test 每个用例占一个线程，
+// 覆盖只影响当前用例；CI 里也不会改出任何用户可见的光标变化。
+#[cfg(test)]
+thread_local! {
+    static TEST_CURSORS_KEY: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// 当前使用的 Cursors 键路径（测试时可能是隔离键）
+fn cursors_key() -> String {
+    #[cfg(test)]
+    if let Some(path) = TEST_CURSORS_KEY.with(|slot| slot.borrow().clone()) {
+        return path;
+    }
+    CURSORS_KEY.to_string()
+}
+
+fn schemes_key() -> String {
+    format!(r"{}\Schemes", cursors_key())
+}
+
+#[cfg(test)]
+fn testing() -> bool {
+    TEST_CURSORS_KEY.with(|slot| slot.borrow().is_some())
+}
 
 /// 把 `%SystemRoot%\cursors\arrow.cur` 这类写法展开为真实路径
 fn expand_env(raw: &str) -> String {
@@ -117,9 +143,10 @@ fn parse_scheme(name: &str, raw: &str) -> CursorTheme {
 /// 读取注册表里所有已保存的光标方案
 pub fn read_system_schemes() -> Result<Vec<CursorTheme>, String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let key_path = schemes_key();
     let key = hkcu
-        .open_subkey_with_flags(SCHEMES_KEY, KEY_READ)
-        .map_err(|err| format!("无法打开注册表键 HKCU\\{SCHEMES_KEY}：{err}"))?;
+        .open_subkey_with_flags(&key_path, KEY_READ)
+        .map_err(|err| format!("无法打开注册表键 HKCU\\{key_path}：{err}"))?;
 
     let mut themes = Vec::new();
     for item in key.enum_values() {
@@ -140,9 +167,10 @@ pub fn read_system_schemes() -> Result<Vec<CursorTheme>, String> {
 /// 只写 HKCU，无需管理员权限。
 pub fn write_cursors(slots: &[CursorSlot], theme_name: &str) -> Result<(), String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let key_path = cursors_key();
     let key = hkcu
-        .open_subkey_with_flags(CURSORS_KEY, KEY_WRITE)
-        .map_err(|err| format!("无法打开注册表键 HKCU\\{CURSORS_KEY}：{err}"))?;
+        .open_subkey_with_flags(&key_path, KEY_WRITE)
+        .map_err(|err| format!("无法打开注册表键 HKCU\\{key_path}：{err}"))?;
 
     for (slot_key, _, _) in SLOT_DEFS.iter() {
         let path = slots
@@ -167,9 +195,10 @@ pub fn write_cursors(slots: &[CursorSlot], theme_name: &str) -> Result<(), Strin
 pub fn clear_cursors() -> Result<(), String> {
     let empty = String::new();
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let key_path = cursors_key();
     let key = hkcu
-        .open_subkey_with_flags(CURSORS_KEY, KEY_WRITE)
-        .map_err(|err| format!("无法打开注册表键 HKCU\\{CURSORS_KEY}：{err}"))?;
+        .open_subkey_with_flags(&key_path, KEY_WRITE)
+        .map_err(|err| format!("无法打开注册表键 HKCU\\{key_path}：{err}"))?;
 
     for (slot_key, _, _) in SLOT_DEFS.iter() {
         key.set_value(*slot_key, &empty)
@@ -189,6 +218,12 @@ pub fn clear_cursors() -> Result<(), String> {
 /// 此时只需让系统重新加载。若再带 `SPIF_UPDATEINIFILE`，系统会去回写用户配置，
 /// 在部分机器上该步骤返回 ERROR_INVALID_HANDLE(0x80070006)，使整个调用失败。
 pub fn refresh_cursors() -> Result<(), String> {
+    // 隔离模式下写的不是真实光标键，通知系统刷新既无意义也会干扰跑测试的人
+    #[cfg(test)]
+    if testing() {
+        return Ok(());
+    }
+
     use windows::Win32::UI::WindowsAndMessaging::{
         SystemParametersInfoW, SPIF_SENDCHANGE, SPI_SETCURSORS,
     };
@@ -205,9 +240,10 @@ pub fn refresh_cursors() -> Result<(), String> {
 /// 内存状态一重开就没了，会把已应用的主题当成可用主题再点一次。
 pub fn read_current_slots() -> Result<Vec<(String, String)>, String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let key_path = cursors_key();
     let key = hkcu
-        .open_subkey_with_flags(CURSORS_KEY, KEY_READ)
-        .map_err(|err| format!("无法读取注册表键 HKCU\\{CURSORS_KEY}：{err}"))?;
+        .open_subkey_with_flags(&key_path, KEY_READ)
+        .map_err(|err| format!("无法读取注册表键 HKCU\\{key_path}：{err}"))?;
 
     let mut slots = Vec::new();
     for (slot_key, _, _) in SLOT_DEFS.iter() {
@@ -233,8 +269,9 @@ pub fn read_scheme_name() -> String {
 /// 读取指定槽位的当前值，测试与备份用
 pub fn read_slot_value(slot_key: &str) -> Result<String, String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let key_path = cursors_key();
     let key = hkcu
-        .open_subkey_with_flags(CURSORS_KEY, KEY_READ)
+        .open_subkey_with_flags(&key_path, KEY_READ)
         .map_err(|err| format!("无法读取注册表键：{err}"))?;
     match key.get_value::<String, _>(slot_key) {
         Ok(value) => Ok(value),
@@ -261,9 +298,10 @@ pub fn relocate_cursor_paths(from_root: &Path, to_root: &Path) -> Result<usize, 
     }
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let key_path = cursors_key();
     let key = hkcu
-        .open_subkey_with_flags(CURSORS_KEY, KEY_WRITE)
-        .map_err(|err| format!("无法打开注册表键 HKCU\\{CURSORS_KEY}：{err}"))?;
+        .open_subkey_with_flags(&key_path, KEY_WRITE)
+        .map_err(|err| format!("无法打开注册表键 HKCU\\{key_path}：{err}"))?;
     for (slot_key, next) in &updates {
         key.set_value(slot_key.as_str(), next)
             .map_err(|err| format!("写入 {slot_key} 失败：{err}"))?;
@@ -275,24 +313,77 @@ pub fn relocate_cursor_paths(from_root: &Path, to_root: &Path) -> Result<usize, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// 隔离键守卫：用例结束删除整棵测试键，并还原线程内的覆盖
+    struct IsolatedRegistry {
+        path: String,
+    }
+
+    impl Drop for IsolatedRegistry {
+        fn drop(&mut self) {
+            let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+            let _ = hkcu.delete_subkey_all(&self.path);
+            TEST_CURSORS_KEY.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+
+    /// 每个用例一个独立键：不碰真实的 `Control Panel\Cursors`，
+    /// 也不需要备份/恢复用户的光标设置。
+    fn isolate(label: &str) -> IsolatedRegistry {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let path = format!(
+            r"Software\CursorStudio.Tests\{label}-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let _ = hkcu.delete_subkey_all(&path);
+        hkcu.create_subkey(&path).expect("建隔离注册表键");
+        hkcu
+            .create_subkey(format!(r"{path}\Schemes"))
+            .expect("建隔离 Schemes 子键");
+        TEST_CURSORS_KEY.with(|slot| *slot.borrow_mut() = Some(path.clone()));
+        IsolatedRegistry { path }
+    }
+
+    fn open_cursors(flags: u32) -> RegKey {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        hkcu.open_subkey_with_flags(cursors_key(), flags)
+            .expect("打开隔离光标键")
+    }
 
     #[test]
-    fn 能读出系统方案且槽位顺序正确() {
-        let themes = read_system_schemes().expect("读取系统方案不应失败");
-        println!("共 {} 个方案", themes.len());
+    fn 能读出方案列表且槽位顺序正确() {
+        let _guard = isolate("schemes");
 
-        for theme in &themes {
-            println!("[{}] {} 个槽位", theme.name, theme.cursors.len());
-            for slot in &theme.cursors {
-                println!("  {:<12} {}", slot.registry_key, slot.file_path);
-            }
-        }
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let schemes = hkcu
+            .open_subkey_with_flags(schemes_key(), KEY_WRITE)
+            .expect("打开隔离 Schemes 键");
+        schemes
+            .set_value("Beta", &r"C:\themes\beta.cur".to_string())
+            .expect("写 Beta");
+        schemes
+            .set_value(
+                "Alpha",
+                &r"%SystemRoot%\cursors\arrow.cur,,C:\themes\work.ani".to_string(),
+            )
+            .expect("写 Alpha");
 
-        let first = themes.first().expect("本机应至少有一个光标方案");
-        assert!(first.is_built_in);
-        assert!(first.id.starts_with("sys_"));
-        assert!(!first.cursors.is_empty());
-        assert!(!first.cursors[0].file_path.is_empty());
+        let themes = read_system_schemes().expect("读取方案列表不应失败");
+        assert_eq!(themes.len(), 2);
+        assert_eq!(themes[0].name, "Alpha", "应按名称排序");
+        assert!(themes[0].is_built_in);
+        assert_eq!(themes[0].id, "sys_Alpha");
+        assert_eq!(themes[0].cursors.len(), 2, "空槽位应被跳过");
+        assert_eq!(themes[0].cursors[0].registry_key, "Arrow");
+        assert_eq!(
+            themes[0].cursors[1].registry_key,
+            "AppStarting",
+            "空槽位不能让它后面的槽位串位"
+        );
+        assert!(!themes[0].cursors[0].file_path.starts_with('%'), "环境变量应展开");
     }
 
     #[test]
@@ -311,119 +402,101 @@ mod tests {
         assert!(expanded.ends_with(r"\cursors\arrow.cur"));
     }
 
-    /// 备份当前光标注册表设置，测试结束后原样还原
-    struct Backup {
-        slots: Vec<(String, String)>,
-        scheme_name: String,
-        default_value: String,
-    }
-
-    /// 碰注册表的测试必须串行，否则互相踩踏
-    static REGISTRY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     #[test]
     fn 能读出当前生效的光标槽位() {
-        let _guard = REGISTRY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = isolate("current");
+
+        let key = open_cursors(KEY_WRITE);
+        key.set_value("Arrow", &r"%SystemRoot%\cursors\arrow.cur".to_string())
+            .expect("写 Arrow");
+        key.set_value("Wait", &r"C:\themes\wait.ani".to_string())
+            .expect("写 Wait");
+        key.set_value("Hand", &String::new()).expect("写空槽位");
+        key.set_value("NotASlot", &r"C:\themes\bogus.cur".to_string())
+            .expect("写未知槽位");
+        key.set_value("SchemeName", &"演示".to_string()).expect("写方案名");
 
         let slots = read_current_slots().expect("读取当前光标不应失败");
-        assert!(slots.len() <= SLOT_DEFS.len(), "不得超过 15 个槽位");
-
-        for (key, path) in &slots {
-            assert!(
-                SLOT_DEFS.iter().any(|(known, _, _)| known == key),
-                "出现了未知槽位：{key}"
-            );
-            assert!(!path.trim().is_empty(), "{key} 的空值应在读取时被跳过");
-        }
-    }
-
-    impl Backup {
-        fn capture() -> Self {
-            Self {
-                slots: SLOT_DEFS
-                    .iter()
-                    .map(|(key, _, _)| (key.to_string(), read_slot_value(key).unwrap_or_default()))
-                    .collect(),
-                scheme_name: read_slot_value("SchemeName").unwrap_or_default(),
-                default_value: read_slot_value("").unwrap_or_default(),
-            }
-        }
-
-        fn restore(&self) {
-            let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-            let Ok(key) = hkcu.open_subkey_with_flags(CURSORS_KEY, KEY_WRITE) else {
-                return;
-            };
-            for (name, value) in &self.slots {
-                let _ = key.set_value(name.as_str(), value);
-            }
-            let _ = key.set_value("SchemeName", &self.scheme_name);
-            let _ = key.set_value("", &self.default_value);
-        }
+        assert_eq!(slots.len(), 2, "空值与未知槽位都应被跳过");
+        assert!(slots.iter().any(|(key, path)| {
+            key == "Arrow" && path.ends_with(r"\cursors\arrow.cur") && !path.starts_with('%')
+        }));
+        assert!(slots.iter().any(|(key, path)| key == "Wait" && path.ends_with("wait.ani")));
+        assert_eq!(read_scheme_name(), "演示");
     }
 
     #[test]
-    fn 应用主题会改写注册表且能原样恢复() {
-        let _guard = REGISTRY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let backup = Backup::capture();
+    fn 应用主题会写入全部槽位并清空空位() {
+        let _guard = isolate("write");
 
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let slots = vec![CursorSlot {
-                registry_key: "Arrow".to_string(),
-                display_name: "正常选择".to_string(),
-                english_name: "Normal Select".to_string(),
-                file_path: r"C:\Windows\Cursors\荧1.0\arrow.ani".to_string(),
-                file_type: "ani".to_string(),
-            }];
-            write_cursors(&slots, "测试方案").expect("写入应成功");
-
-            assert_eq!(
-                read_slot_value("Arrow").unwrap(),
-                r"C:\Windows\Cursors\荧1.0\arrow.ani"
-            );
-            assert_eq!(
-                read_slot_value("Hand").unwrap(),
-                "",
-                "主题未提供的槽位应被清空（回落到系统默认）"
-            );
-            assert_eq!(read_slot_value("SchemeName").unwrap(), "测试方案");
-            assert_eq!(read_slot_value("").unwrap(), "测试方案");
-        }));
-
-        // 断言失败也要还原用户原本的光标设置
-        backup.restore();
-        if let Err(panic) = outcome {
-            std::panic::resume_unwind(panic);
-        }
+        let slots = vec![CursorSlot {
+            registry_key: "Arrow".to_string(),
+            display_name: "正常选择".to_string(),
+            english_name: "Normal Select".to_string(),
+            file_path: r"C:\Windows\Cursors\荧1.0\arrow.ani".to_string(),
+            file_type: "ani".to_string(),
+        }];
+        write_cursors(&slots, "测试方案").expect("写入应成功");
 
         assert_eq!(
-            read_slot_value("Arrow").unwrap_or_default(),
-            backup.slots[0].1,
-            "恢复后应与备份一致"
+            read_slot_value("Arrow").unwrap(),
+            r"C:\Windows\Cursors\荧1.0\arrow.ani"
         );
+        assert_eq!(
+            read_slot_value("Hand").unwrap(),
+            "",
+            "主题未提供的槽位应被清空（回落到系统默认）"
+        );
+        assert_eq!(read_slot_value("SchemeName").unwrap(), "测试方案");
+        assert_eq!(read_slot_value("").unwrap(), "测试方案");
     }
 
     #[test]
     fn 恢复默认会清空槽位() {
-        let _guard = REGISTRY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let backup = Backup::capture();
+        let _guard = isolate("clear");
 
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            clear_cursors().expect("清空应成功");
-            for (key, _, _) in SLOT_DEFS.iter() {
-                assert_eq!(read_slot_value(key).unwrap(), "", "{key} 应为空");
-            }
-        }));
+        let key = open_cursors(KEY_WRITE);
+        key.set_value("Arrow", &r"C:\themes\arrow.cur".to_string())
+            .expect("写 Arrow");
 
-        backup.restore();
-        if let Err(panic) = outcome {
-            std::panic::resume_unwind(panic);
+        clear_cursors().expect("清空应成功");
+        for (slot_key, _, _) in SLOT_DEFS.iter() {
+            assert_eq!(read_slot_value(slot_key).unwrap(), "", "{slot_key} 应为空");
         }
+        assert_eq!(read_slot_value("SchemeName").unwrap(), "");
     }
 
     #[test]
-    fn 刷新光标可调用() {
-        let _guard = REGISTRY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        refresh_cursors().expect("刷新光标不应失败");
+    fn 隔离模式下刷新不触碰系统() {
+        let _guard = isolate("refresh");
+        refresh_cursors().expect("隔离模式应直接返回成功");
+    }
+
+    #[test]
+    fn 重绑只改旧根目录下的槽位() {
+        let _guard = isolate("relocate");
+
+        let key = open_cursors(KEY_WRITE);
+        key.set_value(
+            "Arrow",
+            &r"C:\old\themes\8f0f0f0f-0000-4000-8000-000000000000\arrow.cur".to_string(),
+        )
+        .expect("写旧路径");
+        key.set_value("Hand", &r"C:\Windows\Cursors\hand.cur".to_string())
+            .expect("写系统路径");
+
+        let changed = relocate_cursor_paths(Path::new(r"C:\old"), Path::new(r"C:\new"))
+            .expect("重绑应成功");
+        assert_eq!(changed, 1, "只应改旧根目录下的那一个槽位");
+        let relocated = read_slot_value("Arrow").unwrap();
+        assert!(
+            relocated.starts_with(r"C:\new\themes") && relocated.ends_with("arrow.cur"),
+            "旧根目录前缀应被替换，实际：{relocated}"
+        );
+        assert_eq!(
+            read_slot_value("Hand").unwrap(),
+            r"C:\Windows\Cursors\hand.cur",
+            "系统光标路径不应被改动"
+        );
     }
 }

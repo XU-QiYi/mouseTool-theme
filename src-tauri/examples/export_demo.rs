@@ -37,7 +37,11 @@ fn main() {
 
     println!("主题：{}（{} 个槽位，内置={}）", theme.name, theme.cursors.len(), theme.is_built_in);
 
-    match export_theme(theme, dest.to_string_lossy().into_owned()) {
+    let outcome = tauri::async_runtime::block_on(export_theme(
+        theme,
+        dest.to_string_lossy().into_owned(),
+    ));
+    match outcome {
         Ok(summary) => {
             println!("导出 {} 个光标文件 → {}", summary.file_count, dest.display());
             if !summary.skipped.is_empty() {

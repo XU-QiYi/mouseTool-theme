@@ -261,57 +261,24 @@ pub fn preview_file(path: &str) -> CursorPreview {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::GenericImage;
-
-    const CUR_FILE: &str = r"C:\Windows\Cursors\aero_arrow.cur";
-    const ANI_FILE: &str = r"C:\Windows\Cursors\荧1.0\arrow.ani";
+    use crate::utils::test_support::{fixture_ani, fixture_cur, TempDir};
 
     #[test]
-    fn 能解析系统静态光标() {
-        let bytes = std::fs::read(CUR_FILE).expect("系统应存在 aero_arrow.cur");
-        let p = parse_cur_preview(&bytes).expect("解析 .cur 应成功");
+    fn 能解析静态光标() {
+        let p = parse_cur_preview(&fixture_cur()).expect("解析 fixture .cur 应成功");
         assert!(!p.image.is_empty());
         assert!(!p.is_animated);
         assert_eq!(p.hotspot, (0, 0));
-        println!("cur 预览 base64 长度: {}", p.image.len());
     }
 
     #[test]
     fn 能解析动态光标且帧率合理() {
-        let bytes = std::fs::read(ANI_FILE).expect("系统应存在 荧1.0 arrow.ani");
-        let p = parse_ani(&bytes).expect("解析 .ani 应成功");
-        assert!(p.is_animated, "应有多个帧，实际 {}", p.frames.len());
-        assert!(p.rate_ms >= 16 && p.rate_ms <= 1000, "帧率异常: {}", p.rate_ms);
+        let p = parse_ani(&fixture_ani()).expect("解析 fixture .ani 应成功");
+        assert!(p.is_animated, "应有多帧，实际 {}", p.frames.len());
+        assert_eq!(p.frames.len(), 2);
+        assert_eq!(p.rate_ms, 100);
         assert!(p.frames.len() <= MAX_FRAMES);
-        println!("ani 帧数: {}，帧间隔: {}ms，热点: {:?}", p.frames.len(), p.rate_ms, p.hotspot);
-
-        // 落盘首帧与拼图，供人工核对
-        let dir = std::env::temp_dir();
-        let first = base64::engine::general_purpose::STANDARD
-            .decode(&p.image)
-            .expect("首帧应为合法 base64");
-        std::fs::write(dir.join("mousetool_cur_first.png"), &first).unwrap();
-
-        let count = p.frames.len().min(8);
-        let imgs: Vec<DynamicImage> = p.frames[..count]
-            .iter()
-            .filter_map(|f| {
-                let raw = base64::engine::general_purpose::STANDARD.decode(f).ok()?;
-                image::load_from_memory(&raw).ok()
-            })
-            .collect();
-        if !imgs.is_empty() {
-            let w = imgs.iter().map(|i| i.width()).max().unwrap();
-            let h = imgs.iter().map(|i| i.height()).max().unwrap();
-            let mut sheet = DynamicImage::new_rgba8(w * imgs.len() as u32, h);
-            for (i, im) in imgs.iter().enumerate() {
-                let _ = sheet.copy_from(im, i as u32 * w, 0);
-            }
-            sheet
-                .save(dir.join("mousetool_ani_sheet.png"))
-                .expect("拼图应能保存");
-            println!("拼图已保存: {}", dir.join("mousetool_ani_sheet.png").display());
-        }
+        assert_eq!(p.hotspot, (0, 0));
     }
 
     #[test]
@@ -324,11 +291,33 @@ mod tests {
 
     #[test]
     fn 缓存命中同一实例() {
-        preview_file(CUR_FILE);
-        let a = preview_file(CUR_FILE);
-        let b = preview_file(CUR_FILE);
+        let dir = TempDir::new("cursor-cache");
+        let file = dir.join("arrow.cur");
+        std::fs::write(&file, fixture_cur()).expect("写 fixture");
+        let path = file.to_string_lossy().into_owned();
+
+        preview_file(&path);
+        let a = preview_file(&path);
+        let b = preview_file(&path);
         assert_eq!(a.image, b.image);
-        assert!(CACHE.lock().unwrap().contains_key(&cache_key(Path::new(CUR_FILE)).unwrap()));
+        assert!(CACHE
+            .lock()
+            .unwrap()
+            .contains_key(&cache_key(&file).unwrap()));
+    }
+
+    #[test]
+    fn 超过预览上限的文件不读也不缓存() {
+        let dir = TempDir::new("cursor-large");
+        let file = dir.join("huge.cur");
+        let handle = std::fs::File::create(&file).expect("建大文件");
+        handle
+            .set_len(limits::MAX_PREVIEW_BYTES + 1)
+            .expect("撑大文件");
+
+        assert!(cache_key(&file).is_none(), "超限文件不该生成缓存键");
+        let p = preview_file(&file.to_string_lossy());
+        assert!(p.image.is_empty());
     }
 
     #[test]

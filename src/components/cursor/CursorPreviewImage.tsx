@@ -45,7 +45,8 @@ export function CursorPreviewImage({ slot, size = "md" }: CursorPreviewImageProp
   return (
     <img
       src={`data:image/png;base64,${preview.image}`}
-      alt={slot.display_name}
+      // 预览图是装饰：槽位名 / 主题名就在旁边，读屏再念一遍光标名只是噪音
+      alt=""
       className={`${IMAGE[size]} object-contain`}
     />
   );

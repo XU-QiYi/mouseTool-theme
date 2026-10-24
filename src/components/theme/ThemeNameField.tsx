@@ -4,7 +4,7 @@ import { Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { useThemeStore } from "@/stores/themeStore";
+import { actionBusyKey, useThemeStore } from "@/stores/themeStore";
 import type { CursorTheme } from "@/types/theme";
 
 interface ThemeNameFieldProps {
@@ -28,6 +28,7 @@ interface ThemeNameFieldProps {
  */
 export function ThemeNameField({ theme, nameClassName, compact = false }: ThemeNameFieldProps) {
   const renameTheme = useThemeStore((s) => s.renameTheme);
+  const renaming = useThemeStore((s) => Boolean(s.busy[actionBusyKey("rename", theme.id)]));
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(theme.name);
   const draftRef = useRef(theme.name);
@@ -48,6 +49,7 @@ export function ThemeNameField({ theme, nameClassName, compact = false }: ThemeN
   const commitName = () => {
     if (!editing) return;
     setEditing(false);
+    if (renaming) return;
     const name = draftRef.current.trim();
     if (name && name !== theme.name) void renameTheme(theme.id, name);
   };
@@ -93,8 +95,10 @@ export function ThemeNameField({ theme, nameClassName, compact = false }: ThemeN
           variant="ghost"
           size="icon-xs"
           aria-label="重命名"
-          title="重命名"
+          aria-busy={renaming}
+          title={renaming ? "改名中…" : "重命名"}
           onClick={startEdit}
+          disabled={renaming}
           className={cn(
             "shrink-0 text-muted-foreground opacity-60 transition-opacity duration-(--motion-fast) ease-standard hover:opacity-100",
             compact && "size-5",

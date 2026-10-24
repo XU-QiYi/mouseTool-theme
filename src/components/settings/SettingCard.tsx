@@ -49,7 +49,7 @@ export function SettingCard({
     >
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <p className="text-sm font-medium">{title}</p>
+          <h3 className="text-sm font-medium">{title}</h3>
           <p className="mt-1 text-xs text-muted-foreground">{description}</p>
         </div>
         {action && <div className="shrink-0">{action}</div>}

@@ -1,14 +1,13 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
-use std::path::Path;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use crate::models::{ApplyOutcome, CursorSlot, CursorTheme, ThemesResult};
-use crate::utils::{history, importer, inf_export, ops, paths, progress, registry, theme_paths, validation};
+use crate::utils::{history, importer, inf_export, ops, paths, registry, theme_paths, validation};
 
 /// `export_theme` 的返回值：跳过项要说清是哪个槽位，否则用户不知道少了什么
 #[derive(Debug, Serialize)]

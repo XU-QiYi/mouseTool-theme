@@ -15,6 +15,9 @@ interface AniPlayerProps {
  * 只在**看得见**的时候跑：一个 15 槽位主题在检查器里会同时挂十几块画布，
  * 每块都是一条 setTimeout 链；滚出视野之后还照跑，纯属白烧 CPU。
  * 停表时保留最后一帧，所以视觉上没有任何变化。
+ *
+ * 系统开启「减少动态效果」时只画第一帧：帧间切换本身就是动画，
+ * 在这个偏好下不该继续播放；偏好中途改变也会跟着停/续。
  */
 export function AniPlayer({ frames, rateMs, className = "max-h-12 max-w-12" }: AniPlayerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -31,6 +34,11 @@ export function AniPlayer({ frames, rateMs, className = "max-h-12 max-w-12" }: A
     /** 当前是否停表（离屏或窗口不可见） */
     let blocked = false;
 
+    const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let reduced = motionQuery.matches;
+    /** 是否至少画过一帧：减少动态效果下只在首次显示时画一次 */
+    let drawn = false;
+
     const canvas = canvasRef.current;
 
     const decode = (b64: string) =>
@@ -41,14 +49,20 @@ export function AniPlayer({ frames, rateMs, className = "max-h-12 max-w-12" }: A
         img.src = `data:image/png;base64,${b64}`;
       });
 
-    const step = () => {
-      if (cancelled || blocked) return;
+    const draw = () => {
       if (!canvas || images.length === 0) return;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(images[index % images.length], 0, 0);
       index += 1;
+      drawn = true;
+    };
+
+    const step = () => {
+      if (cancelled || blocked) return;
+      draw();
+      if (reduced) return;
       timer = window.setTimeout(step, Math.max(rateMs, 16));
     };
 
@@ -65,7 +79,7 @@ export function AniPlayer({ frames, rateMs, className = "max-h-12 max-w-12" }: A
       if (next === blocked) return;
       blocked = next;
       if (blocked) stop();
-      else step();
+      else if (!reduced || !drawn) step();
     };
 
     Promise.all(frames.map(decode))
@@ -92,11 +106,19 @@ export function AniPlayer({ frames, rateMs, className = "max-h-12 max-w-12" }: A
     const onVisibilityChange = () => sync();
     document.addEventListener("visibilitychange", onVisibilityChange);
 
+    const onMotionChange = () => {
+      reduced = motionQuery.matches;
+      if (reduced) stop();
+      else if (!blocked) step();
+    };
+    motionQuery.addEventListener("change", onMotionChange);
+
     return () => {
       cancelled = true;
       stop();
       observer?.disconnect();
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      motionQuery.removeEventListener("change", onMotionChange);
       images = [];
     };
   }, [key, frames, rateMs]);

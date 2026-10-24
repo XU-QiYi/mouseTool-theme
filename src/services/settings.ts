@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-import { inTauri } from "@/services/theme";
+import { inTauri, type TaskProgress } from "@/services/theme";
 import { MOCK_THEMES } from "@/services/mock";
 
 /**
@@ -309,16 +309,44 @@ export interface ImportBackupSummary {
   warnings: string[];
 }
 
-/** 导出全部主题与使用记录为备份 zip */
-export function exportBackup(destPath: string): Promise<ExportBackupSummary> {
-  if (!inTauri) return Promise.resolve({ themes: 0, files: 0, warnings: [] });
-  return invoke<ExportBackupSummary>("export_backup", { destPath });
+/** 导出全部主题与使用记录为备份 zip；进度来自 `backup-progress` 事件 */
+export async function exportBackup(
+  destPath: string,
+  onProgress?: (progress: TaskProgress) => void,
+): Promise<ExportBackupSummary> {
+  if (!inTauri) return { themes: 0, files: 0, warnings: [] };
+
+  let unlisten: (() => void) | undefined;
+  if (onProgress) {
+    unlisten = await listen<TaskProgress>("backup-progress", (event) => {
+      onProgress(event.payload);
+    });
+  }
+  try {
+    return await invoke<ExportBackupSummary>("export_backup", { destPath });
+  } finally {
+    unlisten?.();
+  }
 }
 
-/** 从备份 zip 合并恢复 */
-export function importBackup(zipPath: string): Promise<ImportBackupSummary> {
+/** 从备份 zip 合并恢复；进度来自 `backup-progress` 事件 */
+export async function importBackup(
+  zipPath: string,
+  onProgress?: (progress: TaskProgress) => void,
+): Promise<ImportBackupSummary> {
   if (!inTauri) {
-    return Promise.resolve({ themes_added: 0, themes_skipped: 0, history_added: 0, warnings: [] });
+    return { themes_added: 0, themes_skipped: 0, history_added: 0, warnings: [] };
   }
-  return invoke<ImportBackupSummary>("import_backup", { zipPath });
+
+  let unlisten: (() => void) | undefined;
+  if (onProgress) {
+    unlisten = await listen<TaskProgress>("backup-progress", (event) => {
+      onProgress(event.payload);
+    });
+  }
+  try {
+    return await invoke<ImportBackupSummary>("import_backup", { zipPath });
+  } finally {
+    unlisten?.();
+  }
 }

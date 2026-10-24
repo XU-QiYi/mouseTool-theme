@@ -26,6 +26,10 @@
 | 15 | 导入时 `.inf` 的槽位优先级 | 有 `.inf` 听 `.inf`，没带或解析不了才按文件名推断（已实现 2026-10-24，`utils/inf_parse.rs`） |
 | 16 | 文件夹导入的流程选择 | 与 zip 共用同一套导入流程（压缩包先解压、文件夹直接进后续步骤），错误文案天然统一（已实现 2026-10-24） |
 | 17 | 主题槽位路径与目录迁移 | `theme.json` / 备份只存相对路径、运行时拼绝对；旧绝对路径兼容；换目录走暂存 + 校验 + 原子切换 + 回滚（已实现 2026-10-25） |
+| 18 | 归档限额与 IPC 输入校验 | 主题包 / 备份共用一个限额模块（总量、单文件、条目数、深度、条目名白名单）；15 槽位白名单、路径包含、预览 / 光标文件上限、`dest_path` 与 `theme.id` 校验都在后端收口 |
+| 19 | 重操作的执行模型 | 所有 I/O 命令进 `spawn_blocking`；导入 / 备份 / 迁移发进度事件；三类重操作共用一把 `try_lock` 互斥锁，冲突立即失败而不是排队 |
+| 20 | 交互安全与无障碍 | 按动作 / 按主题的 busy 状态、导出文件名清洗、恢复前确认、顶层 ErrorBoundary、更新检查 8 秒超时、外链白名单；键盘分段控件、标题层级、减少动态、装饰图 `alt=""`、`<time>` 语义 |
+| 21 | 测试隔离与 CI | 测试用临时目录 + 生成的光标 fixture；注册表用例写独立的 `CursorStudio.Tests` 键并在结束时删除；GitHub Actions 跑 build / cargo test / design_audit / doc_ref_check |
 
 ---
 
@@ -468,6 +472,90 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 
 ---
 
+## 决策 18：归档限额与 IPC 输入都在后端收口
+
+**结论**（2026-10-25，随安全加固实现）
+
+### 18.1 主题包与备份共用一套限额代码
+
+- 唯一来源是 `utils/limits.rs`。两种包只在**常量**上不同，读取、记账、报错、清理走同一套逻辑：
+
+| 包 | 解压总量 | 单文件 | 条目数 | 目录深度 | 条目名长度 |
+|---|---|---|---|---|---|
+| 主题包 `THEME_LIMITS` | 50MB | 20MB | 512 | 8 层 | 240 字符 |
+| 备份 `BACKUP_LIMITS` | 1GiB | 64MB | 4096 | 10 层 | 240 字符 |
+
+- **流式复制**：`copy_bounded` 每次读 64KB，超出预算立刻停止并返回中文错误，不把整个条目读进内存；`ArchiveBudget` 按实际写入字节记账，压缩包声明的大小不可信。
+- **文件夹导入同规**：`ScanBudget` 用同一组 `THEME_LIMITS` 限制递归扫描的深度、文件数与总大小，不是「zip 有上限、文件夹随便进」。
+- **超限即清理**：zip 解压临时目录、落盘到一半的主题目录、恢复备份本次新建的主题目录都在错误路径上删除，不留半成品。
+- 归档条目名先过白名单（`safe_relative_parts`）：拒绝 `..`、绝对路径、盘符 / 冒号、控制字符、Windows 非法字符、结尾空格 / 点、`CON`/`NUL`/`COM1` 等保留名与超深路径；`.DS_Store`、`__MACOSX` 这类垃圾条目静默跳过。**整包拒绝，而不是跳过坏条目**——一个恶意条目足以说明这个包不可信。
+- 预览源文件上限 8MB（`MAX_PREVIEW_BYTES`），光标文件读取 / 应用 / 导出上限 20MB（`MAX_CURSOR_FILE_BYTES`）。
+
+### 18.2 前端传来的结构一律不信
+
+- `utils/validation.rs` 集中做 IPC 校验，命令层只把错误原样交给用户：
+  - `validate_theme_slots`：槽位键必须在 15 个标准槽位内、不得重复、路径必须是 `.cur/.ani/.ico` 且非空；
+  - `ensure_theme_id_matches_dir`：用户主题 ID 必须是规范小写 UUID，主题目录存在且**目录名 = ID**，`theme.json` 里的 `id` 也必须一致；系统方案只要求 `sys_` 前缀且没有目录；
+  - `ensure_cursor_file`：canonicalize 后必须落在**主题目录或 `%SystemRoot%\Cursors`** 内（系统方案走 `ensure_readable_cursor_file`，Windows 允许已保存方案引用任意目录，只校验存在 / 类型 / 体积）；
+  - `preview_path_if_allowed`：预览路径先过同一套来源校验，再卡 8MB，不满足就降级为空预览而不是报错；
+  - `validate_dest_path`：导出 / 备份目标必须有存在的父目录、`.zip` 后缀、文件名不含非法字符、不是目录；备份来源走 `validate_source_file`；
+  - `sanitize_loaded_slots`：读盘时未知槽位、重复槽位、越出主题目录的路径丢弃并写入 warning，不让坏数据进入内存。
+- **为什么**：`theme_id` 会参与字符串拼路径、`CursorTheme` 来自 WebView，两者都属于不可信输入；解压炸弹和路径穿越则是压缩包入口的经典事故。把限额与校验各收成一个模块，避免「主题包加了、备份忘了」这类漂移。
+
+---
+
+## 决策 19：重操作后台执行、进度可见、互斥立即失败
+
+**结论**（2026-10-25，随命令异步化实现）
+
+- **所有触及文件 / 注册表 / 进程的命令都进 `tauri::async_runtime::spawn_blocking`**，包括主题读写、预览解码、备份、设置、系统集成；命令本身保持 `async`，主线程只做参数搬运与结果转发。`spawn_blocking` 失败统一转成「××任务异常退出（…）」。
+- **进度事件**：导入 `import-progress`、备份导出 / 恢复 `backup-progress`、主题目录迁移 `themes-dir-progress`；载荷是 `TaskProgress { stage, current, total, message }`（迁移沿用 `MoveProgress` 的阶段）。解压按条目推进，`ProgressThrottle` 只在百分比变化时发一次，避免大包每 64KB 都撞状态。
+- **互斥**：`utils/ops.rs` 的全局 `try_begin(label)` 用 `try_lock`，导入、备份导出 / 恢复、主题目录迁移共用一把锁；冲突时**立即**返回「另一个操作正在进行（导入 / 恢复 / 迁移），请等它完成后再××」，不排队——排队会让用户连点两下后收到两次结果。前一个任务 panic 导致锁中毒时恢复内层，不让一次失败永久堵死后续操作。
+- **界面配合**：导入按钮旁显示进度文案与 `current/total`，备份恢复显示阶段进度条，迁移确认框内显示阶段；按钮在对应操作期间禁用并带 `aria-busy`。
+
+**为什么**：解压 50MB、恢复 1GiB 备份、复制整个主题目录都是同步阻塞活，放在 Tauri 命令线程会直接冻结窗口；进度事件是「没卡死」的唯一证据。互斥锁解决的是同一批文件被两个操作同时改写（半成品目录、迁移与恢复互相踩踏），失败要快、要说人话。
+
+---
+
+## 决策 20：交互安全要有反馈，无障碍是基线
+
+**结论**（2026-10-25，随交互与可访问性改造实现）
+
+### 20.1 每个动作自己忙，不搞全局转圈
+
+- busy 状态按 `动作:主题 ID` 记（`actionBusyKey` / `withBusyFlag`）：应用、改名、删除、导出各自加锁，操作 A 不会把操作 B 的按钮一起禁用。重复点击在 store 层直接忽略，失败/成功后一定在 `finally` 里释放。
+- 删除对话框在执行期间拒绝关闭、按钮显示「删除中…」；改名输入框与铅笔按钮同理；检查器与表格行的按钮都按同一份 busy 状态禁用，避免两处状态不一致。
+- **导出默认文件名要清洗**：`sanitizeFileName` 去掉 `\ / : * ? " < > |` 与控制字符、结尾空格 / 点，Windows 保留设备名追加 `_`，最长 80 字符。主题名可以随便起，但落成文件名必须能用。
+- **恢复备份前默认确认**：恢复是合并语义（不覆盖已有），但仍会写数据目录，先展示来源与说明再执行；迁移沿用决策 17 的确认框。
+- **顶层 ErrorBoundary** 包住整个 App：渲染异常显示可读的兜底页与「重新加载」，而不是纯白窗口。
+- **网络有边界**：检查更新 8 秒超时（`AbortController`，超时文案单独说明）；外链只允许 `https://github.com/...`，其余 `console.warn` + 提示「已阻止打开外部链接」，不走系统 opener。
+
+### 20.2 无障碍与语义
+
+- `Segmented` 按 **radiogroup + roving tabindex** 工作：`←/→` 循环切换、`Home/End` 到首尾，焦点跟随选中项；只有当前项 `tabIndex=0`，Tab 不会在三个按钮间逐个停留。
+- 标题层级固定为 **页面 `h1`（PageHeader）→ 分组 `h2` → 卡片 `h3`（SettingCard）**，不靠字号冒充标题。
+- `AniPlayer` 尊重 `prefers-reduced-motion`：降级时只画一帧并停止定时器，系统设置变化时实时响应；恢复后重新播放。动效规范见 `motion.md` §5。
+- 光标预览图是**装饰性内容**（旁边已有槽位名称），一律 `alt=""`，不让读屏重复念文件名。
+- 「最近使用」的文案统一为「使用记录」；时间用 `<time dateTime="YYYY-MM-DDTHH:mm:ss">` 表达（本地存储格式 `YYYY-MM-DD HH:mm:ss` 由 `appliedAtMachine` 转成机器可读值）。
+
+**为什么**：安全反馈的第一原则是「用户知道自己点的那一下有没有生效」；全局 busy 会让无关操作一起变灰，反而制造焦虑。键盘、标题、减少动态、图片替代文本是桌面应用的基本盘，不是加分项。
+
+---
+
+## 决策 21：测试不碰真实数据，CI 守住四条底线
+
+**结论**（2026-10-25，随测试隔离与 CI 实现）
+
+- **不碰真实 `%LOCALAPPDATA%`**：`utils/test_support.rs` 提供手写 `TempDir`（不引 `tempfile`，遵守零新依赖）与生成的最小 `.cur` / `.ani` fixture；测试用 `paths::use_test_roots` 把数据根临时指到临时目录，结束后恢复。
+- **不碰真实光标设置**：注册表测试不再写用户的 `HKCU\Control Panel\Cursors`，而是在 `Software\CursorStudio.Tests\<label>-<pid>-<n>` 下建隔离键；`registry` 通过线程局部 `TEST_CURSORS_KEY` 重定向所有读写，`IsolatedRegistry` 在 Drop 时删除整棵测试键。隔离模式下 `refresh_cursors` 直接 no-op，不会调用 `SPI_SETCURSORS`。
+- 隔离键让注册表用例可以并行；只有确实共享同一个键的用例才需要自行串行（防中毒取回锁：`unwrap_or_else(|e| e.into_inner())`）。
+- **CI**（`.github/workflows/ci.yml`）：`windows-latest` + Node 22 + Rust stable，依次跑 `npm ci` → `npm run build` → `cargo test`（`src-tauri`）→ `node scripts/design_audit.mjs` → `node scripts/doc_ref_check.mjs`。先 build 是故意的：`cargo test` 编译期不需要 dist，但保持与本地验证顺序一致，也顺手把前端类型错误挡在 CI 上。
+- `design_audit.mjs` 改为按仓库相对路径输出，并在发现非 2px 网格间距、字号魔法值、裸时长、`transition-all` 时**以退出码 1 失败**，不再只是打印报告。
+
+**为什么**：测试改真实光标会让开发者一边跑测试一边看到鼠标闪变，CI 上则直接污染 runner；临时目录 + fixture 让测试可重复、可并行。CI 不覆盖需要 WebView2 的界面脚本，但类型、后端、设计 token 与文档引用这四类回归能在提交时拦下。
+
+---
+
 ## 附录 A：技术栈定格
 
 **Tauri 2 + React 19 + TypeScript + Vite + Tailwind CSS 4 + shadcn/ui（base-nova / `@base-ui/react`）+ zustand + Rust**。
@@ -495,7 +583,8 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 | 光标槽位卡 | **不可点**，也不做 hover 暗示（不可点的东西不该长得像能点） |
 | 重命名 | 只改 `theme.json` 的 `name`，目录名保持 UUID；`updated_at` 不动，它承担"导入于"语义 |
 | 删除保护 | 使用中不可删（UI 禁用 → store 拦截 → 后端 UUID 校验）；系统方案不可删 |
-| 主题包大小 | 50MB 上限，超出直接拒绝并说明怎么减小 |
+| 归档大小 | 主题包 50MB / 单文件 20MB / 512 条目 / 8 层；备份 1GiB / 单文件 64MB / 4096 条目 / 10 层。共用 `utils/limits.rs`，流式复制、超限清理（决策 18） |
+| 光标与预览上限 | 光标文件 20MB；预览源文件 8MB，超出直接降级为空预览（决策 18） |
 | `scripts/clean_c_drive.ps1` / `.py` | 与本项目无关的遗留脚本，文档不引用；建议尽快从仓库移除 |
 | 窗口配置 | `transparent: false` + `decorations: true`（曾试过透明窗口，已放弃） |
 | dev server | 前台用 `npm run tauri dev`；后台验证只用 `npm run dev:bg` / `dev:stop`，禁止 `npm run dev \| head` 这类管道启动 |
