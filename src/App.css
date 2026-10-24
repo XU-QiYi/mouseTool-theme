@@ -233,6 +233,43 @@
   animation: enter-fade var(--motion-base) var(--ease-standard) both;
 }
 
+/* Toast 倒计时条：贴卡片底边的 scaleX 由 1 缩到 0，条长就是"剩余寿命"。
+   两处刻意偏离"只写 --motion-* / ease-standard"硬规则，因为它是**读数**不是装饰：
+   1. 时长是数据（等于该条 toast 的 timeout，3.2–6s），由组件用 animation-duration 内联注入 —— 同 FLIP 的 JS 侧补间；
+   2. 缓动必须 linear：ease 会让"剩余时间"的读数失真（前慢后快 = 报少了再补）。
+   挂起必须和 base-ui 的计时器同进退（它是记账式暂停：存下 remaining，恢复时接着跑），
+   信号分两路，见 toaster.tsx 的 useCountdownPauseMirror：
+   ① data-expanded（hovering || focused）由 base-ui 自己打，覆盖悬停/键盘聚焦/触屏/退场收尾；
+   ② data-toast-window-blurred / data-toast-force-run 镜像它不写 DOM 的窗口失焦与"无条件恢复"口子。
+   少挂任何一路，都会出现"条走完了、toast 还在"或反过来 */
+@keyframes toast-countdown {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+@utility toast-countdown {
+  transform-origin: left;
+  animation-name: toast-countdown;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+html[data-toast-window-blurred] [data-slot="toast-progress"],
+html:not([data-toast-force-run]) [data-slot="toast"][data-expanded] [data-slot="toast-progress"] {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* 倒计时条的存在意义就是"看着它缩短"；减少动态下整体不显示，超时行为不变 */
+  [data-slot="toast-progress"] {
+    display: none;
+  }
+}
+
 /* 光标预览面：透明 PNG 需要棋盘格底才分得清白光标 */
 @utility preview-surface {
   background-color: var(--preview-bg);

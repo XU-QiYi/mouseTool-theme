@@ -19,6 +19,11 @@ const TIMEOUT: Record<ToastKind, number> = {
 };
 
 function show(kind: ToastKind, title: string, description?: string) {
+  // 新 toast 落地时 base-ui 会整体 pauseTimers（addToast 的 expandedOrOutOfFocus 分支，
+  // 连旧条一起挂起）——倒计时条的"无条件恢复"豁免必须此刻收回，否则旧条继续跑而计时器已冻住。
+  // 豁免机制见 App.css 的 toast-countdown 与 toaster.tsx 的 useCountdownPauseMirror
+  document.documentElement.removeAttribute("data-toast-force-run");
+
   return toastManager.add({
     type: kind,
     title,
