@@ -9,7 +9,7 @@ pub struct CursorSlot {
     pub display_name: String,
     /// 英文名，如 `Normal Select`
     pub english_name: String,
-    /// 光标文件绝对路径
+    /// 光标的运行时绝对路径；`theme.json` 里落盘的是相对主题目录的路径
     pub file_path: String,
     /// 文件类型：`cur` 或 `ani`
     pub file_type: String,

@@ -4,9 +4,12 @@
 //! 改完即生效——自启动写注册表、关闭行为即时同步托盘、主题目录走迁移命令。
 
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
-use crate::utils::{autostart, paths, settings, settings::CloseBehavior, themes_dir, tray};
+use crate::utils::{
+    autostart, ops, paths, settings, settings::CloseBehavior, themes_dir, tray,
+};
+use crate::utils::themes_dir::{ThemesDirChange, ThemesDirPlan};
 
 /// 给界面的设置快照：行为偏好 + 解析后的真实主题目录
 #[derive(Debug, Serialize)]
@@ -84,11 +87,42 @@ pub fn set_autostart(enable: bool) -> Result<AutostartStatus, String> {
     Ok(AutostartStatus { enabled, exe_path })
 }
 
-/// 更换主题存储目录（`None` = 回默认），现有主题一起搬过去，返回更新后的快照
+/// 更换主题存储目录的结果：设置快照 + 搬运报告
+#[derive(Debug, Serialize)]
+pub struct ThemesDirChangeResult {
+    pub settings: SettingsSnapshot,
+    pub report: ThemesDirChange,
+}
+
+/// 迁移前的预检：校验目标并统计源目录，不碰任何文件
 ///
-/// 搬运成功前不改设置：中途失败原目录完好，界面不会指向一个空目录。
+/// 确认对话框用它展示源、目标、主题数量与体积；校验不过在这里就给出人话，
+/// 用户不会点了「开始迁移」才发现目录选错。
 #[tauri::command]
-pub fn set_themes_dir(path: Option<String>) -> Result<SettingsSnapshot, String> {
-    themes_dir::change(path)?;
-    Ok(snapshot(&settings::read()))
+pub fn preview_themes_dir(path: Option<String>) -> Result<ThemesDirPlan, String> {
+    themes_dir::preview(path.as_deref())
+}
+
+/// 更换主题存储目录（`None` = 回默认），现有主题一起搬过去
+///
+/// 复制、校验、切换都在后台线程执行，进度通过 `themes-dir-progress` 事件推给
+/// 界面；命令返回时要么全部成功，要么已回滚到原目录。
+#[tauri::command]
+pub async fn set_themes_dir(
+    app: AppHandle,
+    path: Option<String>,
+) -> Result<ThemesDirChangeResult, String> {
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        let emitter = app.clone();
+        themes_dir::change(path, move |progress| {
+            let _ = emitter.emit("themes-dir-progress", progress);
+        })
+    })
+    .await
+    .map_err(|err| format!("迁移任务异常退出（{err}）"))??;
+
+    Ok(ThemesDirChangeResult {
+        settings: snapshot(&settings::read()),
+        report,
+    })
 }

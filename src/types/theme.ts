@@ -3,6 +3,7 @@ export interface CursorSlot {
   registry_key: string;
   display_name: string;
   english_name: string;
+  /** 运行时绝对路径；落盘到 theme.json 时只存相对主题目录的路径 */
   file_path: string;
   file_type: string;
 }

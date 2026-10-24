@@ -6,7 +6,7 @@ use commands::backup::{export_backup, import_backup};
 use commands::cursor::get_cursor_preview;
 use commands::data::{get_data_dir, open_data_dir};
 use commands::settings::{
-    get_autostart, get_settings, set_autostart, set_themes_dir, update_settings,
+    get_autostart, get_settings, preview_themes_dir, set_autostart, set_themes_dir, update_settings,
 };
 use commands::system::{
     get_windows_version, get_zip_menu_registered, open_mouse_panel, set_zip_menu,
@@ -63,6 +63,7 @@ pub fn run() {
             update_settings,
             get_autostart,
             set_autostart,
+            preview_themes_dir,
             set_themes_dir,
             export_backup,
             import_backup

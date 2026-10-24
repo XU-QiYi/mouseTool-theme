@@ -1,7 +1,10 @@
 use winreg::enums::{RegType, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
 use winreg::{RegKey, RegValue};
 
+use std::path::Path;
+
 use crate::models::{CursorSlot, CursorTheme};
+use crate::utils::theme_paths;
 
 /// 15 个标准光标槽位：(注册表键名, 中文名, 英文名)
 ///
@@ -237,6 +240,36 @@ pub fn read_slot_value(slot_key: &str) -> Result<String, String> {
         Ok(value) => Ok(value),
         Err(_) => Ok(String::new()),
     }
+}
+
+/// 主题目录搬家后，把注册表里仍指向旧根目录的光标路径改到新根目录
+///
+/// 只改 `from_root` 之下的槽位值，其它路径（系统光标、用户手选）原样保留。
+/// 返回改写的槽位数；有改动才刷新系统光标，避免无谓地弹一下鼠标。
+pub fn relocate_cursor_paths(from_root: &Path, to_root: &Path) -> Result<usize, String> {
+    let current = read_current_slots()?;
+    let mut updates: Vec<(String, String)> = Vec::new();
+    for (slot_key, raw_path) in &current {
+        let Some(relative) = theme_paths::relative_to(Path::new(raw_path), from_root) else {
+            continue;
+        };
+        let next = to_root.join(relative).to_string_lossy().into_owned();
+        updates.push((slot_key.clone(), next));
+    }
+    if updates.is_empty() {
+        return Ok(0);
+    }
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let key = hkcu
+        .open_subkey_with_flags(CURSORS_KEY, KEY_WRITE)
+        .map_err(|err| format!("无法打开注册表键 HKCU\\{CURSORS_KEY}：{err}"))?;
+    for (slot_key, next) in &updates {
+        key.set_value(slot_key.as_str(), next)
+            .map_err(|err| format!("写入 {slot_key} 失败：{err}"))?;
+    }
+    refresh_cursors()?;
+    Ok(updates.len())
 }
 
 #[cfg(test)]

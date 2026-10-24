@@ -53,8 +53,13 @@ export function DataSection() {
       });
       if (typeof dest !== "string") return;
       const summary = await exportBackup(dest);
-      setBackupNote(`已导出到 ${dest}`);
-      toast.success("备份已导出", `${summary.themes} 套主题、${summary.files} 个文件`);
+      const warnNote = summary.warnings.length ? `；${summary.warnings.length} 条提示` : "";
+      setBackupNote(`已导出到 ${dest}${warnNote}`);
+      if (summary.warnings.length > 0) {
+        toast.warning("备份已导出，但有提示", summary.warnings[0]);
+      } else {
+        toast.success("备份已导出", `${summary.themes} 套主题、${summary.files} 个文件`);
+      }
     } catch (err) {
       console.error("导出备份失败：", err);
       toast.error("导出失败", readableError(err));
@@ -81,13 +86,18 @@ export function DataSection() {
       const skipped = summary.themes_skipped
         ? `，${summary.themes_skipped} 套本地已有而跳过`
         : "";
+      const warnNote = summary.warnings.length ? `；${summary.warnings.length} 条提示` : "";
       setBackupNote(
-        `已补回 ${summary.themes_added} 套主题、${summary.history_added} 条使用记录${skipped}`,
+        `已补回 ${summary.themes_added} 套主题、${summary.history_added} 条使用记录${skipped}${warnNote}`,
       );
-      toast.success(
-        "已从备份恢复",
-        `补回 ${summary.themes_added} 套主题、${summary.history_added} 条记录${skipped}`,
-      );
+      if (summary.warnings.length > 0) {
+        toast.warning("已从备份恢复，但有提示", summary.warnings[0]);
+      } else {
+        toast.success(
+          "已从备份恢复",
+          `补回 ${summary.themes_added} 套主题、${summary.history_added} 条记录${skipped}`,
+        );
+      }
       await loadThemes();
     } catch (err) {
       console.error("恢复备份失败：", err);

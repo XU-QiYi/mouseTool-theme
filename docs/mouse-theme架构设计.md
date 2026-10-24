@@ -1,7 +1,7 @@
 # 架构设计 · 鼠标光标主题管理工具
 
-**版本**：v2.0
-**日期**：2026-10-22
+**版本**：v2.1
+**日期**：2026-10-25
 
 > 本文描述**代码现在长什么样**，不是愿望清单。没实现的能力统一收在 §9。
 > 权威顺序：`mouse-theme决策记录.md` > `mouse-theme需求描述.md` > 本文。
@@ -54,6 +54,7 @@ mouseTool-theme/
 │       ├── models/theme.rs         ← 数据结构
 │       └── utils/
 │           ├── paths.rs            ← 数据目录唯一来源（主题目录跟随 settings.json 覆盖值）
+│           ├── theme_paths.rs      ← 槽位路径相对/绝对转换与 theme.json 重写（决策 17）
 │           ├── registry.rs         ← SLOT_DEFS、注册表读写、SPI 刷新
 │           ├── cursor.rs           ← .cur/.ico/.ani 解析与缩放
 │           ├── importer.rs         ← zip / 文件夹导入、槽位推断（决策 15/16）
@@ -61,7 +62,7 @@ mouseTool-theme/
 │           ├── inf_parse.rs        ← 导入时解析 .inf 槽位映射（决策 15）
 │           ├── history.rs          ← 最近使用读写（含备份合并）
 │           ├── settings.rs         ← settings.json（关闭行为/主题目录/开关，决策 14）
-│           ├── themes_dir.rs       ← 主题存储目录更换与搬迁
+│           ├── themes_dir.rs       ← 主题存储目录预检与安全搬迁（暂存/校验/原子切换/回滚，决策 17）
 │           ├── autostart.rs        ← HKCU Run 键（开机自启动）
 │           ├── tray.rs             ← 托盘图标（关闭到托盘时才存在）
 │           └── integration.rs      ← 单实例互斥、--import 转交、.zip 右键菜单
@@ -123,7 +124,7 @@ App.tsx
 
 ---
 
-## 5. 命令契约（当前共 22 个）
+## 5. 命令契约（当前共 23 个）
 
 | Command | 入参（前端写法） | 返回 | 失败场景 |
 |---|---|---|---|
@@ -146,15 +147,18 @@ App.tsx
 | `update_settings` | `closeBehavior?`, `autoCheckUpdate?`, `shortcutsEnabled?`（只传要改的） | `SettingsSnapshot` | 不认识的关闭行为值、写盘失败；关闭行为变更会同步托盘有无 |
 | `get_autostart` | — | `AutostartStatus` | **不失败**（读不到就当未注册） |
 | `set_autostart` | `enable`（布尔） | `AutostartStatus` | Run 键写/删失败；状态以注册表回读为准 |
-| `set_themes_dir` | `path`（字符串 \| null） | `SettingsSnapshot` | 路径为空、与数据目录/原目录互为嵌套、搬运失败（不改设置，尽力回滚） |
-| `export_backup` | `destPath` | `ExportBackupSummary` | 目标目录不存在、没有可备份内容、写 zip 失败 |
-| `import_backup` | `zipPath` | `ImportBackupSummary` | 不是有效 zip、写盘失败（清掉半成品主题目录） |
+| `preview_themes_dir` | `path?`（字符串 \| null） | `ThemesDirPlan` | 目标不是绝对路径 / UNC / 经过重解析点 / 数据目录内部（默认除外）/ 祖先 / 互相嵌套 / 非空目录；只校验统计，**不搬文件** |
+| `set_themes_dir` | `path`（字符串 \| null） | `ThemesDirChangeResult` | 预检失败；复制 / 校验 / 切换 / 重绑注册表 / 写设置任一步失败都会回滚（源目录与设置保持原样），执行中通过 `themes-dir-progress` 事件报阶段 |
+| `export_backup` | `destPath` | `ExportBackupSummary` | 目标目录不存在、没有可备份内容、写 zip 失败；`theme.json` 改写成相对路径，无法改写的进 `warnings` |
+| `import_backup` | `zipPath` | `ImportBackupSummary` | 不是有效 zip、写盘失败（清掉半成品主题目录）；恢复后按新根重写相对路径，失败项进 `warnings` |
 
 **为什么 `apply_theme` / `export_theme` 收整个 `CursorTheme` 而不是 ID**：系统方案只存在于注册表，没有磁盘目录，但同样有光标文件路径；只传 ID 就到不了它们的文件。
 
 **`export_theme` 的包内清单**：光标文件按槽位重命名（`arrow.cur` / `busy.ani`），另附 `<方案名>.inf`（决策 13，`utils/inf_export.rs` 生成，UTF-16LE + BOM）——接收方没装本软件也能右键安装。导入端只收 `.cur/.ani/.ico` 当光标；`.inf` 由 `utils/inf_parse.rs` 解析槽位映射（决策 15，2026-10-24 起），「导出 → 再导入」闭环不受影响——包内文件本就按槽位命名，`.inf` 映射与文件名推断结果一致。
 
 **设置三来源**（决策 14）：行为类落 `settings.json`（`utils/settings.rs`，Rust 与前端共用，`update_settings` 是补丁语义）；外观三态留 `localStorage`（首帧落色要同步读）；开机自启动的真相在 `HKCU\...\Run`。`import_backup` 是**合并**语义：本地已有主题整套跳过、记录本地优先按主题去重，只补回缺失的。
+
+**槽位路径与迁移**（决策 17）：磁盘上的 `theme.json` 与备份 zip 里只写相对主题目录的路径（`utils/theme_paths.rs`），读盘后由 `resolve_theme` 统一拼绝对路径；旧绝对路径按「主题目录前缀 → 主题 UUID 段 → 主题内唯一同名文件」兼容映射。`set_themes_dir` 不是直接搬目录：目标先 canonicalize 并拒绝 UNC / 重解析点 / 数据目录内部（默认除外）/ 祖先 / 互相嵌套 / 非空目录；内容复制到目标同级 `.cursorstudio-migrate-<uuid>` 暂存区，改写相对路径并逐文件校验（非 `theme.json` 用 FNV-1a 哈希，`theme.json` 校验 ID、槽位键与相对路径可解析）后原子 `rename`；随后重绑注册表、最后写设置，任一步失败反向重绑 + 删新目录回滚，全部成功后才删源目录（删不掉只进 `warnings`）。
 
 ---
 
@@ -164,23 +168,31 @@ App.tsx
 
 | 类型 | 关键字段 | 说明 |
 |---|---|---|
-| `CursorSlot` | `registry_key`、`display_name`、`english_name`、`file_path`、`file_type` | `file_path` 是绝对路径，直接写进注册表 |
+| `CursorSlot` | `registry_key`、`display_name`、`english_name`、`file_path`、`file_type` | `file_path` 运行时是绝对路径（直接写注册表）；**落盘到 `theme.json` / 备份 zip 时只存相对主题目录的路径**（决策 17） |
 | `CursorTheme` | `id`、`name`、`description`、`created_at`、`updated_at`、`is_built_in`、`cursors` | `id`：`sys_<名>` 或 UUID |
 | `ThemesResult` | `themes`、`warnings`、`active_theme_id`、`recent` | 部分成功的载体 |
 | `ApplyOutcome` | `recent`、`warning` | 主操作成功就不回滚 |
 | `CursorPreview` | `is_animated`、`image`、`frames`、`rate_ms`、`hotspot` | base64 不含 `data:` 前缀 |
 | `HistoryEntry` | `theme_id`、`name`、`is_built_in`、`applied_at` | 名称是**快照** |
 | `ExportSummary` | `file_count`、`skipped` | 跳过原因给界面提示 |
+| `ExportBackupSummary` / `ImportBackupSummary` | 主题/文件/记录计数、`warnings` | 备份恢复是合并语义；路径改写等非致命问题进 `warnings` |
+| `ThemesDirPlan` | `source`、`target`、`is_default`、`theme_count`、`file_count`、`total_bytes`、`warnings` | 迁移确认框的数据源，只读不搬 |
+| `ThemesDirChangeResult` | `settings`、`report` | `report` 含 `rebound_slots` 与 `warnings` |
+| `ThemesDirProgress` | `phase`、`current`、`total`、`message` | `phase` 固定为 copy / verify / switch / registry / settings / cleanup / done |
 
 ---
 
 ## 7. 关键流程
 
-**启动**：`loadThemes()` → `get_all_themes` → 后端分别读「注册表方案」与「磁盘主题」，任一来源失败只降级为 warning → 拼成一张列表 → 读注册表当前槽位，双向比对反推 `active_theme_id`（读不到就置 `null` 并追加 warning）→ 读 `history.json` → 一次性返回 `ThemesResult`。
+**启动**：`loadThemes()` → `get_all_themes` → 后端分别读「注册表方案」与「磁盘主题」，任一来源失败只降级为 warning → 磁盘主题的槽位相对路径经 `resolve_theme` 拼成绝对路径 → 拼成一张列表 → 读注册表当前槽位，双向比对反推 `active_theme_id`（读不到就置 `null` 并追加 warning）→ 读 `history.json` → 一次性返回 `ThemesResult`。
 
 **应用**：点「应用此主题」→ `apply_theme(theme)` → 按 `SLOT_DEFS` 写 15 个槽位值 + `SchemeName`（不写 `Schemes`）→ `SPI_SETCURSORS`（只 `SPIF_SENDCHANGE`）→ 追加 `history.json` → 返回最新 `recent` → store 更新 `activeThemeId` + `recent`。
 
-**导入**：对话框选 `.zip`（对话框只收 zip），或把 `.zip` / 整个主题文件夹拖进窗口（Tauri drag-drop 事件给完整路径，前端只拦多件拖入，zip / 文件夹 / 其它文件由后端权威校验，拖入时有全窗遮罩反馈）→ `import_theme`（`importer::import_source` 分发：文件夹直接用，zip 解压到临时目录，两者走同一条落盘流程，决策 16）→ 扫 `.cur/.ani/.ico` → 包里带 `.inf` 时先按说明书映射槽位（决策 15），剩余槽位退回文件名推断 → 落盘 `themes/<uuid>/`（失败时连半成品目录一起清理）→ 返回主题 → store 追加并选中。
+**导入**：对话框选 `.zip`（对话框只收 zip），或把 `.zip` / 整个主题文件夹拖进窗口（Tauri drag-drop 事件给完整路径，前端只拦多件拖入，zip / 文件夹 / 其它文件由后端权威校验，拖入时有全窗遮罩反馈）→ `import_theme`（`importer::import_source` 分发：文件夹直接用，zip 解压到临时目录，两者走同一条落盘流程，决策 16）→ 扫 `.cur/.ani/.ico` → 包里带 `.inf` 时先按说明书映射槽位（决策 15），剩余槽位退回文件名推断 → 落盘 `themes/<uuid>/`（失败时连半成品目录一起清理）→ `theme.json` 只写相对槽位路径（决策 17）→ 返回主题（内存里已 resolve 成绝对路径）→ store 追加并选中。
+
+**迁移主题目录**：设置里选目录 → `preview_themes_dir` 做 canonicalize 与统计，返回源 / 目标 / 主题数 / 文件数 / 体积 / warnings → 确认框展示，确认后锁操作 → `set_themes_dir` 在 `spawn_blocking` 中执行：暂存复制并改写相对路径 → 逐文件校验 → 原子切换 → 重绑注册表槽位 → 写设置 → 删源目录，阶段经 `themes-dir-progress` 推给前端进度条 → 成功刷新设置与主题列表；失败保留对话框，可重试或关闭，源目录与设置不变。
+
+**备份**：导出 `export_backup` 把 `themes/`（每个 `theme.json` 先改写成相对路径）与 `history.json` 打成一个 zip；恢复 `import_backup` 先按合并语义补回缺失主题，再按**新根目录**重写每个新增主题的 `theme.json`，最后返回计数与 warnings。备份包里的旧绝对路径也在这一步落到新根。
 
 **删除**：按钮禁用（使用中/系统方案）→ store 二次拦截 → 后端 `Uuid::parse_str` 校验 → `remove_dir_all`。
 
@@ -198,6 +210,9 @@ App.tsx
 8. **预览不落盘**：单帧最长边 128px、动态光标最多 32 帧，缓存是前端内存 `Map`（按路径去重 + 请求合并）。
 9. **不加新依赖**：`@base-ui/react` 已覆盖 toast/dialog/menu/popover，优先手写封装（决策 6）。
 10. **`--no-sandbox` 不能删**：本机 WebView2 沙箱初始化失败会表现为"窗口正常但纯白不绘制"（决策 5）。
+11. **槽位路径磁盘相对、内存绝对**：`theme.json` 与备份 zip 里出现绝对路径就是 bug；写盘一律走 `theme_paths::to_storage` / `write_theme_json`，读盘一律 `resolve_theme` 后再用于预览/应用/注册表比对。
+12. **迁移不直接搬目录**：只走 `utils/themes_dir.rs`，顺序固定为「预检 → 暂存复制 → 内容校验 → 原子切换 → 重绑注册表 → 写设置 → 清理源」。非空目标（尤其含同名主题）必须拒绝且不删任何文件；设置或重绑失败必须回滚到源目录原样。
+13. **备份必须可再迁移**：导出与恢复都执行相对路径重写，恢复后路径以**新根目录**为基准；旧备份的绝对路径不得原样留在新 `theme.json` 里。
 
 ---
 
@@ -219,3 +234,4 @@ App.tsx
 | 2026-10-22 | 设置模块落地：导航增至四项，新增 `get_data_dir` / `open_data_dir`（决策 11），命令契约 8 → 10，设置页从 §9 缺口清单移除 |
 | 2026-10-22 | 决策 12：设置页第二批锚点（诊断信息 / Windows 快捷入口）+ `.zip` 右键菜单试点与单实例转交；命令契约 10 → 15，`services/` 拆出 `system.ts`，只读例外补 `useDiagnostics` |
 | 2026-10-23 | 决策 14：设置分组化（通用/快捷键/数据/系统集成/关于），新增设置存储（settings.json）、自启动、托盘关闭行为、主题目录迁移、备份、快捷键、检查更新；命令契约 15 → 22，`services/` 拆出 `settings.ts`，外观三态从侧栏迁入「通用」 |
+| 2026-10-25 | 决策 17：槽位路径相对化（磁盘相对 / 运行时绝对），备份导出恢复与改名统一重写；主题目录迁移改为预检 + 暂存 + 校验 + 原子切换 + 回滚，新增 `preview_themes_dir`（命令契约 22 → 23）、迁移确认框与进度事件；命令表与类型契约同步 |

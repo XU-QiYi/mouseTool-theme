@@ -7,6 +7,7 @@ use base64::Engine;
 use image::{DynamicImage, GenericImageView};
 
 use crate::models::CursorPreview;
+use crate::utils::limits;
 
 /// 单帧最长边上限，避免高分辨率光标撑爆 IPC
 const MAX_EDGE: u32 = 128;
@@ -211,6 +212,10 @@ static CACHE: LazyLock<Mutex<HashMap<(String, u64, u64), Arc<CursorPreview>>>> =
 fn cache_key(path: &Path) -> Option<(String, u64, u64)> {
     let meta = std::fs::metadata(path).ok()?;
     let size = meta.len();
+    // 预览上限：超大文件不读、不解析，也不进缓存
+    if size > limits::MAX_PREVIEW_BYTES {
+        return None;
+    }
     let mtime = meta
         .modified()
         .ok()

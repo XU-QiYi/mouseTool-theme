@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
 import { Toggle } from "@/components/ui/toggle";
 import { SettingCard, SettingsGroup } from "@/components/settings/SettingCard";
+import { ThemesDirDialog } from "@/components/settings/ThemesDirDialog";
 import { setThemeMode, useThemeMode, type ThemeMode } from "@/lib/theme-mode";
 import { toast } from "@/lib/toast";
 import { inTauri } from "@/services/theme";
@@ -38,14 +39,15 @@ export function GeneralSection() {
   const loadAutostart = useSettingsStore((s) => s.loadAutostart);
   const patchSettings = useSettingsStore((s) => s.patchSettings);
   const toggleAutostart = useSettingsStore((s) => s.toggleAutostart);
-  const changeThemesDir = useSettingsStore((s) => s.changeThemesDir);
+  const openThemesDirDialog = useSettingsStore((s) => s.openThemesDirDialog);
+  const themesDirBusy = useSettingsStore((s) => s.themesDirBusy);
 
   useEffect(() => {
     loadSettings();
     loadAutostart();
   }, [loadSettings, loadAutostart]);
 
-  // 选文件夹 → 搬家（Rust 侧搬运 + 落盘），选完即生效
+  // 选文件夹 → 先预检再让用户确认（迁移会动全部主题文件，不能选完就开搬）
   const pickThemesDir = async () => {
     if (!inTauri) {
       toast.info("开发模式无法选择目录", "文件选择需要桌面环境，请用 npm run tauri dev 启动");
@@ -58,7 +60,7 @@ export function GeneralSection() {
         title: "选择主题存储目录",
       });
       if (typeof selected === "string") {
-        await changeThemesDir(selected);
+        openThemesDirDialog(selected);
       }
     } catch (err) {
       console.error("选择目录失败：", err);
@@ -145,14 +147,19 @@ export function GeneralSection() {
           description="存放导入的主题包；更改位置时会把现有主题一起搬过去"
           action={
             <div className="flex items-center gap-2">
-              <Button size="sm" variant="outline" onClick={() => void pickThemesDir()}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void pickThemesDir()}
+                disabled={themesDirBusy}
+              >
                 更改…
               </Button>
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => void changeThemesDir(null)}
-                disabled={!settings?.themes_dir}
+                onClick={() => openThemesDirDialog(null)}
+                disabled={!settings?.themes_dir || themesDirBusy}
                 title={settings?.themes_dir ? "搬回默认目录" : "当前已是默认目录"}
               >
                 恢复默认
@@ -181,6 +188,8 @@ export function GeneralSection() {
           }
         />
       </SettingsGroup>
+
+      <ThemesDirDialog />
     </div>
   );
 }

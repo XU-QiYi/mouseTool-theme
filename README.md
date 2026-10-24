@@ -66,9 +66,9 @@ src/
 ├── stores/           唯一全局状态
 └── services/         invoke 封装 + 浏览器示例数据
 src-tauri/
-├── commands/         22 个命令：主题读取/导入/应用/删除/改名/导出 + 数据目录/设置/系统集成/备份等
+├── commands/         23 个命令：主题读取/导入/应用/删除/改名/导出 + 数据目录/设置/系统集成/备份等
 ├── models/           前后端共用的数据结构
-└── utils/            注册表、光标解码、主题导入（zip/文件夹/.inf）、历史
+└── utils/            注册表、光标解码、主题导入（zip/文件夹/.inf）、路径相对化、目录迁移、历史
 docs/                 决策记录、需求、架构、设计系统、动效
 ```
 
@@ -103,5 +103,6 @@ node scripts/dev_bg.mjs start
 node scripts/nav_check.mjs     # 三页结构签名
 node scripts/design_check.mjs  # 焦点、检查器宽度、外观三态、删除链
 node scripts/motion_check.mjs  # 逐帧采样动效
+node scripts/migration_check.mjs # 迁移确认框/进度/失败回滚（mock）
 node scripts/dev_bg.mjs stop
 ```

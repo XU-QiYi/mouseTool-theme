@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 import { inTauri } from "@/services/theme";
+import { MOCK_THEMES } from "@/services/mock";
 
 /**
  * 行为设置的 Rust 命令封装
@@ -117,25 +119,186 @@ export function setAutostart(enable: boolean): Promise<AutostartStatus> {
   return invoke<AutostartStatus>("set_autostart", { enable });
 }
 
-/** 更换主题存储目录（null = 回默认）；现有主题由 Rust 一起搬过去 */
-export function setThemesDir(path: string | null): Promise<SettingsSnapshot> {
-  if (!inTauri) {
-    const settings = mockSettings();
-    return Promise.resolve(
-      mockSave({
-        ...settings,
-        themes_dir: path,
-        effective_themes_dir: path ?? MOCK_DEFAULT.effective_themes_dir,
-      }),
+// ---------------------------------------------------------------------------
+// 主题存储目录迁移
+// ---------------------------------------------------------------------------
+
+/** 迁移确认信息（`preview_themes_dir`） */
+export interface ThemesDirPlan {
+  source: string;
+  target: string;
+  /** 目标是默认目录（设置里不写自定义值） */
+  is_default: boolean;
+  theme_count: number;
+  file_count: number;
+  total_bytes: number;
+  /** 不阻断迁移的提示（缺 theme.json 的目录等） */
+  warnings: string[];
+}
+
+/** 迁移阶段；与 Rust 侧 `MoveProgress.phase` 一一对应 */
+export type ThemesDirPhase =
+  | "copy"
+  | "verify"
+  | "switch"
+  | "registry"
+  | "settings"
+  | "cleanup"
+  | "done";
+
+export interface ThemesDirProgress {
+  phase: ThemesDirPhase;
+  current: number;
+  total: number;
+  message: string;
+}
+
+export interface ThemesDirReport {
+  source: string;
+  target: string;
+  theme_count: number;
+  file_count: number;
+  total_bytes: number;
+  /** 被重新绑定的注册表槽位数 */
+  rebound_slots: number;
+  warnings: string[];
+}
+
+export interface ThemesDirChangeResult {
+  settings: SettingsSnapshot;
+  report: ThemesDirReport;
+}
+
+/** 预检目标目录：只校验与统计，不搬任何文件 */
+export function previewThemesDir(path: string | null): Promise<ThemesDirPlan> {
+  if (!inTauri) return mockPreviewThemesDir(path);
+  return invoke<ThemesDirPlan>("preview_themes_dir", { path });
+}
+
+/** 更换主题存储目录（null = 回默认）；进度通过事件回调给界面 */
+export async function setThemesDir(
+  path: string | null,
+  onProgress?: (progress: ThemesDirProgress) => void,
+): Promise<ThemesDirChangeResult> {
+  if (!inTauri) return mockSetThemesDir(path, onProgress);
+
+  let unlisten: (() => void) | undefined;
+  if (onProgress) {
+    unlisten = await listen<ThemesDirProgress>("themes-dir-progress", (event) => {
+      onProgress(event.payload);
+    });
+  }
+  try {
+    return await invoke<ThemesDirChangeResult>("set_themes_dir", { path });
+  } finally {
+    unlisten?.();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 开发模式迁移模拟
+// ---------------------------------------------------------------------------
+
+const MOCK_DATA_ROOT = "C:\\Users\\demo\\AppData\\Local\\CursorStudio";
+const MOCK_DEFAULT_THEMES_DIR = `${MOCK_DATA_ROOT}\\themes`;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function mockTarget(path: string | null): string {
+  return path ?? MOCK_DEFAULT_THEMES_DIR;
+}
+
+function sameMockPath(left: string, right: string): boolean {
+  const normalize = (value: string) => value.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+  return normalize(left) === normalize(right);
+}
+
+function mockPreviewThemesDir(path: string | null): Promise<ThemesDirPlan> {
+  const settings = mockSettings();
+  const target = mockTarget(path);
+  if (sameMockPath(target, settings.effective_themes_dir)) {
+    return Promise.reject(new Error("当前已经使用这个主题目录，无需迁移"));
+  }
+  if (
+    target.toLowerCase().startsWith(`${MOCK_DATA_ROOT.toLowerCase()}\\`) &&
+    !sameMockPath(target, MOCK_DEFAULT_THEMES_DIR)
+  ) {
+    return Promise.reject(
+      new Error("不能把主题目录设在数据目录内部（默认目录除外）：备份与清理会把它当成数据一起处理"),
     );
   }
-  return invoke<SettingsSnapshot>("set_themes_dir", { path });
+  if (new URLSearchParams(window.location.search).has("mock-migrate-error")) {
+    return Promise.reject(new Error("目标目录里已经有同名主题，为避免覆盖不会迁移（模拟）"));
+  }
+
+  const userThemes = MOCK_THEMES.filter((theme) => !theme.is_built_in);
+  const fileCount = userThemes.reduce((sum, theme) => sum + theme.cursors.length, 0);
+  return Promise.resolve({
+    source: settings.effective_themes_dir,
+    target,
+    is_default: path === null,
+    theme_count: userThemes.length,
+    file_count: fileCount,
+    total_bytes: fileCount * 4096,
+    warnings: [],
+  });
+}
+
+async function mockSetThemesDir(
+  path: string | null,
+  onProgress?: (progress: ThemesDirProgress) => void,
+): Promise<ThemesDirChangeResult> {
+  const plan = await mockPreviewThemesDir(path);
+  const failMode = new URLSearchParams(window.location.search).get("mock-migrate-fail");
+  const phases: ThemesDirProgress[] = [
+    {
+      phase: "copy",
+      current: plan.file_count,
+      total: plan.file_count,
+      message: `正在复制主题文件（${plan.file_count}/${plan.file_count}）`,
+    },
+    { phase: "verify", current: 0, total: plan.theme_count, message: "正在校验复制结果…" },
+    { phase: "switch", current: 0, total: 0, message: "正在切换到新目录…" },
+    { phase: "registry", current: 0, total: 0, message: "正在重新绑定正在使用的主题…" },
+    { phase: "settings", current: 0, total: 0, message: "正在保存设置…" },
+    { phase: "cleanup", current: 0, total: 0, message: "正在清理原目录…" },
+    { phase: "done", current: 0, total: 0, message: "迁移完成" },
+  ];
+
+  for (const phase of phases) {
+    onProgress?.(phase);
+    await delay(90);
+    if (failMode === "settings" && phase.phase === "settings") {
+      throw new Error("保存设置失败（模拟）；已回滚，原目录与设置均未改动");
+    }
+  }
+
+  const next = mockSave({
+    ...mockSettings(),
+    themes_dir: path,
+    effective_themes_dir: plan.target,
+  });
+  return {
+    settings: next,
+    report: {
+      source: plan.source,
+      target: plan.target,
+      theme_count: plan.theme_count,
+      file_count: plan.file_count,
+      total_bytes: plan.total_bytes,
+      rebound_slots: 0,
+      warnings: plan.warnings,
+    },
+  };
 }
 
 /** 导出备份的结果 */
 export interface ExportBackupSummary {
   themes: number;
   files: number;
+  warnings: string[];
 }
 
 /** 恢复备份的结果（合并语义：只补回缺失的） */
@@ -143,18 +306,19 @@ export interface ImportBackupSummary {
   themes_added: number;
   themes_skipped: number;
   history_added: number;
+  warnings: string[];
 }
 
 /** 导出全部主题与使用记录为备份 zip */
 export function exportBackup(destPath: string): Promise<ExportBackupSummary> {
-  if (!inTauri) return Promise.resolve({ themes: 0, files: 0 });
+  if (!inTauri) return Promise.resolve({ themes: 0, files: 0, warnings: [] });
   return invoke<ExportBackupSummary>("export_backup", { destPath });
 }
 
 /** 从备份 zip 合并恢复 */
 export function importBackup(zipPath: string): Promise<ImportBackupSummary> {
   if (!inTauri) {
-    return Promise.resolve({ themes_added: 0, themes_skipped: 0, history_added: 0 });
+    return Promise.resolve({ themes_added: 0, themes_skipped: 0, history_added: 0, warnings: [] });
   }
   return invoke<ImportBackupSummary>("import_backup", { zipPath });
 }

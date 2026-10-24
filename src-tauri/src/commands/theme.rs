@@ -4,10 +4,11 @@ use std::io::Write;
 use std::path::Path;
 
 use serde::Serialize;
+use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use crate::models::{ApplyOutcome, CursorSlot, CursorTheme, ThemesResult};
-use crate::utils::{history, importer, inf_export, paths, registry};
+use crate::utils::{history, importer, inf_export, ops, paths, progress, registry, theme_paths, validation};
 
 /// `export_theme` 的返回值：跳过项要说清是哪个槽位，否则用户不知道少了什么
 #[derive(Debug, Serialize)]
@@ -108,7 +109,13 @@ fn detect_active_theme(
 /// 顺带反推「当前正在使用哪个主题」：界面不能靠内存记住这件事，
 /// 否则重开窗口后会把已应用的主题当成可用主题，允许再点一次「应用」。
 #[tauri::command]
-pub fn get_all_themes() -> Result<ThemesResult, String> {
+pub async fn get_all_themes() -> Result<ThemesResult, String> {
+    tauri::async_runtime::spawn_blocking(all_themes)
+        .await
+        .map_err(|err| format!("读取主题列表任务异常退出（{err}）"))?
+}
+
+fn all_themes() -> Result<ThemesResult, String> {
     let (themes, mut warnings) = merge_sources(
         registry::read_system_schemes(),
         importer::read_user_themes(),
@@ -137,9 +144,40 @@ pub fn get_all_themes() -> Result<ThemesResult, String> {
 }
 
 /// 导入主题来源（`.zip` 包或整个文件夹，决策 16），返回新主题
+///
+/// 解压 / 扫描 / 复制都在后台线程执行，进度通过 `import-progress` 事件推给
+/// 界面；导入期间其它重操作被互斥锁挡住。
 #[tauri::command]
-pub fn import_theme(source_path: String) -> Result<CursorTheme, String> {
-    importer::import_source(&source_path)
+pub async fn import_theme(app: AppHandle, source_path: String) -> Result<CursorTheme, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = ops::try_begin("导入主题")?;
+        let emitter = app.clone();
+        importer::import_source_with_progress(&source_path, &mut |progress| {
+            let _ = emitter.emit("import-progress", progress);
+        })
+    })
+    .await
+    .map_err(|err| format!("导入任务异常退出（{err}）"))?
+}
+
+/// 应用 / 导出前的主题校验：槽位白名单、id 与目录一致、光标文件来源可信
+///
+/// 系统方案来自注册表，路径可能是用户手工指定的任意目录（Windows 的「已保存
+/// 方案」允许），因此只做存在性与体积校验；用户主题的光标必须落在主题目录内。
+fn checked_slots(theme: &CursorTheme) -> Result<Vec<CursorSlot>, String> {
+    validation::validate_theme_slots(theme)?;
+    validation::ensure_theme_id_matches_dir(theme)?;
+
+    let mut slots = theme.cursors.clone();
+    for slot in &mut slots {
+        let file = if theme.is_built_in {
+            validation::ensure_readable_cursor_file(&slot.file_path)?
+        } else {
+            validation::ensure_cursor_file(&slot.file_path)?
+        };
+        slot.file_path = file.to_string_lossy().into_owned();
+    }
+    Ok(slots)
 }
 
 /// 把主题应用到系统：写注册表后立即刷新，无需注销
@@ -147,11 +185,18 @@ pub fn import_theme(source_path: String) -> Result<CursorTheme, String> {
 /// 顺带记一条「最近使用」。历史是附属信息：写失败不影响「已应用」这个事实，
 /// 但要把原因回传，由界面说明「光标切了，只是没记上」，不能静默吞掉。
 #[tauri::command]
-pub fn apply_theme(theme: CursorTheme) -> Result<ApplyOutcome, String> {
-    registry::write_cursors(&theme.cursors, &theme.name)?;
+pub async fn apply_theme(theme: CursorTheme) -> Result<ApplyOutcome, String> {
+    tauri::async_runtime::spawn_blocking(move || apply(&theme))
+        .await
+        .map_err(|err| format!("应用主题任务异常退出（{err}）"))?
+}
+
+fn apply(theme: &CursorTheme) -> Result<ApplyOutcome, String> {
+    let slots = checked_slots(theme)?;
+    registry::write_cursors(&slots, &theme.name)?;
     registry::refresh_cursors()?;
 
-    match history::record(&theme) {
+    match history::record(theme) {
         Ok(recent) => Ok(ApplyOutcome {
             recent,
             warning: None,
@@ -168,7 +213,13 @@ pub fn apply_theme(theme: CursorTheme) -> Result<ApplyOutcome, String> {
 
 /// 恢复系统默认光标
 #[tauri::command]
-pub fn restore_default() -> Result<(), String> {
+pub async fn restore_default() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(restore)
+        .await
+        .map_err(|err| format!("恢复默认光标任务异常退出（{err}）"))?
+}
+
+fn restore() -> Result<(), String> {
     registry::clear_cursors()?;
     registry::refresh_cursors()
 }
@@ -178,9 +229,18 @@ pub fn restore_default() -> Result<(), String> {
 /// 只接受 UUID。theme_id 来自前端，必须校验格式——否则传入 `../` 之类的值
 /// 会让 `theme_dir` 拼到数据目录之外，误删用户其它文件。
 #[tauri::command]
-pub fn delete_theme(theme_id: String) -> Result<(), String> {
-    let id = Uuid::parse_str(&theme_id).map_err(|_| "非法的主题 ID".to_string())?;
-    let dir = paths::theme_dir(&id.to_string());
+pub async fn delete_theme(theme_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || delete(&theme_id))
+        .await
+        .map_err(|err| format!("删除主题任务异常退出（{err}）"))?
+}
+
+fn delete(theme_id: &str) -> Result<(), String> {
+    let id = Uuid::parse_str(theme_id).map_err(|_| "非法的主题 ID".to_string())?;
+    if id.to_string() != theme_id {
+        return Err("非法的主题 ID".to_string());
+    }
+    let dir = paths::theme_dir(theme_id);
 
     if !dir.exists() {
         return Err("这个主题已经不在了，可能要重新导入".to_string());
@@ -197,34 +257,39 @@ pub fn delete_theme(theme_id: String) -> Result<(), String> {
 /// 只改 theme.json 里的显示名，目录名仍是 UUID（改目录会影响正在使用的
 /// 光标路径）。`updated_at` 保持导入时间不变——界面上它承担的是「导入于」。
 #[tauri::command]
-pub fn rename_theme(theme_id: String, new_name: String) -> Result<CursorTheme, String> {
-    let id = Uuid::parse_str(&theme_id).map_err(|_| "非法的主题 ID".to_string())?;
-    let name = new_name.trim();
+pub async fn rename_theme(theme_id: String, new_name: String) -> Result<CursorTheme, String> {
+    tauri::async_runtime::spawn_blocking(move || rename(&theme_id, &new_name))
+        .await
+        .map_err(|err| format!("改名任务异常退出（{err}）"))?
+}
 
-    if name.is_empty() {
-        return Err("名称不能为空".to_string());
+fn rename(theme_id: &str, new_name: &str) -> Result<CursorTheme, String> {
+    let id = Uuid::parse_str(theme_id).map_err(|_| "非法的主题 ID".to_string())?;
+    if id.to_string() != theme_id {
+        return Err("非法的主题 ID".to_string());
     }
-    if name.chars().count() > 40 {
-        return Err("名称最多 40 个字".to_string());
-    }
-    if name.chars().any(char::is_control) {
-        return Err("名称不能包含换行或控制字符".to_string());
-    }
+    let name = validation::validate_theme_name(new_name)?;
 
-    let json_path = paths::theme_dir(&id.to_string()).join("theme.json");
+    let theme_dir = paths::theme_dir(theme_id);
+    let json_path = theme_dir.join("theme.json");
     if !json_path.exists() {
         return Err("找不到这个主题，它可能已被删除".to_string());
     }
 
-    let raw = fs::read_to_string(&json_path).map_err(|err| format!("读不到主题信息（{err}）"))?;
+    let raw = crate::utils::limits::read_text_bounded(&json_path, 1024 * 1024)
+        .map_err(|err| format!("读不到主题信息（{err}）"))?;
     let mut theme: CursorTheme =
         serde_json::from_str(&raw).map_err(|err| format!("主题信息已损坏，无法改名（{err}）"))?;
+    if theme.id != theme_id || theme.is_built_in {
+        return Err("主题信息与目录不一致，已拒绝改名".to_string());
+    }
 
-    theme.name = name.to_string();
+    theme.name = name;
 
-    let json =
-        serde_json::to_string_pretty(&theme).map_err(|err| format!("保存主题信息失败（{err}）"))?;
-    fs::write(&json_path, json).map_err(|err| format!("保存主题信息失败（{err}）"))?;
+    // 顺手把旧绝对路径改写成相对路径；返回给前端的仍是绝对路径
+    theme_paths::write_theme_json(&theme_dir, &theme)
+        .map_err(|err| format!("保存主题信息失败（{err}）"))?;
+    theme_paths::resolve_theme(&mut theme, &theme_dir);
 
     Ok(theme)
 }
@@ -239,15 +304,19 @@ pub fn rename_theme(theme_id: String, new_name: String) -> Result<CursorTheme, S
 /// 安装即可把方案装进 Windows。生成逻辑在 `utils/inf_export`；导入端只认
 /// `.cur/.ani/.ico`，会自动忽略这个文件，闭环不受影响。
 #[tauri::command]
-pub fn export_theme(theme: CursorTheme, dest_path: String) -> Result<ExportSummary, String> {
-    let dest = Path::new(&dest_path);
-    let parent = dest.parent().ok_or_else(|| "目标路径无效".to_string())?;
-    if !parent.exists() {
-        return Err(format!("目标文件夹不存在：{}", parent.display()));
-    }
+pub async fn export_theme(theme: CursorTheme, dest_path: String) -> Result<ExportSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || export_to(&theme, &dest_path))
+        .await
+        .map_err(|err| format!("导出任务异常退出（{err}）"))?
+}
 
-    let file =
-        fs::File::create(dest).map_err(|err| format!("无法创建文件，它可能正被占用（{err}）"))?;
+fn export_to(theme: &CursorTheme, dest_path: &str) -> Result<ExportSummary, String> {
+    validation::validate_theme_slots(theme)?;
+    validation::ensure_theme_id_matches_dir(theme)?;
+    let dest = validation::validate_dest_path(dest_path, "zip")?;
+
+    let file = fs::File::create(&dest)
+        .map_err(|err| format!("无法创建文件，它可能正被占用（{err}）"))?;
     let mut writer = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default();
 
@@ -262,7 +331,18 @@ pub fn export_theme(theme: CursorTheme, dest_path: String) -> Result<ExportSumma
             continue;
         }
 
-        let src = Path::new(&slot.file_path);
+        let src = if theme.is_built_in {
+            validation::ensure_readable_cursor_file(&slot.file_path)
+        } else {
+            validation::ensure_cursor_file(&slot.file_path)
+        };
+        let src = match src {
+            Ok(path) => path,
+            Err(err) => {
+                skipped.push(format!("{}（{err}）", slot.display_name));
+                continue;
+            }
+        };
         let ext = src
             .extension()
             .and_then(|e| e.to_str())
@@ -272,7 +352,8 @@ pub fn export_theme(theme: CursorTheme, dest_path: String) -> Result<ExportSumma
             continue;
         };
 
-        let Ok(data) = fs::read(src) else {
+        // 流式写进压缩包：光标文件上限 20MB，仍不整个读进内存
+        let Ok(mut source) = fs::File::open(&src) else {
             skipped.push(format!("{}（源文件不存在）", slot.display_name));
             continue;
         };
@@ -281,8 +362,7 @@ pub fn export_theme(theme: CursorTheme, dest_path: String) -> Result<ExportSumma
         writer
             .start_file(name, options)
             .map_err(|err| format!("打包失败（{err}）"))?;
-        writer
-            .write_all(&data)
+        std::io::copy(&mut source, &mut writer)
             .map_err(|err| format!("写入压缩包失败（{err}）"))?;
         file_count += 1;
 
@@ -296,7 +376,7 @@ pub fn export_theme(theme: CursorTheme, dest_path: String) -> Result<ExportSumma
     if file_count == 0 {
         // 先关掉句柄再删，否则 Windows 上文件被占用删不掉，会留个空 zip
         drop(writer);
-        let _ = fs::remove_file(dest);
+        let _ = fs::remove_file(&dest);
         return Err("没有可导出的光标文件，源文件可能已被移动或删除".to_string());
     }
 
@@ -324,6 +404,44 @@ pub fn export_theme(theme: CursorTheme, dest_path: String) -> Result<ExportSumma
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::test_support::{fixture_ani, fixture_cur, TempDir};
+    use std::path::PathBuf;
+
+    /// 在隔离的主题目录里放一套可导出的主题，返回 (主题, 主题目录)
+    fn seed_exportable_theme(label: &str, slots: &[(&str, &str, Vec<u8>)]) -> (CursorTheme, PathBuf) {
+        let id = Uuid::new_v4().to_string();
+        let dir = paths::theme_dir(&id);
+        fs::create_dir_all(dir.join("cursors")).expect("建主题目录");
+
+        let mut cursors = Vec::new();
+        for (key, file_name, bytes) in slots {
+            let path = dir.join("cursors").join(file_name);
+            fs::write(&path, bytes).expect("写光标 fixture");
+            cursors.push(CursorSlot {
+                registry_key: (*key).to_string(),
+                display_name: (*key).to_string(),
+                english_name: (*key).to_string(),
+                file_path: path.to_string_lossy().into_owned(),
+                file_type: "cur".to_string(),
+            });
+        }
+
+        let theme = CursorTheme {
+            id: id.clone(),
+            name: label.to_string(),
+            description: String::new(),
+            created_at: "2026-01-01 00:00".to_string(),
+            updated_at: "2026-01-01 00:00".to_string(),
+            is_built_in: false,
+            cursors,
+        };
+        fs::write(
+            dir.join("theme.json"),
+            serde_json::to_string_pretty(&theme).expect("序列化主题"),
+        )
+        .expect("写 theme.json");
+        (theme, dir)
+    }
 
     fn fake_theme(id: &str) -> CursorTheme {
         CursorTheme {
@@ -463,10 +581,10 @@ mod tests {
     #[test]
     fn 非法主题_id_不能穿出数据目录() {
         for bad in ["../evil", "..\\evil", "a/b", "", "not-a-uuid"] {
-            let err = delete_theme(bad.to_string()).unwrap_err();
+            let err = delete(bad).unwrap_err();
             assert!(err.contains("非法"), "{bad:?} 应被拒绝，实际：{err}");
 
-            let err = rename_theme(bad.to_string(), "x".to_string()).unwrap_err();
+            let err = rename(bad, "x").unwrap_err();
             assert!(err.contains("非法"), "{bad:?} 改名也应被拒绝，实际：{err}");
         }
     }
@@ -476,18 +594,21 @@ mod tests {
     fn 改名的名称校验() {
         let id = Uuid::new_v4().to_string();
 
-        let err = rename_theme(id.clone(), "   ".to_string()).unwrap_err();
+        let err = rename(&id, "   ").unwrap_err();
         assert!(err.contains("不能为空"), "实际：{err}");
 
-        let err = rename_theme(id.clone(), "字".repeat(41)).unwrap_err();
+        let err = rename(&id, &"字".repeat(41)).unwrap_err();
         assert!(err.contains("40"), "实际：{err}");
 
-        let err = rename_theme(id, "a\nb".to_string()).unwrap_err();
+        let err = rename(&id, "a\nb").unwrap_err();
         assert!(err.contains("控制字符"), "实际：{err}");
     }
 
     #[test]
     fn 改名应去掉首尾空格且不动导入时间() {
+        let root = TempDir::new("rename");
+        let _guard = root.isolate_paths();
+
         let id = Uuid::new_v4().to_string();
         let dir = paths::theme_dir(&id);
         paths::ensure_dir(&dir).expect("建临时主题目录");
@@ -498,14 +619,12 @@ mod tests {
         )
         .expect("写入初始 theme.json");
 
-        let outcome = rename_theme(id.clone(), "  新名字  ".to_string());
+        let outcome = rename(&id, "  新名字  ");
 
         let saved: CursorTheme = serde_json::from_str(
             &fs::read_to_string(dir.join("theme.json")).expect("读回 theme.json"),
         )
         .expect("解析 theme.json");
-
-        fs::remove_dir_all(&dir).ok();
 
         let renamed = outcome.expect("改名应成功");
         assert_eq!(renamed.name, "新名字", "首尾空格应被去掉");
@@ -516,19 +635,14 @@ mod tests {
     /// 导出必须形成闭环：文件名按槽位重命名，再导入能还原成同一个槽位
     #[test]
     fn 导出再导入应还原槽位() {
-        let cur = std::fs::read(r"C:\Windows\Cursors\aero_arrow.cur").expect("需要系统光标文件");
+        let root = TempDir::new("export-roundtrip");
+        let _guard = root.isolate_paths();
 
-        let src_dir = std::env::temp_dir().join("cursortheme-export-src");
-        fs::create_dir_all(&src_dir).expect("建临时源目录");
-        // 故意用不可识别的源文件名，验证导出时会按槽位重命名
-        let src_file = src_dir.join("随便起的名字.cur");
-        fs::write(&src_file, &cur).expect("写入临时光标");
-        let src_path = src_file.to_string_lossy().to_string();
+        let (theme, _dir) =
+            seed_exportable_theme("导出测试", &[("SizeNWSE", "随便起的名字.cur", fixture_cur())]);
+        let zip_path = root.join("roundtrip.zip");
 
-        let theme = theme_with_slots("export-test", "导出测试", &[("SizeNWSE", &src_path)]);
-        let zip_path = std::env::temp_dir().join("cursortheme-export-roundtrip.zip");
-
-        let summary = export_theme(theme, zip_path.to_string_lossy().into_owned())
+        let summary = export_to(&theme, &zip_path.to_string_lossy())
             .expect("导出应成功");
         assert_eq!(summary.file_count, 1);
         assert!(summary.skipped.is_empty(), "不该有跳过项");
@@ -572,54 +686,53 @@ mod tests {
         assert_eq!(reimported.cursors.len(), 1);
         assert_eq!(reimported.cursors[0].registry_key, "SizeNWSE");
         assert_eq!(reimported.cursors[0].display_name, "对角线调整 1");
-
-        fs::remove_dir_all(&src_dir).ok();
-        fs::remove_file(&zip_path).ok();
-        fs::remove_dir_all(paths::theme_dir(&reimported.id)).ok();
     }
 
     /// 源文件全缺失时，必须报错，且不能留下空 zip 骗用户
     #[test]
     fn 源文件全缺失时不该留下空压缩包() {
-        let theme = theme_with_slots(
-            "empty-test",
-            "空测试",
-            &[("Arrow", r"C:\这个文件根本不存在\arrow.cur")],
-        );
-        let zip_path = std::env::temp_dir().join("cursortheme-export-empty.zip");
+        let root = TempDir::new("export-empty");
+        let _guard = root.isolate_paths();
 
-        let err = export_theme(theme, zip_path.to_string_lossy().into_owned()).unwrap_err();
-        assert!(err.contains("没有可导出"), "实际：{err}");
-        assert!(
-            !Path::new(&zip_path).exists(),
-            "失败时不能留下空压缩包"
+        let id = Uuid::new_v4().to_string();
+        let dir = paths::theme_dir(&id);
+        fs::create_dir_all(&dir).expect("建主题目录");
+        let theme = theme_with_slots(
+            &id,
+            "空测试",
+            &[(
+                "Arrow",
+                dir.join("cursors").join("missing.cur").to_str().unwrap(),
+            )],
         );
+        fs::write(
+            dir.join("theme.json"),
+            serde_json::to_string_pretty(&theme).unwrap(),
+        )
+        .expect("写 theme.json");
+        let zip_path = root.join("empty.zip");
+
+        let err = export_to(&theme, &zip_path.to_string_lossy()).unwrap_err();
+        assert!(err.contains("没有可导出"), "实际：{err}");
+        assert!(!zip_path.exists(), "失败时不能留下空压缩包");
     }
 
     /// 把一份真实导出的 .inf 抽到系统临时目录，方便用记事本打开人工检查
     /// 格式（UTF-16LE 在记事本里正常显示），也可以拿去做右键安装的真机验收
     #[test]
     fn 导出的_inf_样例落到临时目录供人工检查() {
-        let cur = std::fs::read(r"C:\Windows\Cursors\aero_arrow.cur").expect("需要系统光标文件");
-        let ani = std::fs::read(r"C:\Windows\Cursors\荧1.0\arrow.ani").expect("需要系统动态光标");
+        let root = TempDir::new("inf-sample");
+        let _guard = root.isolate_paths();
 
-        let src_dir = std::env::temp_dir().join("cursortheme-inf-sample-src");
-        fs::create_dir_all(&src_dir).expect("建临时源目录");
-        let arrow_path = src_dir.join("a.cur");
-        let wait_path = src_dir.join("b.ani");
-        fs::write(&arrow_path, &cur).expect("写入临时光标");
-        fs::write(&wait_path, &ani).expect("写入临时光标");
-
-        let theme = theme_with_slots(
-            "sample",
+        let (theme, _dir) = seed_exportable_theme(
             "样例方案",
             &[
-                ("Arrow", arrow_path.to_str().unwrap()),
-                ("Wait", wait_path.to_str().unwrap()),
+                ("Arrow", "a.cur", fixture_cur()),
+                ("Wait", "b.ani", fixture_ani()),
             ],
         );
-        let zip_path = std::env::temp_dir().join("cursortheme-inf-sample.zip");
-        export_theme(theme, zip_path.to_string_lossy().into_owned()).expect("导出应成功");
+        let zip_path = root.join("sample.zip");
+        export_to(&theme, &zip_path.to_string_lossy()).expect("导出应成功");
 
         let file = fs::File::open(&zip_path).expect("打开导出的 zip");
         let mut archive = zip::ZipArchive::new(file).expect("解析导出的 zip");
@@ -633,25 +746,25 @@ mod tests {
 
         let sample = std::env::temp_dir().join("cursortheme-导出样例.inf");
         fs::write(&sample, &bytes).expect("写样例");
-
-        fs::remove_dir_all(&src_dir).ok();
-        fs::remove_file(&zip_path).ok();
         println!("样例已写到 {}", sample.display());
     }
 
     /// 删除是破坏性操作：既要真的把目录删掉，重复删除也要给人话而不是崩溃
     #[test]
     fn 删除应移除主题目录且重复删除有提示() {
+        let root = TempDir::new("delete");
+        let _guard = root.isolate_paths();
+
         let id = Uuid::new_v4().to_string();
         let dir = paths::theme_dir(&id);
         paths::ensure_dir(&dir).expect("建临时主题目录");
         fs::write(dir.join("theme.json"), "{}").expect("写占位文件");
         assert!(dir.exists());
 
-        delete_theme(id.clone()).expect("删除应成功");
+        delete(&id).expect("删除应成功");
         assert!(!dir.exists(), "主题目录必须被真正删掉");
 
-        let err = delete_theme(id).unwrap_err();
+        let err = delete(&id).unwrap_err();
         assert!(err.contains("已经不在了"), "重复删除应给人话提示，实际：{err}");
     }
 }
