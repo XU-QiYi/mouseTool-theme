@@ -38,6 +38,11 @@
 
 **硬规则**：组件里只写 `duration-(--motion-*)` 和 `ease-standard` / `ease-exit`。禁止 `duration-200` 这类裸数字，也禁止 `transition-all`。
 
+**唯一例外：Toast 倒计时条**。它是剩余时间的**读数**，不是装饰性动效：
+- 时长 = 该条 toast 的超时（3.2–6s），由组件内联 `animation-duration` 注入 —— 是数据不是档位；
+- 缓动必须 `linear`：ease 会让"剩余多少"的读数失真（同样一格长度代表的秒数前后不一致）。
+实现见 `src/App.css` 的 `toast-countdown`，挂起同步见 `src/components/ui/toaster.tsx`。
+
 ---
 
 ## 3. 动画化的组件范围
@@ -46,7 +51,7 @@
 
 | 组件 | 进入 | 退出 | 状态切换 |
 |---|---|---|---|
-| **Toast** | 下方 8px 起、缩放 0.96→1、淡入，240ms，原点在右下 | 下沉 4px、缩到 0.98、淡出，160ms | 堆叠让位 180ms（FLIP）；关闭按钮悬停 120ms |
+| **Toast** | 下方 8px 起、缩放 0.96→1、淡入，240ms，原点在右下 | 下沉 4px、缩到 0.98、淡出，160ms | 堆叠让位 180ms（FLIP）；关闭按钮悬停 120ms；倒计时条随剩余寿命 linear 缩短，悬停/失焦与计时器同挂起（§2 例外） |
 | **AlertDialog 遮罩** | 淡入 180ms | 淡出 160ms | — |
 | **AlertDialog 弹窗** | 缩放 0.96→1 + 淡入，240ms，中心原点 | 缩回 0.96 + 淡出，160ms | — |
 | **Button** | — | — | 悬停/焦点 120ms；按下 1px 位移；禁用不参与 |
@@ -135,7 +140,7 @@ el.animate([{ transform: `translateY(${dy}px)` }, { transform: "translateY(0)" }
 | 焦点不能被延迟 | 焦点环走 120ms 档、颜色不透明；不做 `delay` |
 | 无眩晕风险 | 位移 ≤ 8px、无旋转、无视差、无自动循环播放（`animate-pulse` 在降级下只播一轮） |
 | 不阻断操作 | 浮层退场期间 `pointer-events: none`；动画不改变可点区域 |
-| 不缩短阅读时间 | Toast 超时仍是 3.2s / 4s / 5s / 6s，动画时长不含在判断里；悬停暂停由 base-ui 负责 |
+| 不缩短阅读时间 | Toast 超时仍是 3.2s / 4s / 5s / 6s，动画时长不含在判断里；悬停暂停由 base-ui 负责，倒计时条与计时器同挂起，不会"条先走完"逼人快读 |
 | 不用颜色单独表意 | 状态条 + 图标 + 文案三重表达，动效只是辅助 |
 
 ---
@@ -161,12 +166,13 @@ node scripts/dev_bg.mjs start && node scripts/motion_check.mjs; node scripts/dev
 
 必须和 dev server 写在同一条命令里 —— 跨命令的 dev server 会被回收。
 
-脚本逐帧采样，而不是单点截图，断言 28 项：
+脚本逐帧采样，而不是单点截图，断言 33 项：
 
 - Toast 入场/退场：是否真的在过渡、时长、中间态、位移、结束是否卸载；
+- Toast 倒计时条：时长是否等于该条超时、是否随时间缩短、悬停是否真冻结、移开是否继续；
 - Dialog 弹窗与遮罩：同上，且遮罩比弹窗快一档；
 - Toast 让位：是否触发 FLIP、时长 180ms；
-- `prefers-reduced-motion`：时长是否被压到近似 0、是否跳过 FLIP；
+- `prefers-reduced-motion`：时长是否被压到近似 0、是否跳过 FLIP、倒计时条是否不显示；
 - 控件：按钮 120ms、主题卡 180ms 且走 `box-shadow`；
 - 运行期无 JS 异常。
 
@@ -178,4 +184,5 @@ node scripts/dev_bg.mjs start && node scripts/motion_check.mjs; node scripts/dev
 
 | 日期 | 变更 |
 |---|---|
+| 2026-10-24 | Toast 倒计时条：贴卡片底边 scaleX 1→0（时长=超时、linear —— §2 唯一例外）；挂起与 base-ui 计时器同进退（data-expanded + 窗口焦点镜像）；`motion_check` 增至 33 项断言 |
 | 2026-10-21 | 建立。四档时长（fast/base/slow/exit）、两条曲线；Toast 与 Dialog 补齐进入/退出；Toast 堆叠 FLIP；`transition-all` 清零；新增 `motion_check.mjs`（28 项断言） |

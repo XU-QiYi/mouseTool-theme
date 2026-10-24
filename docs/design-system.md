@@ -157,6 +157,8 @@
 
 **禁止 `transition-all`** —— 会把布局属性一起过渡。改为明确写属性列表，例如 `transition-[opacity,translate]`。
 
+**唯一例外：Toast 倒计时条**。它是剩余时间的**读数**，不是装饰性动效：时长 = 该条 toast 的超时（3.2–6s，内联注入，属数据不属档位），缓动必须 `linear`（ease 会让"剩余多少"的读数失真）。详见 [`docs/motion.md`](./motion.md) §2。
+
 组件级的进入 / 退出 / 状态切换清单、以及哪些组件**故意不做**动效，见 [`docs/motion.md`](./motion.md)。
 
 ---
@@ -237,3 +239,4 @@ node scripts/motion_check.mjs   # 逐帧采样：进出场时长、中间态、�
 | 2026-10-22 | v1.6 检查器可调宽 + 滚动条口径。新增 `InspectorResizer`（拖拽 / 双击复位 / 键盘，280–560px，宽度不落盘）；新增 `scroll-thin` utility，滚动容器统一用它（原生 thin + gutter stable）；检查器内容压缩：徽章行改一行文字、四行 `dl` 改一行脚注、槽位卡 72→64px、网格按宽度 `auto-fill`，使 15 槽位在 1200×760 窗口内**不再需要滚动** |
 | 2026-10-22 | v1.7 深色模式接通 + 滚动条改为 hover 显形。`lib/theme-mode.ts` 把 `prefers-color-scheme` 映射成 `html.dark`（首帧前落 class，并随系统切换），`:root` / `.dark` 补 `color-scheme` 让原生控件同步；`scroll-thin` 由 `scrollbar-width: thin` 改为 `::-webkit-scrollbar`：6px、轨道透明、拇指默认透明、`hover` 与 `hover thumb` 分两级显形 —— `thin` 在 Chromium 里仍是带箭头的经典样式，会被当成进度条 |
 | 2026-10-22 | v1.8 外观从"只跟随系统"改为三态（跟随系统 / 浅色 / 深色）。侧栏底部新增「外观」分段控件；手动覆盖落盘并调 Tauri `setTheme` 同步标题栏；原则一的"不自建开关"改为"默认跟随系统、允许显式覆盖"。`design_check` 扩到 18 条断言（含覆盖优先级与刷新恢复） |
+| 2026-10-24 | v1.9 Toast 倒计时条。卡片底边内侧 2px 细条（`h-0.5`，状态色与左侧标识条同族），`scaleX 1→0` 表示剩余寿命；时长 = 该条 toast 超时、缓动强制 `linear` —— **动效硬规则的唯一例外**（读数不是装饰，见 motion.md §2）；挂起与 base-ui 计时器同进退（`data-expanded` + 窗口焦点镜像）。`motion_check` 增至 33 项断言 |

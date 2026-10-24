@@ -253,7 +253,7 @@ src-tauri\target\release\mousetool-theme.exe
 | `node scripts/design_check.mjs` | 按 Tab 走查键盘焦点、`aria` 属性、三栏结构，并存截图 | 不会 |
 | `node scripts/design_audit.mjs` | 静态扫描：间距/字号/图标是否出现阶梯外的值、有没有裸写时长或 `transition-all` | 不启动浏览器 |
 | `node scripts/ui_ratio.mjs` | 统计 JSX 元素构成：shadcn / 业务组件 / 原生标签 / 图标 的比例 | 不启动浏览器 |
-| `node scripts/motion_check.mjs` | 逐帧采样 Toast 与弹窗的进出场：时长、中间态、降级是否生效（28 项断言） | 不会 |
+| `node scripts/motion_check.mjs` | 逐帧采样 Toast 与弹窗的进出场：时长、中间态、倒计时条、降级是否生效（33 项断言） | 不会 |
 | `node scripts/recent_check.mjs` | 「最近使用」排序、应用后置顶、删除后的提示 | 会（mock，不写系统） |
 | `node scripts/ui_check.mjs` | 点第一个主题卡 + 点应用按钮，截图 | 会（mock，不写系统） |
 | `node scripts/nav_check.mjs` | 依次点三个导航项，输出三栏结构与截图 | 不会 |
