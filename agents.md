@@ -21,7 +21,7 @@
 
 - **Frontend**（`src/`）：骨架（侧栏 + 页头）+ 四个独立视图（含设置）+ 右侧检查器。组件不直接 `invoke`，走 store action；`services/`（`theme.ts` / `system.ts` / `settings.ts`）是唯一 invoke 出口（非 Tauri 环境降级 mock）。
 - **Backend**（`src-tauri/src/commands/`）：命令编排，错误一律 `Result<T, String>` 且是**用户能照着行动**的中文。
-- **Theme**（`utils/importer.rs`、`utils/paths.rs`）：zip 导入、槽位推断、落盘。**仅 `.zip`**（侧栏对话框 + 全窗口拖拽两个入口，共用同一条链路），无文件夹导入、无 `.inf` 解析。导出 zip 附带通用 `.inf` 安装文件（`utils/inf_export.rs`，决策 13），接收方右键即可安装。主题存储目录可换（`utils/themes_dir.rs`，换时整树搬迁）。
+- **Theme**（`utils/importer.rs`、`utils/inf_parse.rs`、`utils/paths.rs`）：zip / 文件夹导入、槽位映射、落盘。**收 `.zip` 与整个主题文件夹两个入口共用同一条链路**（`importer::import_source` 分发，决策 16；侧栏对话框只收 `.zip`，拖拽两种都收）；包内带 `.inf` 时槽位按说明书映射、优先于文件名推断，没带或解析失败才退回文件名推断（`inf_parse.rs`，决策 15）。导出 zip 附带通用 `.inf` 安装文件（`utils/inf_export.rs`，决策 13），接收方右键即可安装。主题存储目录可换（`utils/themes_dir.rs`，换时整树搬迁）。
 - **Cursor**（`utils/cursor.rs`）：`.cur`/`.ico`/`.ani` 解码。自解 ICO 目录挑最大帧、手写 RIFF 取 `LIST/fram`；**不转 GIF**。
 - **Registry**（`utils/registry.rs`）：HKCU 读写 + `SPI_SETCURSORS`。
 - **行为设置**（`utils/settings.rs` / `tray.rs` / `autostart.rs`）：`settings.json` 存关闭行为/主题目录/开关（Rust 与前端共用）；关闭到托盘时托盘图标动态创建移除；自启动写 `HKCU\...\Run`。外观三态留 `localStorage`（`lib/theme-mode.ts`，首帧落色要同步读）。
@@ -58,6 +58,7 @@
 **② 22 个命令**
 主题类 `get_all_themes` / `get_cursor_preview` / `import_theme` / `apply_theme` / `restore_default` / `delete_theme` / `rename_theme` / `export_theme`；数据与系统类 `get_data_dir` / `open_data_dir` / `get_windows_version` / `open_mouse_panel` / `get_zip_menu_registered` / `set_zip_menu` / `take_pending_import`；设置类 `get_settings` / `update_settings` / `get_autostart` / `set_autostart` / `set_themes_dir` / `export_backup` / `import_backup`。契约见架构设计 §5。几条容易记错：
 - `apply_theme` / `export_theme` 收**整个 `CursorTheme`**，不是 ID——系统方案只存在于注册表，没有磁盘目录，只给 ID 拿不到它的文件。
+- `import_theme` 收 `sourcePath`（**zip 或整个主题文件夹**，决策 16，后端权威校验）；包内带 `.inf` 时槽位按说明书映射、**优先于文件名推断**，没带或解析失败退回文件名推断、不缺槽位（决策 15，`utils/inf_parse.rs`）。
 - 没有 `list_themes`（是 `get_all_themes`）；没有 `create_custom_theme`（未实现）。
 - `get_data_dir` 只读不建目录；`open_data_dir` 才 `ensure_dir` + 调 opener。前端**禁止**用 `localDataDir()` 自己拼 `CursorStudio`（硬约束 1）。
 - `take_pending_import` 领取即删除（右键菜单 `--import` 转交通路），App 在启动与聚焦两个时机调用；`take_pending_import` 损坏返回 null 不报错。
@@ -74,7 +75,7 @@
 2. `SPI_SETCURSORS` **只传 `SPIF_SENDCHANGE`**；带 `SPIF_UPDATEINIFILE` 本机返回 `0x80070006`，刷新直接失败。
 3. `--no-sandbox` 不能从 `tauri.conf.json` 删：本机 WebView2 沙箱初始化失败会整窗纯白；Tauri 会覆盖同名环境变量，只能改 JSON。
 4. 「正在使用」只从注册表反推（`active_theme_id`），不存内存 / localStorage。
-5. 导出 zip 的文件名**按槽位命名**（导入端靠文件名反推槽位，否则"导出→再导入"必丢槽位）。
+5. 导出 zip 的文件名**按槽位命名**（导入端先看 `.inf` 映射、没有再靠文件名反推槽位；两种来源结果一致，否则"导出→再导入"必丢槽位）。
 6. 重命名只改 `theme.json`，目录名保持 UUID；`updated_at` 不动（界面当"导入于"用）。
 7. 删改类命令必须先 `Uuid::parse_str` 校验——`theme_dir(id)` 是字符串拼接，传 `../` 能越出数据目录。
 8. 多来源必须部分成功：注册表读不到不能让用户主题一起消失，失败进 `warnings`。
@@ -94,8 +95,7 @@
 
 | 项 | 现状 |
 |---|---|
-| 文件夹导入 | 对话框与拖拽都只收 `.zip` |
-| `.inf` 槽位映射 | 仅文件名推断 |
+| （当前无缺口） | 原「文件夹导入」「`.inf` 槽位映射」已实现（决策 15/16），别再当未实现 |
 
 **已拍板不做**（决策 10，别当"待排期"重新提）：自制方案（逐槽位上图）、单光标替换。槽位卡保持纯展示、不可点、不做 hover 暗示 —— 这是产品决定，不是没做完。
 
