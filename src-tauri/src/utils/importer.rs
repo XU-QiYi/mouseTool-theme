@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::models::{CursorSlot, CursorTheme};
-use crate::utils::{paths, registry};
+use crate::utils::{inf_parse, paths, registry};
 
-/// 单个主题包大小上限：50MB
-const MAX_ZIP_BYTES: u64 = 50 * 1024 * 1024;
+/// 单个主题来源大小上限：50MB（zip 按包大小计，文件夹按光标文件总量计）
+const MAX_THEME_BYTES: u64 = 50 * 1024 * 1024;
 
 /// 文件名关键字 → 槽位键名
 ///
@@ -111,6 +111,50 @@ fn collect_cursor_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String
     Ok(())
 }
 
+/// 递归收集目录下的 `.inf`（只用于读槽位映射，不算光标文件）
+///
+/// `.inf` 是可选加成，读不了就当没有：任何一层目录打不开都静默跳过。
+fn collect_inf_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_inf_files(&path, out);
+            continue;
+        }
+        let is_inf = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("inf"))
+            .unwrap_or(false);
+        if is_inf {
+            out.push(path);
+        }
+    }
+}
+
+/// 解析包里的 `.inf` 槽位映射（决策 15）
+///
+/// 按路径排序保证确定性，取第一个能给出至少一条映射的；一个都给不出就返回
+/// 空（整体退回文件名推断）。
+fn inf_slot_map(files_root: &Path) -> Vec<(&'static str, String)> {
+    let mut candidates = Vec::new();
+    collect_inf_files(files_root, &mut candidates);
+    candidates.sort();
+    for path in candidates {
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        let mapped = inf_parse::parse_inf(&bytes);
+        if !mapped.is_empty() {
+            return mapped;
+        }
+    }
+    Vec::new()
+}
+
 /// 把 zip 解压到临时目录
 fn extract_zip(zip_path: &Path, temp_dir: &Path) -> Result<(), String> {
     let file = File::open(zip_path)
@@ -147,17 +191,45 @@ fn extract_zip(zip_path: &Path, temp_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// 导入一个 zip 主题包，返回生成的主题
-pub fn import_zip(zip_path: &str) -> Result<CursorTheme, String> {
-    import_zip_as(zip_path, &Uuid::new_v4().to_string())
+/// 导入一个主题来源（`.zip` 包或整个主题文件夹，决策 16），返回生成的主题
+pub fn import_source(path: &str) -> Result<CursorTheme, String> {
+    import_source_as(path, &Uuid::new_v4().to_string())
 }
 
 /// `theme_id` 可注入：测试需要预先知道主题目录，才能构造并验证半成品状态
+fn import_source_as(path: &str, theme_id: &str) -> Result<CursorTheme, String> {
+    let source = Path::new(path);
+    let meta = fs::metadata(source)
+        .map_err(|err| format!("找不到这个文件，它可能已被移动或删除（{err}）"))?;
+
+    if meta.is_dir() {
+        return import_dir_as(source, theme_id);
+    }
+
+    // 文件只认 .zip：拖进来一张图片之类的要一句人话，而不是「不是有效的 ZIP」
+    let is_zip = source
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("zip"))
+        .unwrap_or(false);
+    if !is_zip {
+        return Err("只支持 .zip 主题包或整个主题文件夹".to_string());
+    }
+
+    import_zip_as(path, theme_id)
+}
+
+/// 兼容旧名：zip 导入入口（「导出 → 再导入」闭环测试等在用）
+pub fn import_zip(zip_path: &str) -> Result<CursorTheme, String> {
+    import_source_as(zip_path, &Uuid::new_v4().to_string())
+}
+
+/// 导入 zip 主题包：解压到临时目录后，走与文件夹相同的落盘流程
 fn import_zip_as(zip_path: &str, theme_id: &str) -> Result<CursorTheme, String> {
     let source = Path::new(zip_path);
     let meta = fs::metadata(source)
         .map_err(|err| format!("找不到这个文件，它可能已被移动或删除（{err}）"))?;
-    if meta.len() > MAX_ZIP_BYTES {
+    if meta.len() > MAX_THEME_BYTES {
         let mb = meta.len() as f64 / 1024.0 / 1024.0;
         return Err(format!(
             "主题包 {mb:.1}MB，超过 50MB 上限。请删掉多余的光标或截图后重新打包"
@@ -167,53 +239,99 @@ fn import_zip_as(zip_path: &str, theme_id: &str) -> Result<CursorTheme, String> 
     let temp_dir = std::env::temp_dir().join(format!("cursortheme-{theme_id}"));
     paths::ensure_dir(&temp_dir)?;
 
-    match extract_and_persist(source, &temp_dir, theme_id) {
-        Ok(theme) => {
-            let _ = fs::remove_dir_all(&temp_dir);
-            Ok(theme)
-        }
-        Err(err) => {
-            // 无论成败都清理临时目录
-            let _ = fs::remove_dir_all(&temp_dir);
-            // 失败时也不能留半成品主题目录：cursors/ 可能已经建了一半，
-            // 残留的无 theme.json 目录会让下次启动多一条「跳过主题目录」的 warning
-            let theme_dir = paths::theme_dir(theme_id);
-            match fs::remove_dir_all(&theme_dir) {
-                // extract/识别阶段的失败发生在落盘之前，目录可能根本没建过：
-                // NotFound = 没有东西可清理，不是清理失败，别把用户支去删一个
-                // 从不存在的目录
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(err),
-                // 清不掉要说明，别让人对着一个来历不明的坏目录发呆；原始错误优先
-                Err(_) => Err(format!(
-                    "{err}；另外，残留文件清理失败，可手动删除 {} 目录",
-                    theme_dir.display()
-                )),
-                Ok(()) => Err(err),
-            }
-        }
+    let mut files = Vec::new();
+    let outcome = extract_zip(source, &temp_dir).and_then(|()| {
+        collect_cursor_files(&temp_dir, &mut files)?;
+        persist_theme(files, &temp_dir, source, "压缩包", theme_id)
+    });
+    // 无论成败都清理临时目录
+    let _ = fs::remove_dir_all(&temp_dir);
+    outcome.map_err(|err| discard_partial(theme_id, err))
+}
+
+/// 导入一个主题文件夹（决策 16：与 zip 共用同一套流程，只是免了解压）
+///
+/// 源文件夹只读——光标复制进数据目录，原件留在原地。
+fn import_dir_as(source: &Path, theme_id: &str) -> Result<CursorTheme, String> {
+    let mut files = Vec::new();
+    collect_cursor_files(source, &mut files)?;
+
+    // 50MB 上限对文件夹同样生效：按收集到的光标文件总大小算
+    let total: u64 = files
+        .iter()
+        .filter_map(|file| fs::metadata(file).ok())
+        .map(|meta| meta.len())
+        .sum();
+    if total > MAX_THEME_BYTES {
+        let mb = total as f64 / 1024.0 / 1024.0;
+        return Err(format!(
+            "文件夹里的光标共 {mb:.1}MB，超过 50MB 上限。请删掉多余的光标或截图后再导入"
+        ));
+    }
+
+    persist_theme(files, source, source, "文件夹", theme_id)
+        .map_err(|err| discard_partial(theme_id, err))
+}
+
+/// 失败时清掉半成品主题目录，返回原始错误
+///
+/// cursors/ 可能已经建了一半，残留的无 theme.json 目录会让下次启动多一条
+/// 「跳过主题目录」的 warning。NotFound = 落盘前的失败、目录可能根本没建过，
+/// 不是清理失败，别把用户支去删一个从不存在的目录。
+fn discard_partial(theme_id: &str, err: String) -> String {
+    let theme_dir = paths::theme_dir(theme_id);
+    match fs::remove_dir_all(&theme_dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => err,
+        // 清不掉要说明，别让人对着一个来历不明的坏目录发呆；原始错误优先
+        Err(_) => format!(
+            "{err}；另外，残留文件清理失败，可手动删除 {} 目录",
+            theme_dir.display()
+        ),
+        Ok(()) => err,
     }
 }
 
-fn extract_and_persist(
+/// 把收集好的光标文件落盘成主题；zip（解压后的临时目录）与文件夹共用
+///
+/// `files_root` 是找 `.inf` 的根；`source` 提供主题名与「导入自」描述；
+/// `label`（压缩包 / 文件夹）只影响报错文案。
+fn persist_theme(
+    files: Vec<PathBuf>,
+    files_root: &Path,
     source: &Path,
-    temp_dir: &Path,
+    label: &str,
     theme_id: &str,
 ) -> Result<CursorTheme, String> {
-    extract_zip(source, temp_dir)?;
-
-    let mut files = Vec::new();
-    collect_cursor_files(temp_dir, &mut files)?;
     if files.is_empty() {
-        return Err(
-            "压缩包里没有 .cur 或 .ani 光标文件。请把光标文件一起打包，不要只放 .inf 或说明文档"
-                .to_string(),
-        );
+        return Err(match label {
+            "文件夹" => "这个文件夹里（含子文件夹）没有 .cur 或 .ani 光标文件。光标文件要一起放进来，别只放 .inf 或说明文档".to_string(),
+            _ => "压缩包里没有 .cur 或 .ani 光标文件。请把光标文件一起打包，不要只放 .inf 或说明文档".to_string(),
+        });
     }
 
-    // 按槽位去重：同一槽位只取第一个文件
+    // 槽位来源两条（决策 15）：先按 .inf 说明书映射，剩余槽位退回文件名推断；
+    // 说明书指了名但包里没有那个文件时，该槽位也退回推断，不因此缺槽位
     let mut seen: HashSet<&'static str> = HashSet::new();
     let mut picked: Vec<(&'static str, PathBuf)> = Vec::new();
-    for file in files {
+
+    for (slot, file_name) in inf_slot_map(files_root) {
+        if !seen.insert(slot) {
+            continue;
+        }
+        let wanted = file_name.to_lowercase();
+        match files.iter().find(|file| {
+            file.file_name()
+                .is_some_and(|name| name.to_string_lossy().to_lowercase() == wanted)
+        }) {
+            Some(path) => picked.push((slot, path.clone())),
+            // 说明书指向的文件不在包里：放开这个槽位给文件名推断兜底
+            None => {
+                seen.remove(&slot);
+            }
+        }
+    }
+
+    for file in &files {
         let stem = file
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
@@ -222,13 +340,14 @@ fn extract_and_persist(
             continue;
         };
         if seen.insert(slot) {
-            picked.push((slot, file));
+            picked.push((slot, file.clone()));
         }
     }
 
     if picked.is_empty() {
         return Err(
-            "光标文件名认不出来。请改用 arrow、busy、text、hand 这类标准命名后重新打包".to_string(),
+            "光标文件名认不出来，也没有可用的 .inf 槽位映射。请把文件改成 arrow、busy、text、hand 这类标准命名后再导入"
+                .to_string(),
         );
     }
 
@@ -263,10 +382,14 @@ fn extract_and_persist(
         });
     }
 
-    let theme_name = source
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "未命名主题".to_string());
+    // 文件夹名整体当主题名（「我的主题.v2」不吃掉 .v2）；zip 去掉 .zip 后缀
+    let theme_name = if source.is_dir() {
+        source.file_name()
+    } else {
+        source.file_stem()
+    }
+    .map(|s| s.to_string_lossy().to_string())
+    .unwrap_or_else(|| "未命名主题".to_string());
 
     let now = now_string();
     let theme = CursorTheme {
@@ -418,6 +541,120 @@ mod tests {
         let outcome = import_zip(bad.to_str().unwrap());
         assert!(outcome.is_err());
         std::fs::remove_file(&bad).ok();
+    }
+
+    /// 文件夹导入（决策 16）：与 zip 同一套流程，主题名取文件夹名整体
+    #[test]
+    fn 能导入主题文件夹且名字取文件夹名整体() {
+        let cur = std::fs::read(r"C:\Windows\Cursors\aero_arrow.cur").expect("需要系统光标文件");
+        let ani = std::fs::read(r"C:\Windows\Cursors\荧1.0\arrow.ani").expect("需要系统动态光标");
+
+        // 文件夹名故意带点：.v2 不能被当扩展名吃掉
+        let src_dir = std::env::temp_dir().join("cursortheme-folder-src.v2");
+        std::fs::create_dir_all(&src_dir).expect("建临时源文件夹");
+        std::fs::write(src_dir.join("pointer.cur"), &cur).expect("写入光标");
+        std::fs::write(src_dir.join("busy.ani"), &ani).expect("写入光标");
+
+        let theme = import_source(src_dir.to_str().unwrap()).expect("导入应成功");
+
+        assert_eq!(theme.cursors.len(), 2);
+        assert_eq!(theme.name, "cursortheme-folder-src.v2");
+        assert!(theme.cursors.iter().all(|c| Path::new(&c.file_path).exists()));
+
+        std::fs::remove_dir_all(&src_dir).ok();
+        std::fs::remove_dir_all(paths::theme_dir(&theme.id)).ok();
+    }
+
+    /// .inf 说明书优先（决策 15）：文件名认不出的文件按说明书对号
+    #[test]
+    fn inf_说明书优先于文件名推断() {
+        let cur = std::fs::read(r"C:\Windows\Cursors\aero_arrow.cur").expect("需要系统光标文件");
+
+        let src_dir = std::env::temp_dir().join("cursortheme-inf-src");
+        std::fs::create_dir_all(&src_dir).expect("建临时源文件夹");
+        // 两个文件名都认不出槽位，全靠说明书
+        std::fs::write(src_dir.join("01-blue.cur"), &cur).expect("写入光标");
+        std::fs::write(src_dir.join("zz-tip.cur"), &cur).expect("写入光标");
+        std::fs::write(
+            src_dir.join("theme.inf"),
+            concat!(
+                "[Scheme.Reg]\r\n",
+                "HKCU,\"Control Panel\\Cursors\",Arrow,,\"%10%\\%CUR_DIR%\\01-blue.cur\"\r\n",
+                "HKCU,\"Control Panel\\Cursors\",IBeam,,\"%10%\\%CUR_DIR%\\zz-tip.cur\"\r\n",
+            ),
+        )
+        .expect("写入 .inf");
+
+        let theme = import_source(src_dir.to_str().unwrap()).expect("导入应成功");
+
+        assert_eq!(theme.cursors.len(), 2);
+        assert!(theme.cursors.iter().any(|c| c.registry_key == "Arrow"));
+        assert!(theme.cursors.iter().any(|c| c.registry_key == "IBeam"));
+
+        std::fs::remove_dir_all(&src_dir).ok();
+        std::fs::remove_dir_all(paths::theme_dir(&theme.id)).ok();
+    }
+
+    /// 说明书指向的文件不在包里时，该槽位退回文件名推断，不缺槽位
+    #[test]
+    fn inf_指向缺失文件时该槽位退回文件名推断() {
+        let cur = std::fs::read(r"C:\Windows\Cursors\aero_arrow.cur").expect("需要系统光标文件");
+        let ani = std::fs::read(r"C:\Windows\Cursors\荧1.0\arrow.ani").expect("需要系统动态光标");
+
+        let src_dir = std::env::temp_dir().join("cursortheme-inf-missing-src");
+        std::fs::create_dir_all(&src_dir).expect("建临时源文件夹");
+        std::fs::write(src_dir.join("arrow.cur"), &cur).expect("写入光标");
+        std::fs::write(src_dir.join("busy.ani"), &ani).expect("写入光标");
+        std::fs::write(
+            src_dir.join("theme.inf"),
+            concat!(
+                "[Control Panel\\Cursors]\r\n",
+                "Arrow=arrow.cur\r\n",
+                "Wait=ghost.ani\r\n",
+            ),
+        )
+        .expect("写入 .inf");
+
+        let theme = import_source(src_dir.to_str().unwrap()).expect("导入应成功");
+
+        let wait = theme
+            .cursors
+            .iter()
+            .find(|c| c.registry_key == "Wait")
+            .expect("Wait 不该因为说明书指向缺失文件而缺槽位");
+        assert!(
+            wait.file_path.ends_with("wait.ani"),
+            "busy.ani 应按文件名推断落到 Wait，实际：{}",
+            wait.file_path
+        );
+
+        std::fs::remove_dir_all(&src_dir).ok();
+        std::fs::remove_dir_all(paths::theme_dir(&theme.id)).ok();
+    }
+
+    /// 非 zip 文件给出人话，而不是「不是有效的 ZIP」
+    #[test]
+    fn 非_zip_文件报人话() {
+        let file = std::env::temp_dir().join("cursortheme-not-theme.png");
+        std::fs::write(&file, b"png").expect("写入测试文件");
+
+        let err = import_source(file.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("只支持"), "实际：{err}");
+
+        std::fs::remove_file(&file).ok();
+    }
+
+    /// 空文件夹与空 zip 一样报「没有光标文件」，只是文案说文件夹
+    #[test]
+    fn 空文件夹导入报错且不残留() {
+        let dir = std::env::temp_dir().join("cursortheme-empty-folder");
+        std::fs::create_dir_all(&dir).expect("建空文件夹");
+
+        let err = import_source(dir.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("这个文件夹里"), "实际：{err}");
+        assert!(err.contains("没有 .cur 或 .ani"), "实际：{err}");
+
+        std::fs::remove_dir(&dir).ok();
     }
 
     /// 持久化阶段失败时不能留半成品主题目录：没有 theme.json 的残留目录

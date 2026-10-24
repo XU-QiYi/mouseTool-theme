@@ -22,25 +22,26 @@ function fileNameOf(path: string): string {
 }
 
 /**
- * 校验拖入的文件名：返回错误文案，null = 通过
+ * 校验拖入内容：返回错误文案，null = 放行
  *
- * 大小不在这里查——Tauri 的拖拽事件只给路径不给文件句柄，
- * 查大小得引 fs 插件（新依赖），而后端 import_zip 本来就有 50MB 上限。
+ * 文件夹导入（决策 16）后，完整路径不再按扩展名拦：文件夹名可能带点
+ * （「我的主题.v2」），前端也判不了路径是不是目录——zip / 文件夹 / 其它文件
+ * 交给后端 `import_theme` 权威校验，各自给出精准文案。
+ * 只有浏览器通路（拿到的只有文件名、没有路径）维持只收 .zip。
  */
-export function validateDrop(names: string[]): string | null {
-  if (names.length > 1) return "一次只能导入一个主题包";
-  const name = names[0];
-  if (!ZIP_EXT.test(name)) {
-    // 无扩展名的路径多半是文件夹：把话说全，别让拖 .cur 的人以为文件夹也不行
-    return /\.[^\\/]+$/.test(name)
-      ? "只支持 .zip 主题包"
-      : "只支持 .zip 主题包，整个文件夹暂不支持";
+export function validateDrop(items: DropItem[]): string | null {
+  if (items.length > 1) return "一次只能导入一个主题包";
+  const item = items[0];
+  if (!item) return null;
+  const isFullPath = /[\\/]/.test(item.path);
+  if (!isFullPath && !ZIP_EXT.test(item.name)) {
+    return "只支持 .zip 主题包";
   }
   return null;
 }
 
 /**
- * 全窗口拖拽导入（.zip 主题包）
+ * 全窗口拖拽导入（.zip 主题包或主题文件夹）
  *
  * 两条通路收敛到同一套校验与导入链路：
  * - Tauri：`dragDropEnabled` 接管原生拖放后，WebView2 的 HTML5 drag 事件不会触发，
@@ -59,7 +60,7 @@ export function useDragDropImport() {
         // 文本、网页元素这类非文件拖入没有可处理的内容：弹「导入失败」反而是打扰
         return;
       }
-      const error = validateDrop(items.map((item) => item.name));
+      const error = validateDrop(items);
       if (error) {
         toast.error("导入失败", error);
         return;

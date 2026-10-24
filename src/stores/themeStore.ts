@@ -89,7 +89,7 @@ interface ThemeStore {
   loadThemes: () => Promise<void>;
   applyTheme: (id: string) => Promise<void>;
   restoreDefault: () => Promise<void>;
-  importTheme: (zipPath: string) => Promise<void>;
+  importTheme: (sourcePath: string) => Promise<void>;
   deleteTheme: (id: string) => Promise<void>;
   renameTheme: (id: string, newName: string) => Promise<void>;
   exportTheme: (id: string, destPath: string) => Promise<void>;
@@ -201,12 +201,12 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     }
   },
 
-  importTheme: async (zipPath) => {
+  importTheme: async (sourcePath) => {
     // 用 importing 而不是 loading：导入是"往列表里加一条"，
     // 把列表换成骨架会让用户以为原来的主题没了
     set({ importing: true });
     try {
-      const theme = await apiImportTheme(zipPath);
+      const theme = await apiImportTheme(sourcePath);
       set((state) => ({
         themes: [theme, ...state.themes],
         // 留在当前页，但把新方案在「图库」和「我的主题」里都选中：

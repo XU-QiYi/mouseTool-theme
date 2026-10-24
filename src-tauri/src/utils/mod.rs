@@ -3,6 +3,7 @@ pub mod cursor;
 pub mod history;
 pub mod importer;
 pub mod inf_export;
+pub mod inf_parse;
 pub mod integration;
 pub mod paths;
 pub mod registry;

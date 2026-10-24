@@ -56,8 +56,9 @@ mouseTool-theme/
 │           ├── paths.rs            ← 数据目录唯一来源（主题目录跟随 settings.json 覆盖值）
 │           ├── registry.rs         ← SLOT_DEFS、注册表读写、SPI 刷新
 │           ├── cursor.rs           ← .cur/.ico/.ani 解析与缩放
-│           ├── importer.rs         ← zip 导入、槽位推断
+│           ├── importer.rs         ← zip / 文件夹导入、槽位推断（决策 15/16）
 │           ├── inf_export.rs       ← 导出 zip 附带的通用 .inf 安装文件（决策 13）
+│           ├── inf_parse.rs        ← 导入时解析 .inf 槽位映射（决策 15）
 │           ├── history.rs          ← 最近使用读写（含备份合并）
 │           ├── settings.rs         ← settings.json（关闭行为/主题目录/开关，决策 14）
 │           ├── themes_dir.rs       ← 主题存储目录更换与搬迁
@@ -128,7 +129,7 @@ App.tsx
 |---|---|---|---|
 | `get_all_themes` | — | `ThemesResult` | 只有聚合本身崩溃才 `Err`；单个来源失败走 `warnings` |
 | `get_cursor_preview` | `filePath` | `CursorPreview` | **不失败**，解析不出来返回空帧 |
-| `import_theme` | `zipPath` | `CursorTheme` | 超过 50MB、无光标文件、认不出槽位、写盘失败 |
+| `import_theme` | `sourcePath` | `CursorTheme` | 不是 .zip 也不是文件夹、超过 50MB、无光标文件、认不出槽位（且 .inf 无映射）、写盘失败 |
 | `apply_theme` | `theme`（整个对象） | `ApplyOutcome` | 注册表写失败；历史写失败只进 `warning` |
 | `restore_default` | — | `void` | 清空注册表失败 |
 | `delete_theme` | `themeId` | `void` | ID 非法、目录不存在、被占用 |
@@ -151,7 +152,7 @@ App.tsx
 
 **为什么 `apply_theme` / `export_theme` 收整个 `CursorTheme` 而不是 ID**：系统方案只存在于注册表，没有磁盘目录，但同样有光标文件路径；只传 ID 就到不了它们的文件。
 
-**`export_theme` 的包内清单**：光标文件按槽位重命名（`arrow.cur` / `busy.ani`），另附 `<方案名>.inf`（决策 13，`utils/inf_export.rs` 生成，UTF-16LE + BOM）——接收方没装本软件也能右键安装。导入端只认 `.cur/.ani/.ico`，`.inf` 自动忽略，不破坏「导出 → 再导入」闭环。
+**`export_theme` 的包内清单**：光标文件按槽位重命名（`arrow.cur` / `busy.ani`），另附 `<方案名>.inf`（决策 13，`utils/inf_export.rs` 生成，UTF-16LE + BOM）——接收方没装本软件也能右键安装。导入端只收 `.cur/.ani/.ico` 当光标；`.inf` 由 `utils/inf_parse.rs` 解析槽位映射（决策 15，2026-10-24 起），「导出 → 再导入」闭环不受影响——包内文件本就按槽位命名，`.inf` 映射与文件名推断结果一致。
 
 **设置三来源**（决策 14）：行为类落 `settings.json`（`utils/settings.rs`，Rust 与前端共用，`update_settings` 是补丁语义）；外观三态留 `localStorage`（首帧落色要同步读）；开机自启动的真相在 `HKCU\...\Run`。`import_backup` 是**合并**语义：本地已有主题整套跳过、记录本地优先按主题去重，只补回缺失的。
 
@@ -179,7 +180,7 @@ App.tsx
 
 **应用**：点「应用此主题」→ `apply_theme(theme)` → 按 `SLOT_DEFS` 写 15 个槽位值 + `SchemeName`（不写 `Schemes`）→ `SPI_SETCURSORS`（只 `SPIF_SENDCHANGE`）→ 追加 `history.json` → 返回最新 `recent` → store 更新 `activeThemeId` + `recent`。
 
-**导入**：对话框选 `.zip` 或拖入窗口任意位置（Tauri drag-drop 事件给路径，前端只做数量/扩展名校验，拖入时有全窗遮罩反馈）→ `import_theme` → 解压到临时目录 → 扫 `.cur/.ani` → 文件名推断槽位 → 落盘 `themes/<uuid>/`（失败时连半成品目录一起清理）→ 返回主题 → store 追加并选中。
+**导入**：对话框选 `.zip`（对话框只收 zip），或把 `.zip` / 整个主题文件夹拖进窗口（Tauri drag-drop 事件给完整路径，前端只拦多件拖入，zip / 文件夹 / 其它文件由后端权威校验，拖入时有全窗遮罩反馈）→ `import_theme`（`importer::import_source` 分发：文件夹直接用，zip 解压到临时目录，两者走同一条落盘流程，决策 16）→ 扫 `.cur/.ani/.ico` → 包里带 `.inf` 时先按说明书映射槽位（决策 15），剩余槽位退回文件名推断 → 落盘 `themes/<uuid>/`（失败时连半成品目录一起清理）→ 返回主题 → store 追加并选中。
 
 **删除**：按钮禁用（使用中/系统方案）→ store 二次拦截 → 后端 `Uuid::parse_str` 校验 → `remove_dir_all`。
 
@@ -192,7 +193,7 @@ App.tsx
 3. **多来源必须部分成功**：`get_all_themes` 不能因为注册表读不到就让用户主题一起消失。
 4. **`active_theme_id` 只从注册表反推**。内存或 localStorage 记的 active 一重启就过期，会让已应用的主题还能再点一次「应用」。
 5. **删改类命令必须校验 UUID**：`theme_dir(id)` 是字符串拼接，不校验时传 `../` 就能越出数据目录。
-6. **导出包内文件名按槽位重命名**，因为导入端靠文件名反推槽位；用源文件名会破坏"导出→再导入"闭环。
+6. **导出包内文件名按槽位重命名**，因为导入端要靠它还原槽位（带 `.inf` 的包按说明书映射，但包内文件按槽位命名时两种来源结果一致）；用源文件名会破坏"导出→再导入"闭环。
 7. **重命名只改 `theme.json`**，目录名保持 UUID。
 8. **预览不落盘**：单帧最长边 128px、动态光标最多 32 帧，缓存是前端内存 `Map`（按路径去重 + 请求合并）。
 9. **不加新依赖**：`@base-ui/react` 已覆盖 toast/dialog/menu/popover，优先手写封装（决策 6）。
@@ -202,14 +203,10 @@ App.tsx
 
 ## 9. 未实现 / 已知缺口
 
-| 项 | 当前状态 |
-|---|---|
-| 文件夹导入 | `import_theme` 只吃 `.zip` 路径（拖拽与对话框一致） |
-| `.inf` 槽位映射解析 | 只有文件名推断 |
-
+> **无**（2026-10-24）：原缺口「文件夹导入」「`.inf` 槽位映射解析」均已实现（决策 16 / 决策 15），现状见 `mouse-theme需求描述.md` §9。
+>
 > 自制方案与单光标替换**已拍板不做**（决策 10），不在缺口清单里，别当"待排期"重新提。
 > 窗口自适应也不是缺口：`tauri.conf.json` 已设 `minWidth: 1080` / `minHeight: 640` 兜底，**仍不做响应式断点**（窄窗下不重排、不收起任何一栏）。
-> 表内这些缺口在 `mouse-theme需求描述.md` §9 有对应的"开工前要先定什么"，别在文档里写成"已支持"。
 
 ---
 

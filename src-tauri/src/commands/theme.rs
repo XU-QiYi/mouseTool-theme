@@ -136,10 +136,10 @@ pub fn get_all_themes() -> Result<ThemesResult, String> {
     })
 }
 
-/// 导入 zip 主题包，返回新主题
+/// 导入主题来源（`.zip` 包或整个文件夹，决策 16），返回新主题
 #[tauri::command]
-pub fn import_theme(zip_path: String) -> Result<CursorTheme, String> {
-    importer::import_zip(&zip_path)
+pub fn import_theme(source_path: String) -> Result<CursorTheme, String> {
+    importer::import_source(&source_path)
 }
 
 /// 把主题应用到系统：写注册表后立即刷新，无需注销

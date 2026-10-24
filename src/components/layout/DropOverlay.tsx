@@ -22,8 +22,8 @@ export function DropOverlay({ active }: { active: boolean }) {
     >
       <div className="flex flex-col items-center gap-3 rounded-xl border-2 border-dashed border-ring px-12 py-8">
         <FolderDown className="size-8 text-muted-foreground" aria-hidden />
-        <p className="text-sm font-medium text-foreground">松开导入 .zip 主题包</p>
-        <p className="text-2xs text-muted-foreground">支持含 .cur / .ani 光标的压缩包</p>
+        <p className="text-sm font-medium text-foreground">松开导入主题包</p>
+        <p className="text-2xs text-muted-foreground">支持 .zip 压缩包，或含 .cur / .ani 光标的文件夹</p>
       </div>
     </div>
   );
