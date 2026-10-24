@@ -9,7 +9,7 @@
 //! - **UTF-16LE + BOM**：ANSI 会把中文方案名在非中文系统的机器上写成乱码；
 //! - **CRLF**：Windows 安装器按行解析。
 //!
-//! 导入端不解析 `.inf`（未实现清单），本模块只服务导出。
+//! 导入端的 `.inf` 解析在 `inf_parse`（决策 15，2026-10-24 起），本模块只服务导出。
 
 use crate::utils::registry::SLOT_DEFS;
 
