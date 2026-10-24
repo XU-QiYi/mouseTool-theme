@@ -5,9 +5,10 @@ Tauri 2 (Rust) + React 19 + TypeScript + Vite + Tailwind v4 + shadcn/ui (base-no
 
 ## 范围（决策 10/12，均已拍板）
 - 产品 = 主题管理器：导入 → 应用 → 管理 → 回溯。**自制方案 / 单光标替换不做**；槽位卡不可点、无 hover 暗示是产品决定不是欠债
-- 主题来源只有两条：系统注册表方案、`.zip` 导入（对话框 + 全窗口拖拽共用一条链路）
+- 主题来源：系统注册表方案、`.zip` / 整个主题文件夹导入（`importer::import_source` 分发共用一条链路，决策 16；对话框只收 zip，拖拽两种都收）
 - 系统级集成走「先做出来看效果」：`.zip` 右键菜单是**试点**（设置页手动注册/移除 HKCU，零 UAC），真机试后定去留；检查更新无版本源不做
-- 决策 13（已合 main）：导出 zip 附带通用 `.inf`（`utils/inf_export.rs`，UTF-16LE+BOM，右键安装）；只收 .cur/.ani 槽位；导入端不解析 inf；**装后命令真机否决已移除**——.inf 安装只注册不生效，生效=接收方选一次方案或注销重登
+- 决策 13（已合 main）：导出 zip 附带通用 `.inf`（`utils/inf_export.rs`，UTF-16LE+BOM，右键安装）；只收 .cur/.ani 槽位；**装后命令真机否决已移除**——.inf 安装只注册不生效，生效=接收方选一次方案或注销重登
+- 决策 15/16（2026-10-24 合入）：包内带 `.inf` 时槽位按说明书映射、**优先于文件名推断**（`utils/inf_parse.rs`，认直写段/AddReg/Schemes 三种写法，缺文件的槽位退回文件名推断）；文件夹导入与 zip 共用落盘流程（50MB 按光标文件总量计）；命令入参 zipPath → sourcePath
 - 决策 14（2026-10-23，feature/settings 分支）：设置五分组 + 行为设置；**语言切换不做**（仅简体中文，用户候选项唯一砍掉的）；外观三态迁入「设置→通用」（修订决策 11）；检查更新接 GitHub Releases（作废决策 12 的「不做」）
 
 ## 文档权威顺序
@@ -31,7 +32,7 @@ Tauri 2 (Rust) + React 19 + TypeScript + Vite + Tailwind v4 + shadcn/ui (base-no
 ## 关键技术决定
 - **多来源部分成功**：`ThemesResult{themes,warnings,active_theme_id,recent}`，来源失败进 warnings；`read_user_themes` 返回 `(themes, warnings)`
 - **数据目录** `%LOCALAPPDATA%\CursorStudio\{history.json, pending_import.json, themes/<uuid>/{theme.json, cursors/}}`，唯一来源 `utils/paths.rs::data_root()`，前端禁止自拼
-- **槽位推断两段式**：EXACT_NAMES 精确匹配短名（no/ns/we/up）→ SLOT_KEYWORDS 包含匹配；短名进包含匹配会撞 normal/upload
+- **槽位映射两段式**：包内 `.inf` 优先（`inf_parse.rs`，决策 15）→ 其次 EXACT_NAMES 精确匹配短名（no/ns/we/up）→ 最后 SLOT_KEYWORDS 包含匹配；短名进包含匹配会撞 normal/upload
 - **15 槽位顺序**以 `utils/registry.rs::SLOT_DEFS` 为准；`.cur/.ico` 自解 ICO 挑最大帧；`.ani` 手写 RIFF 取 LIST/fram，rate 单位 1/60 秒
 - **光标路径指向原位置**，不复制进系统目录 → 正在使用的主题不能删（三层防护）
 - **单实例 + 右键菜单转交**（决策 12）：CreateMutexW 命名互斥；二实例写 `pending_import.json`→FindWindowW 拉前台→退出；活实例启动+聚焦时 `take_pending_import` 领取（领取即删）。**改窗口标题必须同步 `WINDOW_TITLE`**
@@ -57,7 +58,7 @@ Tauri 2 (Rust) + React 19 + TypeScript + Vite + Tailwind v4 + shadcn/ui (base-no
 ## 组件与流程坑
 - vite cacheDir 在 OS 临时目录，**禁止改回 node_modules/.vite**；dev server 只用 `npm run dev:bg`，启动+验证同一条命令
 - 改名只改 theme.json 的 name，目录保 UUID，updated_at 不动；草稿用 ref 存（Esc/blur 竞态）
-- 导出 zip 包内文件名按槽位命名（导入靠文件名反推）；写文件失败要清半成品
+- 导出 zip 包内文件名按槽位命名（导入先看 .inf 映射、没有再靠文件名反推，两种来源结果一致）；写文件失败要清半成品
 - 删改类命令先 `Uuid::parse_str`；滚动列表首尾留 ≥2px 防 ring 被裁
 - 错误文案：中文主句说人话，细节进括号
 
