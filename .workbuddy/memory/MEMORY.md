@@ -13,6 +13,7 @@ Tauri 2 (Rust) + React 19 + TypeScript + Vite + Tailwind v4 + shadcn/ui (base-no
 ## 文档权威顺序
 决策记录 > 需求描述 > 架构设计 > design-system/motion。冲突取前者。
 - 不得把未实现写成已支持；改交叉引用必跑 `node scripts/doc_ref_check.mjs`（指空退出码 1）
+- **视觉变更要双登记**：`design-system.md` §6 变更记录（版本号递增）+ `motion.md` §8，只改一处必漏
 - `AGENTS.md`（小写 agents.md）是注入的速查卡，事实必须与代码一致；15 槽位 / LOCALAPPDATA / 不写 Schemes / 15 命令
 - 圆角口径：`sm 6 / md 8 / lg 10（按钮）/ xl 14（卡片）/ 4xl 26（徽章）`
 
@@ -50,7 +51,8 @@ Tauri 2 (Rust) + React 19 + TypeScript + Vite + Tailwind v4 + shadcn/ui (base-no
 - token 唯一来源 `src/App.css`；间距 2px 网格、禁 `text-[Npx]`、禁 `transition-all`、动效只写 `duration-(--motion-*)`
 - `--ring` 调深到 oklch(0.55) 且焦点环不带 /50（重 add shadcn 组件后要重打）
 - 动效四档 `--motion-fast/base/slow/exit` = 120/180/240/160ms；base-ui toast 前插栈顶，FLIP 用 offsetParent+top
-- 验收：`nav_check`（四页结构签名）、`design_check`、`motion_check`（28 项）、`design_audit`；**必须与 dev_bg 同一条命令**
+- Toast 倒计时条是**读数不是装饰**：时长=toast timeout（内联 `animation-duration`）、必须 `linear` —— §2 硬规则唯一例外；挂起必须和 base-ui 计时器同进退（`data-expanded` + `toaster.tsx` 的窗口焦点镜像），否则"条走完了 toast 还在"
+- 验收：`nav_check`（四页结构签名）、`design_check`、`motion_check`（33 项）、`design_audit`；**必须与 dev_bg 同一条命令**
 
 ## 组件与流程坑
 - vite cacheDir 在 OS 临时目录，**禁止改回 node_modules/.vite**；dev server 只用 `npm run dev:bg`，启动+验证同一条命令
