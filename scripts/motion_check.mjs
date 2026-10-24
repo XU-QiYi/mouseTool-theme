@@ -288,6 +288,83 @@ try {
   check("移除最旧 toast 时，上方项平滑落回（FLIP）", Boolean(shift), shift ? `${shift.frames.slice(0, 40)}…` : `animate 调用=${flip.onRemove.length}`);
   check("让位时长 180ms", shift?.duration === 180, `${shift?.duration ?? "-"}ms`);
 
+  // ── 3.5 Toast 倒计时条 ──
+  // 事实：条长 = 剩余寿命（时长=toast 超时、linear、随时间缩短），挂起与计时器同进退
+  const countdown = JSON.parse(
+    await evaluate(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const out = {};
+      const t = window.__toast.success('倒计时检查', '条应随剩余时间缩短');
+      await sleep(150);
+      const bar = document.querySelector('[data-slot="toast-progress"]');
+      out.present = Boolean(bar);
+      if (!bar) return JSON.stringify(out);
+      const anim = bar.getAnimations().find((a) => a.animationName === 'toast-countdown');
+      out.duration = anim ? anim.effect.getTiming().duration : 0;
+      out.fill = getComputedStyle(bar).animationFillMode;
+      const sx = () => {
+        const tr = getComputedStyle(bar).transform;
+        const m = /matrix\\(([-\\d.eE]+)/.exec(tr);
+        return m ? Number(m[1]) : 1;
+      };
+      out.s1 = sx();
+      await sleep(600);
+      out.s2 = sx();
+      const r = document.querySelector('[data-slot="toast"]').getBoundingClientRect();
+      out.point = [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)];
+      return JSON.stringify(out);
+    })()`,
+    ),
+  );
+  check(
+    "toast 带倒计时条，时长 = toast 超时（success 3200ms）",
+    countdown.present === true && countdown.duration === 3200,
+    `duration=${countdown.duration}ms fill=${countdown.fill}`,
+  );
+  check(
+    "倒计时条随剩余时间缩短（scaleX 递减）",
+    countdown.present && countdown.s2 < countdown.s1,
+    `scaleX ${countdown.s1?.toFixed(3)} → ${countdown.s2?.toFixed(3)}`,
+  );
+
+  // 悬停走真实指针：mouseenter → base-ui 打 data-expanded → 条挂起；移开后继续走
+  let hover = { expanded: false, paused: "", frozen: true, running: "" };
+  if (countdown.point) {
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: countdown.point[0], y: countdown.point[1] });
+    await sleep(200);
+    hover = JSON.parse(
+      await evaluate(`(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const bar = document.querySelector('[data-slot="toast-progress"]');
+        const root = document.querySelector('[data-slot="toast"]');
+        const sx = () => {
+          const tr = getComputedStyle(bar).transform;
+          const m = /matrix\\(([-\\d.eE]+)/.exec(tr);
+          return m ? Number(m[1]) : 1;
+        };
+        const out = { expanded: root.hasAttribute('data-expanded'), paused: getComputedStyle(bar).animationPlayState };
+        const a = sx();
+        await sleep(400);
+        out.frozen = Math.abs(sx() - a) < 1e-6;
+        return JSON.stringify(out);
+      })()`,
+      ),
+    );
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 5, y: 5 });
+    await sleep(200);
+    hover.running = await evaluate(
+      `getComputedStyle(document.querySelector('[data-slot="toast-progress"]')).animationPlayState`,
+    );
+    await evaluate(`window.__toast.close()`);
+    await sleep(300);
+  }
+  check(
+    "悬停时倒计时条挂起（data-expanded → paused）且真冻结",
+    hover.expanded === true && hover.paused === "paused" && hover.frozen === true,
+    `expanded=${hover.expanded} play=${hover.paused} frozen=${hover.frozen}`,
+  );
+  check("移开后倒计时条继续走", hover.running === "running", `play=${hover.running}`);
+
   // ── 4. 减少动态偏好 ──
   await send("Emulation.setEmulatedMedia", {
     features: [{ name: "prefers-reduced-motion", value: "reduce" }],
@@ -302,10 +379,13 @@ try {
       await sleep(45);
       const el = document.querySelector('[data-slot="toast"]');
       const cs = getComputedStyle(el);
+      const bar = document.querySelector('[data-slot="toast-progress"]');
       const out = {
         reduced: matchMedia('(prefers-reduced-motion: reduce)').matches,
         duration: parseFloat(cs.transitionDuration) || 0,
         opacity: Number(cs.opacity),
+        // 倒计时条的存在意义就是"看着它缩短"，减少动态下应整体不显示
+        barDisplay: bar ? getComputedStyle(bar).display : 'absent',
       };
       await sleep(300);
       window.__toast.close(t && t.id ? t.id : t);
@@ -319,6 +399,7 @@ try {
   check("reduced-motion 下过渡时长被压到近似 0", reduced.duration < 0.001, `${reduced.duration}s`);
   check("reduced-motion 下 toast 立即到位", reduced.opacity === 1, `opacity=${reduced.opacity}`);
   check("reduced-motion 下不跑 FLIP 动画", reduced.animateCalls === 0, `animate 调用 ${reduced.animateCalls} 次`);
+  check("reduced-motion 下倒计时条不显示", reduced.barDisplay === "none", `display=${reduced.barDisplay}`);
   await send("Emulation.setEmulatedMedia", { media: "", features: [] });
 
   // ── 5. 控件状态过渡 ──
