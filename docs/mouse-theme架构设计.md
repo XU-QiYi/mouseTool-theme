@@ -235,6 +235,7 @@ App.tsx
 17. **前端安全基线**：顶层必须保留 `ErrorBoundary`；外链只走 `lib/open-external.ts` 的 `https://github.com` 白名单；检查更新必须有超时；busy 状态按 `动作:ID` 记，`finally` 释放；导出默认文件名必须过 `sanitizeFileName`。
 18. **无障碍基线**：标题层级 h1 → h2 → h3 不得跳级；Segmented 保持 radiogroup + roving tabindex；连续动画（`.ani` 播放）必须响应 `prefers-reduced-motion`；装饰性预览图 `alt=""`；时间用 `<time dateTime>`。
 19. **测试不碰真实环境**：测试数据根用 `paths::use_test_roots` 指向临时目录，注册表测试用 `TEST_CURSORS_KEY` 隔离键，光标 fixture 由 `test_support` 生成；注册表用例仍全局串行；CI 四道闸（build / cargo test / design_audit / doc_ref_check）不得删减。
+20. **CSP 与 capability 最小权限**：`tauri.conf.json` 的生产 `csp` 只放行 `self` / `data:` / `blob:` / asset 协议 / `https://api.github.com`，开发放宽只写在 `devCsp`（Vite HMR + inline/eval）；`capabilities/default.json` 的 opener 只允许 `https://github.com/*`，dialog 只留 open / save。**`--no-sandbox` 不能因为加 CSP 而删除**（决策 5、决策 22）。
 
 ---
 

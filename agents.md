@@ -96,6 +96,7 @@
 22. 前端安全基线：`main.tsx` 必须保留 `ErrorBoundary`；外链只走 `lib/open-external.ts` 的 `https://github.com` 白名单；检查更新必须 8 秒超时；busy 按 `动作:ID` 记且 `finally` 释放；导出默认文件名必须过 `sanitizeFileName`（Windows 非法字符 / 保留名）。
 23. 无障碍基线：标题 `h1 → h2 → h3` 不跳级；`Segmented` 保持 radiogroup + roving tabindex（方向键 / Home / End）；`.ani` 播放必须响应 `prefers-reduced-motion`（降级画一帧）；装饰性预览图 `alt=""`；时间用 `<time dateTime>`。
 24. 测试**不碰真实环境**：数据根用 `paths::use_test_roots` 指向临时目录，注册表测试用 `TEST_CURSORS_KEY`（`Software\CursorStudio.Tests\...`，结束删除），光标用 `test_support` 生成 fixture；注册表用例仍全局串行。CI 四道闸 `build` / `cargo test` / `design_audit` / `doc_ref_check` 不得删减。
+25. CSP 与 capability 别放宽：生产 `csp` 只放行 `self` / `data:` / `blob:` / asset / `https://api.github.com`，Vite HMR 的 `ws://localhost:1420/1421` 与 inline/eval 只写在 `devCsp`；opener 只给 `opener:allow-open-url` + `https://github.com/*`，dialog 只给 `allow-open` / `allow-save`。**不要恢复 `csp: null`、`opener:default`、`dialog:default`，也不要删 `--no-sandbox`**（决策 22、硬约束 3）。
 
 ---
 

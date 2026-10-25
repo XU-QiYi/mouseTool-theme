@@ -6,8 +6,11 @@
   "permissions": [
     "core:default",
     "core:window:allow-set-theme",
-    "opener:default",
-    "dialog:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://github.com/*" }]
+    },
+    "dialog:allow-open",
     "dialog:allow-save"
   ]
 }

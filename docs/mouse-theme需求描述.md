@@ -160,7 +160,7 @@
 | 权限 | 全程普通用户，无 UAC |
 | 数据位置 | 默认 `%LOCALAPPDATA%\CursorStudio\`，与安装目录无关；主题目录可在设置中更换；卸载不删数据 |
 | 错误处理 | 中文主句说人话 + 括号内技术细节；绝不弹系统级崩溃框；顶层 ErrorBoundary 兜住渲染异常，给「重新加载」而不是白屏 |
-| 安全 | 归档限额与条目名白名单、15 槽位白名单、光标文件路径包含、预览 8MB 上限、`dest_path` / 来源文件校验、主题 ID 与目录一致（决策 18）；外链只允许 `https://github.com`；检查更新 8 秒超时 |
+| 安全 | 归档限额与条目名白名单、15 槽位白名单、光标文件路径包含、预览 8MB 上限、`dest_path` / 来源文件校验、主题 ID 与目录一致（决策 18）；外链只允许 `https://github.com`，capability 也只放行该域；生产 CSP 只允许 self / data / blob / asset / GitHub API，开发放宽仅用于 Vite HMR（决策 22）；检查更新 8 秒超时 |
 | 稳定性 | 文件 / 注册表类命令全部后台执行；导入、备份、迁移互斥且进度可见；界面按动作显示 busy，失败一定释放（决策 19/20） |
 | 无障碍 | 标题层级 h1 → h2 → h3；分段控件支持方向键 / Home / End；尊重 `prefers-reduced-motion`（含 `.ani` 停止播放）；装饰性预览图 `alt=""`；时间使用 `<time dateTime>`（决策 20） |
 | 测试与 CI | 测试用临时目录与生成 fixture，不碰真实数据目录 / 光标设置；CI 跑 build、cargo test、design_audit、doc_ref_check（决策 21） |

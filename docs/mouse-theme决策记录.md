@@ -30,6 +30,7 @@
 | 19 | 重操作的执行模型 | 所有 I/O 命令进 `spawn_blocking`；导入 / 备份 / 迁移发进度事件；三类重操作共用一把 `try_lock` 互斥锁，冲突立即失败而不是排队 |
 | 20 | 交互安全与无障碍 | 按动作 / 按主题的 busy 状态、导出文件名清洗、恢复前确认、顶层 ErrorBoundary、更新检查 8 秒超时、外链白名单；键盘分段控件、标题层级、减少动态、装饰图 `alt=""`、`<time>` 语义 |
 | 21 | 测试隔离与 CI | 测试用临时目录 + 生成的光标 fixture；注册表用例写独立的 `CursorStudio.Tests` 键并在结束时删除；GitHub Actions 跑 build / cargo test / design_audit / doc_ref_check |
+| 22 | CSP 与 capability 最小权限 | 生产 CSP 只放行 `self` / `data:` / `blob:` / asset 协议 / GitHub API；开发环境额外放行 Vite HMR；opener 只允许 `https://github.com/*`，dialog 只留 open / save；`--no-sandbox` 保留 |
 
 ---
 
@@ -557,6 +558,29 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 - `design_audit.mjs` 改为按仓库相对路径输出，并在发现非 2px 网格间距、字号魔法值、裸时长、`transition-all` 时**以退出码 1 失败**，不再只是打印报告。
 
 **为什么**：测试改真实光标会让开发者一边跑测试一边看到鼠标闪变，CI 上则直接污染 runner；临时目录 + fixture 让测试可重复、可并行。CI 不覆盖需要 WebView2 的界面脚本，但类型、后端、设计 token 与文档引用这四类回归能在提交时拦下。
+
+---
+
+## 决策 22：内容安全策略与 capability 最小权限
+
+**结论**（2026-10-25，随安全加固实现）
+
+- **生产 CSP**（`tauri.conf.json` → `app.security.csp`）：
+  ```
+  default-src 'self';
+  img-src 'self' data: blob: asset: http://asset.localhost;
+  style-src 'self' 'unsafe-inline';
+  connect-src 'self' ipc: http://ipc.localhost https://api.github.com
+  ```
+  `data:` / `blob:` 用于光标预览，`asset:` + `http://asset.localhost` 保留 Tauri asset 协议；`style-src` 的 `unsafe-inline` 是 React/base-ui 内联样式的必要项；`connect-src` 的 `ipc:` 与 `http://ipc.localhost` 是 Tauri IPC，`https://api.github.com` 是检查更新。**生产不放行 `unsafe-eval`、不放开任意 http(s) 目标。**
+- **开发 CSP**（`app.security.devCsp`）：在生产策略基础上增加 `script-src 'self' 'unsafe-inline' 'unsafe-eval'`（Vite / React Refresh 需要）与 `ws://localhost:1420`、`ws://localhost:1421`、`ws://127.0.0.1:1420`、`ws://127.0.0.1:1421`（HMR；1421 是 `TAURI_DEV_HOST` 模式下的 HMR 端口）。开发放宽只存在于 `devCsp`，不会带进打包产物。
+- **capability 收窄**（`capabilities/default.json`）：
+  - `opener:default` → `opener:allow-open-url`，scope 只允许 `https://github.com/*`。前端本来就有同一份白名单（`lib/open-external.ts`），现在 IPC 层再挡一次；
+  - 去掉 `opener:default` 附带的 `allow-default-urls`（任意 http/https/mailto/tel）与 `allow-reveal-item-in-dir`（前端未使用，打开数据目录走后端 `open_path`）；
+  - `dialog:default` + 重复的 `dialog:allow-save` → `dialog:allow-open` + `dialog:allow-save`。前端只用 open / save，不弹 message / ask / confirm。
+- **`--no-sandbox` 保留**：生产 CSP 与最小权限都建立在 WebView2 能正常初始化的前提上；删掉它会整窗纯白（决策 5 / 硬约束 3）。
+
+**为什么**：`csp: null` 等于放弃对注入脚本、外连地址和图片源的约束；`opener:default` 允许任意 http/https/mailto/tel 交给系统处理，`dialog:default` 还附带未使用的 message。前端白名单只能防住写错的调用，防不住被注入后的调用——CSP 与 capability 是第二道、也是进程边界上的那道闸。
 
 ---
 
