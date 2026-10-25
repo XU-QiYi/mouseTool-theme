@@ -437,7 +437,7 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 
 - **入口**：拖放收 `.zip` 与文件夹；选择对话框仍只收 `.zip`（Tauri 对话框无法同时混选文件与文件夹），Ctrl+O / 侧栏按钮维持原样。右键菜单导入（决策 12）仍只写 zip 路径，走 `import_source` 自动兼容。
 - **前端不按扩展名预拦完整路径**：文件夹名可能带点（「我的主题.v2」）、前端也判不了路径是不是目录，zip / 文件夹 / 其它文件由 `import_source` 权威校验并给出精准文案；浏览器开发通路（只有文件名、没有路径）维持只收 `.zip`。
-- **50MB 上限对文件夹同样生效**：按文件夹内光标文件（`.cur/.ani/.ico`）总大小计；zip 仍按包大小计。
+- **50MB 上限对文件夹同样生效**：按文件夹内光标文件（`.cur/.ani/.ico`）与 `.inf` 的总条目数、总大小计；zip 仍按包大小计。（2026-10-26 修订：`.inf` 也纳入 `ScanBudget`，避免说明文档绕过限额。）
 - **主题名**：取文件夹名整体（「我的主题.v2」不吃掉 `.v2`）；zip 仍取去掉 `.zip` 后缀的 stem。
 - 非 zip 文件给一句人话（「只支持 .zip 主题包或整个主题文件夹」），不再是「不是有效的 ZIP」。
 
@@ -501,7 +501,7 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 - `utils/validation.rs` 集中做 IPC 校验，命令层只把错误原样交给用户：
   - `validate_theme_slots`：槽位键必须在 15 个标准槽位内、不得重复、路径必须是 `.cur/.ani/.ico` 且非空；
   - `ensure_theme_id_matches_dir`：用户主题 ID 必须是规范小写 UUID，主题目录存在且**目录名 = ID**，`theme.json` 里的 `id` 也必须一致；系统方案只要求 `sys_` 前缀且没有目录；
-  - `ensure_cursor_file`：canonicalize 后必须落在**主题目录或 `%SystemRoot%\Cursors`** 内（系统方案走 `ensure_readable_cursor_file`，Windows 允许已保存方案引用任意目录，只校验存在 / 类型 / 体积）；
+  - `ensure_cursor_file`：预览等**没有主题上下文**的调用，canonicalize 后必须落在主题根目录或 `%SystemRoot%\Cursors` 内；用户主题的应用 / 导出走 `ensure_cursor_file_in_theme`，必须落在**这套主题自己的目录**内；系统方案走 `ensure_readable_cursor_file`（Windows 允许已保存方案引用任意目录，只校验存在 / 类型 / 体积）。（2026-10-26 修订：原“主题目录或 `%SystemRoot%\Cursors`”只适用于预览与系统方案，用户主题已收紧到本主题目录。）
   - `preview_path_if_allowed`：预览路径先过同一套来源校验，再卡 8MB，不满足就降级为空预览而不是报错；
   - `validate_dest_path`：导出 / 备份目标必须有存在的父目录、`.zip` 后缀、文件名不含非法字符、不是目录；备份来源走 `validate_source_file`；
   - `sanitize_loaded_slots`：读盘时未知槽位、重复槽位、越出主题目录的路径丢弃并写入 warning，不让坏数据进入内存。

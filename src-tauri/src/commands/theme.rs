@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
+use std::path::Path;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -8,7 +9,7 @@ use uuid::Uuid;
 
 use crate::models::{ApplyOutcome, CursorSlot, CursorTheme, ThemesResult};
 use crate::utils::{
-    cursor, history, importer, inf_export, ops, paths, registry, theme_paths, validation,
+    cursor, history, importer, inf_export, limits, ops, paths, registry, theme_paths, validation,
 };
 
 /// `export_theme` 的返回值：跳过项要说清是哪个槽位，否则用户不知道少了什么
@@ -144,16 +145,20 @@ fn all_themes() -> Result<ThemesResult, String> {
     })
 }
 
-/// 导入主题来源（`.zip` 包或整个文件夹，决策 16），返回新主题
+/// 导入主题来源（`.zip` 包或整个文件夹，决策 16），返回新主题与跳过项
 ///
 /// 解压 / 扫描 / 复制都在后台线程执行，进度通过 `import-progress` 事件推给
-/// 界面；导入期间其它重操作被互斥锁挡住。
+/// 界面；导入期间其它重操作被互斥锁挡住。目录里的链接 / 目录联接会被跳过，
+/// 原因随 `warnings` 返回，不能装作没看见。
 #[tauri::command]
-pub async fn import_theme(app: AppHandle, source_path: String) -> Result<CursorTheme, String> {
+pub async fn import_theme(
+    app: AppHandle,
+    source_path: String,
+) -> Result<importer::ImportReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = ops::try_begin("导入主题")?;
         let emitter = app.clone();
-        importer::import_source_with_progress(&source_path, &mut |progress| {
+        importer::import_source_report(&source_path, &mut |progress| {
             let _ = emitter.emit("import-progress", progress);
         })
     })
@@ -167,14 +172,14 @@ pub async fn import_theme(app: AppHandle, source_path: String) -> Result<CursorT
 /// 方案」允许），因此只做存在性与体积校验；用户主题的光标必须落在主题目录内。
 fn checked_slots(theme: &CursorTheme) -> Result<Vec<CursorSlot>, String> {
     validation::validate_theme_slots(theme)?;
-    validation::ensure_theme_id_matches_dir(theme)?;
+    let theme_dir = validation::ensure_theme_id_matches_dir(theme)?;
 
     let mut slots = theme.cursors.clone();
     for slot in &mut slots {
         let file = if theme.is_built_in {
             validation::ensure_readable_cursor_file(&slot.file_path)?
         } else {
-            validation::ensure_cursor_file(&slot.file_path)?
+            validation::ensure_cursor_file_in_theme(&slot.file_path, &theme_dir)?
         };
         slot.file_path = file.to_string_lossy().into_owned();
     }
@@ -247,6 +252,30 @@ fn delete(theme_id: &str) -> Result<(), String> {
         return Err("这个主题已经不在了，可能要重新导入".to_string());
     }
 
+    // 后端再拦一次：前端按钮禁用只是体验，IPC 调用可能来自别处。
+    // theme.json 读不出来时不阻止删除（否则损坏主题永远删不掉），
+    // 但只要能读到，就按磁盘内容与注册表事实复核。
+    if let Ok(raw) =
+        limits::read_text_bounded(&dir.join("theme.json"), limits::MAX_THEME_JSON_BYTES)
+    {
+        if let Ok(mut stored) = serde_json::from_str::<CursorTheme>(&raw) {
+            if stored.is_built_in {
+                return Err("系统方案不能删除".to_string());
+            }
+            if stored.id == theme_id {
+                theme_paths::resolve_theme(&mut stored, &dir);
+                if let Ok(current) = registry::read_current_slots() {
+                    if theme_matches_current(&stored, &current) {
+                        return Err(
+                            "不能删除正在使用的主题：请先切换到其它主题，或还原系统默认"
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     fs::remove_dir_all(&dir).map_err(|err| {
         format!("删不掉主题目录，它可能正被其它程序占用（{err}）")
     })?;
@@ -279,7 +308,7 @@ fn rename(theme_id: &str, new_name: &str) -> Result<CursorTheme, String> {
         return Err("找不到这个主题，它可能已被删除".to_string());
     }
 
-    let raw = crate::utils::limits::read_text_bounded(&json_path, 1024 * 1024)
+    let raw = limits::read_text_bounded(&json_path, limits::MAX_THEME_JSON_BYTES)
         .map_err(|err| format!("读不到主题信息（{err}）"))?;
     let mut theme: CursorTheme =
         serde_json::from_str(&raw).map_err(|err| format!("主题信息已损坏，无法改名（{err}）"))?;
@@ -315,7 +344,7 @@ pub async fn export_theme(theme: CursorTheme, dest_path: String) -> Result<Expor
 
 fn export_to(theme: &CursorTheme, dest_path: &str) -> Result<ExportSummary, String> {
     validation::validate_theme_slots(theme)?;
-    validation::ensure_theme_id_matches_dir(theme)?;
+    let theme_dir = validation::ensure_theme_id_matches_dir(theme)?;
     let dest = validation::validate_dest_path(dest_path, "zip")?;
     let parent = dest.parent().ok_or_else(|| "目标路径无效".to_string())?;
 
@@ -325,7 +354,7 @@ fn export_to(theme: &CursorTheme, dest_path: &str) -> Result<ExportSummary, Stri
     let file = fs::File::create(&tmp)
         .map_err(|err| format!("无法创建文件，它可能正被占用（{err}）"))?;
 
-    match write_export_zip(theme, file) {
+    match write_export_zip(theme, &theme_dir, file) {
         Ok(summary) => {
             if let Err(err) = fs::rename(&tmp, &dest) {
                 let _ = fs::remove_file(&tmp);
@@ -341,7 +370,11 @@ fn export_to(theme: &CursorTheme, dest_path: &str) -> Result<ExportSummary, Stri
     }
 }
 
-fn write_export_zip(theme: &CursorTheme, file: fs::File) -> Result<ExportSummary, String> {
+fn write_export_zip(
+    theme: &CursorTheme,
+    theme_dir: &Path,
+    file: fs::File,
+) -> Result<ExportSummary, String> {
     let mut writer = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default();
 
@@ -359,7 +392,21 @@ fn write_export_zip(theme: &CursorTheme, file: fs::File) -> Result<ExportSummary
         let src = if theme.is_built_in {
             validation::ensure_readable_cursor_file(&slot.file_path)
         } else {
-            validation::ensure_cursor_file(&slot.file_path)
+            // 越出本主题目录是输入被篡改，不是「文件暂时不在」：直接拒绝导出
+            if !validation::path_within_theme_dir(Path::new(&slot.file_path), theme_dir) {
+                return Err(format!(
+                    "光标文件不在该主题目录内，已拒绝：{}",
+                    slot.file_path
+                ));
+            }
+            let checked =
+                validation::ensure_cursor_file_in_theme(&slot.file_path, theme_dir);
+            if let Err(err) = &checked {
+                if err.contains("不在该主题目录内") {
+                    return Err(err.clone());
+                }
+            }
+            checked
         };
         let src = match src {
             Ok(path) => path,
@@ -429,6 +476,36 @@ mod tests {
     use super::*;
     use crate::utils::test_support::{fixture_ani, fixture_cur, TempDir};
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// 删除命令会读注册表复核「正在使用」；测试一律指到隔离键
+    struct TestRegistryGuard {
+        path: String,
+    }
+
+    impl Drop for TestRegistryGuard {
+        fn drop(&mut self) {
+            let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
+            let _ = hkcu.delete_subkey_all(&self.path);
+            registry::set_test_cursors_key(None);
+        }
+    }
+
+    fn isolate_registry(label: &str, create: bool) -> TestRegistryGuard {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let path = format!(
+            r"Software\CursorStudio.Tests\theme-{label}-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        if create {
+            let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
+            let _ = hkcu.delete_subkey_all(&path);
+            hkcu.create_subkey(&path).expect("建隔离注册表键");
+        }
+        registry::set_test_cursors_key(Some(path.clone()));
+        TestRegistryGuard { path }
+    }
 
     /// 在隔离的主题目录里放一套可导出的主题，返回 (主题, 主题目录)
     fn seed_exportable_theme(label: &str, slots: &[(&str, &str, Vec<u8>)]) -> (CursorTheme, PathBuf) {
@@ -777,6 +854,7 @@ mod tests {
     fn 删除应移除主题目录且重复删除有提示() {
         let root = TempDir::new("delete");
         let _guard = root.isolate_paths();
+        let _registry = isolate_registry("delete", false);
 
         let id = Uuid::new_v4().to_string();
         let dir = paths::theme_dir(&id).expect("解析主题目录");
@@ -789,5 +867,67 @@ mod tests {
 
         let err = delete(&id).unwrap_err();
         assert!(err.contains("已经不在了"), "重复删除应给人话提示，实际：{err}");
+    }
+
+    /// 后端也要拒绝删除自称系统方案的主题，不能只靠前端按钮禁用
+    #[test]
+    fn 删除时拒绝自称系统方案的主题() {
+        let root = TempDir::new("delete-built-in");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("built-in", false);
+
+        let id = Uuid::new_v4().to_string();
+        let dir = paths::theme_dir(&id).expect("解析主题目录");
+        paths::ensure_dir(&dir).expect("建主题目录");
+        let mut theme = fake_theme(&id);
+        theme.is_built_in = true;
+        fs::write(
+            dir.join("theme.json"),
+            serde_json::to_string_pretty(&theme).unwrap(),
+        )
+        .expect("写 theme.json");
+
+        let err = delete(&id).unwrap_err();
+        assert!(err.contains("系统方案"), "实际：{err}");
+        assert!(dir.exists(), "拒绝删除时目录必须保留");
+    }
+
+    /// 正在使用的主题即使前端绕过按钮，后端也必须拒绝删除
+    #[test]
+    fn 删除时拒绝正在使用的主题() {
+        let root = TempDir::new("delete-active");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("active", true);
+
+        let (theme, dir) = seed_exportable_theme("使用中", &[("Arrow", "arrow.cur", fixture_cur())]);
+        registry::write_cursors(&theme.cursors, &theme.name).expect("写隔离注册表");
+
+        let err = delete(&theme.id).unwrap_err();
+        assert!(err.contains("正在使用"), "实际：{err}");
+        assert!(dir.exists(), "拒绝删除时目录必须保留");
+    }
+
+    /// 用户主题引用另一套主题的文件：应用 / 导出都必须拒绝
+    #[test]
+    fn 用户主题不能引用另一套主题的光标() {
+        let root = TempDir::new("cross-theme-slots");
+        let _guard = root.isolate_paths();
+
+        let (other, _) = seed_exportable_theme("另一套", &[("Arrow", "other.cur", fixture_cur())]);
+        let (mut mine, dir) = seed_exportable_theme("本套", &[("Arrow", "mine.cur", fixture_cur())]);
+        mine.cursors[0].file_path = other.cursors[0].file_path.clone();
+        fs::write(
+            dir.join("theme.json"),
+            serde_json::to_string_pretty(&mine).unwrap(),
+        )
+        .expect("写 theme.json");
+
+        let err = checked_slots(&mine).unwrap_err();
+        assert!(err.contains("该主题目录"), "实际：{err}");
+
+        let zip = root.join("cross-theme.zip");
+        let err = export_to(&mine, &zip.to_string_lossy()).unwrap_err();
+        assert!(err.contains("该主题目录"), "导出也必须拒绝，实际：{err}");
+        assert!(!zip.exists(), "失败时不能留下压缩包");
     }
 }

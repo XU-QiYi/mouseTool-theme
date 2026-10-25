@@ -18,7 +18,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::models::theme::{CursorTheme, HistoryEntry};
-use crate::utils::paths;
+use crate::utils::{limits, paths};
 
 /// 事件流最多保留多少条：这是历史，不是无限日志
 const MAX_EVENTS: usize = 200;
@@ -96,8 +96,8 @@ fn parse_v2(events: Vec<HistoryEntry>) -> Vec<HistoryEntry> {
 /// - 更高版本 = 不认识，忽略内容且**拒绝写入**，避免覆盖新版本的数据；
 /// - 文件损坏 = 返回空 + 一条警告，下一次记录会重建文件。
 pub fn read_events_from(path: &Path) -> EventsRead {
-    let raw = match fs::read_to_string(path) {
-        Ok(raw) => raw,
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return EventsRead::empty(),
         Err(err) => {
             let mut read = EventsRead::empty();
@@ -105,6 +105,36 @@ pub fn read_events_from(path: &Path) -> EventsRead {
                 .push(format!("读不到最近使用记录（{err}）"));
             // 读不出来时别急着覆盖：可能是文件被占用，原数据也许还在
             read.writable = false;
+            return read;
+        }
+    };
+    let size = match file.metadata() {
+        Ok(meta) => meta.len(),
+        Err(err) => {
+            let mut read = EventsRead::empty();
+            read.warnings
+                .push(format!("读不到最近使用记录的信息（{err}）"));
+            read.writable = false;
+            return read;
+        }
+    };
+    drop(file);
+    if size > limits::MAX_STATE_FILE_BYTES {
+        // 正常写入上限只有 200 条事件；超过 512KB 基本是坏文件 / 被塞了别的东西
+        let mut read = EventsRead::empty();
+        read.warnings.push(format!(
+            "最近使用记录超过 {}KB 上限，已忽略并准备重建",
+            limits::MAX_STATE_FILE_BYTES / 1024
+        ));
+        return read;
+    }
+
+    let raw = match limits::read_text_bounded(path, limits::MAX_STATE_FILE_BYTES) {
+        Ok(raw) => raw,
+        Err(err) => {
+            let mut read = EventsRead::empty();
+            read.warnings
+                .push(format!("最近使用记录无法读取，已忽略（{err}）"));
             return read;
         }
     };
@@ -400,6 +430,32 @@ mod tests {
         let raw = fs::read_to_string(&path).expect("读回");
         assert!(raw.contains("\"version\": 2"), "下一次写入应升级格式");
         assert!(raw.contains("\"events\""), "v2 使用 events 字段");
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn 超过上限的记录文件按损坏处理并允许重建() {
+        let path = temp_path("oversized");
+        fs::write(
+            &path,
+            "x".repeat(limits::MAX_STATE_FILE_BYTES as usize + 1),
+        )
+        .expect("写超大记录");
+
+        let read = read_events_from(&path);
+        assert!(read.events.is_empty());
+        assert!(read.writable, "超限文件应允许下一次记录重建");
+        assert!(
+            read.warnings[0].contains("上限"),
+            "警告要说明尺寸超限：{:?}",
+            read.warnings
+        );
+
+        let recent = record_to(&path, &theme("a", "A")).expect("重建应成功");
+        assert_eq!(recent.len(), 1);
+        assert!(fs::read_to_string(&path)
+            .expect("读回")
+            .contains("\"version\": 2"));
         fs::remove_file(&path).ok();
     }
 

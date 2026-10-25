@@ -1,7 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-import type { ApplyOutcome, CursorTheme, HistoryEntry, ThemesResult } from "@/types/theme";
+import type {
+  ApplyOutcome,
+  CursorTheme,
+  HistoryEntry,
+  ImportReport,
+  ThemesResult,
+} from "@/types/theme";
 import type { CursorPreview } from "@/types/cursor";
 import { MOCK_RECENT, MOCK_THEMES } from "@/services/mock";
 
@@ -85,11 +91,11 @@ export function restoreDefault(): Promise<void> {
   return invoke<void>("restore_default");
 }
 
-/** 对应 Rust 命令 `import_theme`：导入 .zip 包或整个文件夹（决策 16），返回新主题 */
+/** 对应 Rust 命令 `import_theme`：导入 .zip 包或整个文件夹（决策 16），返回新主题与跳过项 */
 export async function importTheme(
   sourcePath: string,
   onProgress?: (progress: TaskProgress) => void,
-): Promise<CursorTheme> {
+): Promise<ImportReport> {
   if (!inTauri) {
     // 浏览器里没有文件系统：用示例槽位生成一份新主题，
     // 让「导入 → 列表新增 → 检查器选中」这条链路在开发与自动化验收里能走通。
@@ -105,13 +111,16 @@ export async function importTheme(
       message: "导入完成（开发模式）",
     });
     return {
-      id: crypto.randomUUID(),
-      name,
-      description: `导入自 ${fileName}`,
-      created_at: now,
-      updated_at: now,
-      is_built_in: false,
-      cursors: sample.cursors,
+      theme: {
+        id: crypto.randomUUID(),
+        name,
+        description: `导入自 ${fileName}`,
+        created_at: now,
+        updated_at: now,
+        is_built_in: false,
+        cursors: sample.cursors,
+      },
+      warnings: [],
     };
   }
 
@@ -122,7 +131,7 @@ export async function importTheme(
     });
   }
   try {
-    return await invoke<CursorTheme>("import_theme", { sourcePath });
+    return await invoke<ImportReport>("import_theme", { sourcePath });
   } finally {
     unlisten?.();
   }

@@ -17,6 +17,15 @@ pub const MAX_PREVIEW_BYTES: u64 = 8 * 1024 * 1024;
 /// 单个光标文件上限（导入、导出、应用共用）
 pub const MAX_CURSOR_FILE_BYTES: u64 = 20 * 1024 * 1024;
 
+/// 单个 `theme.json` 上限：15 个槽位远达不到这个尺寸，超过基本是坏文件
+pub const MAX_THEME_JSON_BYTES: u64 = 1024 * 1024;
+
+/// 单个 `.inf` 说明书上限
+pub const MAX_INF_BYTES: u64 = 1024 * 1024;
+
+/// `settings.json` / `history.json` 上限：两者都只存少量结构化数据
+pub const MAX_STATE_FILE_BYTES: u64 = 512 * 1024;
+
 /// 一套归档的限额
 #[derive(Debug, Clone, Copy)]
 pub struct ArchiveLimits {
@@ -145,14 +154,77 @@ pub fn copy_bounded<R: Read, W: Write>(
     Ok(written)
 }
 
-/// 读取最多 `max` 字节的文本（用于 `.inf` / `theme.json` / `history.json`）
-pub fn read_text_bounded(path: &Path, max: u64) -> Result<String, String> {
-    let meta = fs::metadata(path).map_err(|err| format!("读不到文件信息（{err}）"))?;
-    if meta.len() > max {
-        return Err(format!("文件过大（{} 字节，上限 {max}）", meta.len()));
+/// 读取最多 `max` 字节的原始内容（用于编码不定的 `.inf`）
+///
+/// 先看文件大小再读，并用 `take(max + 1)` 兜住「检查后文件又变大」的竞态；
+/// 超过上限直接报错，由调用方按损坏文件处理，绝不把未知大小的内容读进内存。
+pub fn read_bytes_bounded(path: &Path, max: u64) -> Result<Vec<u8>, String> {
+    let file = fs::File::open(path).map_err(|err| format!("读不到文件（{err}）"))?;
+    let len = file
+        .metadata()
+        .map_err(|err| format!("读不到文件信息（{err}）"))?
+        .len();
+    if len > max {
+        return Err(format!("文件过大（{len} 字节，上限 {max}）"));
     }
-    let bytes = fs::read(path).map_err(|err| format!("读取文件失败（{err}）"))?;
+
+    let mut bytes = Vec::with_capacity(len as usize);
+    file.take(max + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|err| format!("读取文件失败（{err}）"))?;
+    if bytes.len() as u64 > max {
+        return Err(format!(
+            "文件过大（读取到 {} 字节，上限 {max}）",
+            bytes.len()
+        ));
+    }
+    Ok(bytes)
+}
+
+/// 读取最多 `max` 字节的 UTF-8 文本（用于 `theme.json` / `settings.json` / `history.json`）
+pub fn read_text_bounded(path: &Path, max: u64) -> Result<String, String> {
+    let bytes = read_bytes_bounded(path, max)?;
     String::from_utf8(bytes).map_err(|_| "文件不是有效的 UTF-8 文本".to_string())
+}
+
+/// 目录项是否为符号链接 / 目录联接 / 其它重解析点
+///
+/// `is_symlink()` 不覆盖 Windows 的 junction；再读一次文件属性里的
+/// `FILE_ATTRIBUTE_REPARSE_POINT`，两类都算。读不到类型时按不安全处理。
+pub fn is_reparse_entry(entry: &fs::DirEntry) -> bool {
+    match entry.file_type() {
+        Ok(file_type) if file_type.is_symlink() => return true,
+        Ok(_) => {}
+        Err(_) => return true,
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if let Ok(meta) = entry.metadata() {
+            return meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+        }
+    }
+    false
+}
+
+/// 指定路径本身是否为符号链接 / 重解析点（不跟随；路径不存在返回 false）
+pub fn is_reparse_path(path: &Path) -> bool {
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        return meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[cfg(not(windows))]
+    false
 }
 
 /// 校验归档条目名并拆成安全段列表
@@ -279,7 +351,7 @@ impl<'a> ScanBudget<'a> {
         self.bytes = self.bytes.saturating_add(size);
         if self.bytes > self.limits.max_total_bytes {
             return Err(format!(
-                "文件夹里的光标共超过 {} 上限，请删掉多余的文件后再导入",
+                "文件夹里的文件共超过 {} 上限，请删掉多余的文件后再导入",
                 self.limits.total_hint()
             ));
         }
@@ -326,5 +398,56 @@ mod tests {
         let err = copy_bounded(&mut data.as_slice(), &mut out, 100, &THEME_LIMITS).unwrap_err();
         assert!(err.contains("上限"), "实际：{err}");
         assert!(out.len() <= 100, "超限内容不能继续落盘");
+    }
+
+    #[test]
+    fn 普通文件不会被误判为重解析点() {
+        let dir = std::env::temp_dir().join(format!(
+            "cursorstudio-limits-reparse-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&dir).expect("建临时目录");
+        let file = dir.join("normal.txt");
+        fs::write(&file, "ok").expect("写普通文件");
+
+        let entry = fs::read_dir(&dir)
+            .expect("读目录")
+            .next()
+            .expect("应有条目")
+            .expect("读条目");
+        assert!(!is_reparse_entry(&entry), "普通文件不能误判");
+        assert!(!is_reparse_path(&file), "普通文件不能误判");
+        assert!(!is_reparse_path(&dir.join("missing.txt")), "不存在返回 false");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn 文本读取在进入内存前按上限拒绝() {
+        let path = std::env::temp_dir().join(format!(
+            "cursorstudio-limits-read-{}-{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::write(&path, "0123456789").expect("写测试文件");
+
+        assert_eq!(read_text_bounded(&path, 10).expect("刚好到上限"), "0123456789");
+        assert_eq!(
+            read_bytes_bounded(&path, 10).expect("字节读取也应成功"),
+            b"0123456789"
+        );
+        let err = read_text_bounded(&path, 9).unwrap_err();
+        assert!(err.contains("过大"), "实际：{err}");
+        assert!(err.contains("上限"), "错误要说清上限：{err}");
+        assert!(read_bytes_bounded(&path, 9).is_err(), "字节读取同样受限");
+
+        let _ = fs::remove_file(&path);
     }
 }

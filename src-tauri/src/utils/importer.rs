@@ -1,10 +1,19 @@
 use std::collections::HashSet;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
+
+use serde::Serialize;
 use uuid::Uuid;
 
 use crate::models::{CursorSlot, CursorTheme};
 use crate::utils::{inf_parse, limits, paths, progress, registry, theme_paths, validation};
+
+/// 导入结果：新主题 + 扫描时跳过的非致命问题（典型：链接 / 目录联接）
+#[derive(Debug, Serialize)]
+pub struct ImportReport {
+    pub theme: CursorTheme,
+    pub warnings: Vec<String>,
+}
 
 /// 文件名关键字 → 槽位键名
 ///
@@ -93,6 +102,7 @@ fn collect_cursor_files(
     dir: &Path,
     depth: usize,
     budget: &mut limits::ScanBudget<'_>,
+    warnings: &mut Vec<String>,
     out: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
     budget.check_depth(depth)?;
@@ -100,8 +110,16 @@ fn collect_cursor_files(
     for entry in entries {
         let entry = entry.map_err(|err| format!("读取目录项失败：{err}"))?;
         let path = entry.path();
-        if path.is_dir() {
-            collect_cursor_files(&path, depth + 1, budget, out)?;
+        if limits::is_reparse_entry(&entry) {
+            warnings.push(format!("已跳过链接或目录联接：{}", path.display()));
+            continue;
+        }
+        if entry
+            .file_type()
+            .map_err(|err| format!("读不到目录项类型（{err}）"))?
+            .is_dir()
+        {
+            collect_cursor_files(&path, depth + 1, budget, warnings, out)?;
             continue;
         }
         let is_cursor = path
@@ -121,21 +139,51 @@ fn collect_cursor_files(
     Ok(())
 }
 
-/// 递归收集目录下的 `.inf`（只用于读槽位映射，不算光标文件）
+/// 递归收集目录下的 `.inf`（只用于读槽位映射）
 ///
-/// `.inf` 是可选加成，读不了就当没有：任何一层目录打不开都静默跳过；
-/// 深度同样受限，避免畸形目录把栈打穿。
-fn collect_inf_files(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
-    if depth > limits::THEME_LIMITS.max_depth {
-        return;
-    }
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
+/// 与光标文件共用同一个 `ScanBudget`：`.inf` 也要占条目数和总体积，
+/// 否则一堆超大说明书可以绕过导入限额。链接 / 目录联接一律跳过。
+fn collect_inf_files(
+    dir: &Path,
+    depth: usize,
+    budget: &mut limits::ScanBudget<'_>,
+    warnings: &mut Vec<String>,
+    out: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    budget.check_depth(depth)?;
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) => {
+            // `.inf` 是可选加成：目录打不开不拖垮导入，但要说清楚跳过了什么
+            warnings.push(format!("读不到目录 {}，已跳过其中的 .inf（{err}）", dir.display()));
+            return Ok(());
+        }
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                warnings.push(format!("读取 .inf 目录项失败，已跳过（{err}）"));
+                continue;
+            }
+        };
         let path = entry.path();
-        if path.is_dir() {
-            collect_inf_files(&path, depth + 1, out);
+        if limits::is_reparse_entry(&entry) {
+            warnings.push(format!("已跳过链接或目录联接：{}", path.display()));
+            continue;
+        }
+        let is_dir = match entry.file_type() {
+            Ok(kind) => kind.is_dir(),
+            Err(err) => {
+                warnings.push(format!(
+                    "读不到目录项类型，已跳过 {}（{err}）",
+                    path.display()
+                ));
+                continue;
+            }
+        };
+        if is_dir {
+            collect_inf_files(&path, depth + 1, budget, warnings, out)?;
             continue;
         }
         let is_inf = path
@@ -144,29 +192,53 @@ fn collect_inf_files(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
             .map(|ext| ext.eq_ignore_ascii_case("inf"))
             .unwrap_or(false);
         if is_inf {
+            let size = match entry.metadata() {
+                Ok(meta) => meta.len(),
+                Err(err) => {
+                    warnings.push(format!(
+                        "读不到 .inf 文件信息，已跳过 {}（{err}）",
+                        path.display()
+                    ));
+                    continue;
+                }
+            };
+            budget.note_file(size)?;
             out.push(path);
         }
     }
+    Ok(())
 }
 
 /// 解析包里的 `.inf` 槽位映射（决策 15）
 ///
 /// 按路径排序保证确定性，取第一个能给出至少一条映射的；一个都给不出就返回
 /// 空（整体退回文件名推断）。
-fn inf_slot_map(files_root: &Path) -> Vec<(&'static str, String)> {
+fn inf_slot_map(
+    files_root: &Path,
+    budget: &mut limits::ScanBudget<'_>,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<(&'static str, String)>, String> {
     let mut candidates = Vec::new();
-    collect_inf_files(files_root, 0, &mut candidates);
+    collect_inf_files(files_root, 0, budget, warnings, &mut candidates)?;
     candidates.sort();
     for path in candidates {
-        let Ok(text) = limits::read_text_bounded(&path, 1024 * 1024) else {
-            continue;
+        // `.inf` 可能是 UTF-16LE（本工具导出的就是），不能先按 UTF-8 解码
+        let bytes = match limits::read_bytes_bounded(&path, limits::MAX_INF_BYTES) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                warnings.push(format!(
+                    "跳过无法读取的 .inf：{}（{err}）",
+                    path.display()
+                ));
+                continue;
+            }
         };
-        let mapped = inf_parse::parse_inf(text.as_bytes());
+        let mapped = inf_parse::parse_inf(&bytes);
         if !mapped.is_empty() {
-            return mapped;
+            return Ok(mapped);
         }
     }
-    Vec::new()
+    Ok(Vec::new())
 }
 
 /// 把 zip 解压到临时目录
@@ -236,14 +308,14 @@ fn extract_zip(
 
 /// 导入一个主题来源（`.zip` 包或整个主题文件夹，决策 16），返回生成的主题
 pub fn import_source(path: &str) -> Result<CursorTheme, String> {
-    import_source_with_progress(path, &mut |_| {})
+    import_source_report(path, &mut |_| {}).map(|report| report.theme)
 }
 
-/// 带进度的导入入口：命令层把进度转成 `import-progress` 事件
-pub fn import_source_with_progress(
+/// 带进度的导入入口：返回主题 + 扫描时跳过的非致命问题
+pub fn import_source_report(
     path: &str,
     progress_fn: &mut dyn FnMut(progress::TaskProgress),
-) -> Result<CursorTheme, String> {
+) -> Result<ImportReport, String> {
     import_source_as(path, &Uuid::new_v4().to_string(), progress_fn)
 }
 
@@ -252,7 +324,7 @@ fn import_source_as(
     path: &str,
     theme_id: &str,
     progress_fn: &mut dyn FnMut(progress::TaskProgress),
-) -> Result<CursorTheme, String> {
+) -> Result<ImportReport, String> {
     let source = Path::new(path);
     let meta = fs::metadata(source)
         .map_err(|err| format!("找不到这个文件，它可能已被移动或删除（{err}）"))?;
@@ -276,7 +348,7 @@ fn import_source_as(
 
 /// 兼容旧名：zip 导入入口（「导出 → 再导入」闭环测试等在用）
 pub fn import_zip(zip_path: &str) -> Result<CursorTheme, String> {
-    import_source_as(zip_path, &Uuid::new_v4().to_string(), &mut |_| {})
+    import_source_as(zip_path, &Uuid::new_v4().to_string(), &mut |_| {}).map(|report| report.theme)
 }
 
 /// 导入 zip 主题包：解压到临时目录后，走与文件夹相同的落盘流程
@@ -284,7 +356,7 @@ fn import_zip_as(
     zip_path: &str,
     theme_id: &str,
     progress_fn: &mut dyn FnMut(progress::TaskProgress),
-) -> Result<CursorTheme, String> {
+) -> Result<ImportReport, String> {
     let source = Path::new(zip_path);
     let meta = fs::metadata(source)
         .map_err(|err| format!("找不到这个文件，它可能已被移动或删除（{err}）"))?;
@@ -301,10 +373,27 @@ fn import_zip_as(
     paths::ensure_dir(&temp_dir)?;
 
     let mut files = Vec::new();
+    let mut warnings = Vec::new();
     let outcome = extract_zip(source, &temp_dir, progress_fn).and_then(|()| {
         let mut budget = limits::ScanBudget::new(&limits::THEME_LIMITS);
-        collect_cursor_files(&temp_dir, 0, &mut budget, &mut files)?;
-        persist_theme(files, &temp_dir, source, "压缩包", theme_id, progress_fn)
+        collect_cursor_files(
+            &temp_dir,
+            0,
+            &mut budget,
+            &mut warnings,
+            &mut files,
+        )?;
+        let theme = persist_theme(
+            files,
+            &temp_dir,
+            source,
+            "压缩包",
+            theme_id,
+            &mut budget,
+            &mut warnings,
+            progress_fn,
+        )?;
+        Ok(ImportReport { theme, warnings })
     });
     // 无论成败都清理临时目录（超限、解压失败也不会留下半截文件）
     let _ = fs::remove_dir_all(&temp_dir);
@@ -318,14 +407,25 @@ fn import_dir_as(
     source: &Path,
     theme_id: &str,
     progress_fn: &mut dyn FnMut(progress::TaskProgress),
-) -> Result<CursorTheme, String> {
+) -> Result<ImportReport, String> {
     progress_fn(progress::TaskProgress::new("scan", 0, 0, "正在扫描文件夹…"));
     let mut files = Vec::new();
+    let mut warnings = Vec::new();
     let mut budget = limits::ScanBudget::new(&limits::THEME_LIMITS);
-    collect_cursor_files(source, 0, &mut budget, &mut files)?;
+    collect_cursor_files(source, 0, &mut budget, &mut warnings, &mut files)?;
 
-    persist_theme(files, source, source, "文件夹", theme_id, progress_fn)
-        .map_err(|err| discard_partial(theme_id, err))
+    let theme = persist_theme(
+        files,
+        source,
+        source,
+        "文件夹",
+        theme_id,
+        &mut budget,
+        &mut warnings,
+        progress_fn,
+    )
+    .map_err(|err| discard_partial(theme_id, err))?;
+    Ok(ImportReport { theme, warnings })
 }
 
 /// 失败时清掉半成品主题目录，返回原始错误
@@ -358,6 +458,8 @@ fn persist_theme(
     source: &Path,
     label: &str,
     theme_id: &str,
+    budget: &mut limits::ScanBudget<'_>,
+    warnings: &mut Vec<String>,
     progress_fn: &mut dyn FnMut(progress::TaskProgress),
 ) -> Result<CursorTheme, String> {
     if files.is_empty() {
@@ -372,7 +474,7 @@ fn persist_theme(
     let mut seen: HashSet<&'static str> = HashSet::new();
     let mut picked: Vec<(&'static str, PathBuf)> = Vec::new();
 
-    for (slot, file_name) in inf_slot_map(files_root) {
+    for (slot, file_name) in inf_slot_map(files_root, budget, warnings)? {
         if !seen.insert(slot) {
             continue;
         }
@@ -515,10 +617,32 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
     let mut themes: Vec<CursorTheme> = entries
         .flatten()
         .filter_map(|entry| {
+            if limits::is_reparse_entry(&entry) {
+                let msg = format!(
+                    "跳过链接或目录联接主题目录：{}",
+                    entry.path().display()
+                );
+                eprintln!("{msg}");
+                warnings.push(msg);
+                return None;
+            }
             let dir = entry.path();
+            let json_path = dir.join("theme.json");
+            if limits::is_reparse_path(&json_path) {
+                let msg = format!(
+                    "跳过主题目录 {}（theme.json 是链接或目录联接）",
+                    dir.display()
+                );
+                eprintln!("{msg}");
+                warnings.push(msg);
+                return None;
+            }
             // 不能直接 .ok()?：theme.json 一旦损坏，主题会从列表里凭空消失，
             // 用户只会觉得"我的主题丢了"。跳过它并留下可诊断的信息。
-            let json = match fs::read_to_string(dir.join("theme.json")) {
+            let json = match limits::read_text_bounded(
+                &json_path,
+                limits::MAX_THEME_JSON_BYTES,
+            ) {
                 Ok(text) => text,
                 Err(err) => {
                     let msg = format!("跳过主题目录 {}（读不到 theme.json：{err}）", dir.display());
@@ -533,6 +657,16 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
                         .file_name()
                         .and_then(|name| name.to_str())
                         .unwrap_or_default();
+                    // 磁盘主题只能是用户主题；自称系统方案就是伪装，不能进列表
+                    if theme.is_built_in {
+                        let msg = format!(
+                            "跳过主题目录 {}（theme.json 声明为系统方案，用户主题不能自称系统方案）",
+                            dir.display()
+                        );
+                        eprintln!("{msg}");
+                        warnings.push(msg);
+                        return None;
+                    }
                     // id 与目录名不一致 = 数据被手工搬过或拷过，继续用会删错目录
                     if theme.id != dir_name || Uuid::parse_str(&theme.id).is_err() {
                         let msg = format!(
@@ -543,6 +677,24 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
                         eprintln!("{msg}");
                         warnings.push(msg);
                         return None;
+                    }
+                    // 旧版本的绝对路径：能全部相对化就立刻回写一次，避免每次启动
+                    // 都靠内存修补；改不动的保持原样，交给下面的清洗给出提示
+                    let had_absolute = theme
+                        .cursors
+                        .iter()
+                        .any(|slot| theme_paths::is_absolute(&slot.file_path));
+                    if had_absolute {
+                        let (disk, repairable) = theme_paths::to_storage(&theme, &dir);
+                        if repairable.is_empty() {
+                            match theme_paths::write_stored_theme(&dir, &disk) {
+                                Ok(()) => theme = disk,
+                                Err(err) => warnings.push(format!(
+                                    "主题《{}》的旧绝对路径没能写回（{err}）",
+                                    theme.name
+                                )),
+                            }
+                        }
                     }
                     // 磁盘上是相对路径（旧版本可能是绝对路径），统一拼回绝对路径
                     theme_paths::resolve_theme(&mut theme, &dir);
@@ -697,6 +849,32 @@ mod tests {
         assert_eq!(theme.cursors.len(), 2);
         assert!(theme.cursors.iter().any(|c| c.registry_key == "Arrow"));
         assert!(theme.cursors.iter().any(|c| c.registry_key == "IBeam"));
+    }
+
+    /// 本工具导出的 `.inf` 是 UTF-16LE + BOM，导入端必须按字节交给解析器
+    #[test]
+    fn utf16le_说明书能进入解析器() {
+        let temp = TempDir::new("inf-utf16le");
+        let _guard = temp.isolate_paths();
+
+        let src_dir = temp.join("src");
+        fs::create_dir_all(&src_dir).expect("建临时源文件夹");
+        fs::write(src_dir.join("custom.cur"), fixture_cur()).expect("写入光标");
+
+        let mut bytes = vec![0xFF, 0xFE];
+        for unit in "[Control Panel\\Cursors]\r\nArrow=custom.cur\r\n".encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        fs::write(src_dir.join("theme.inf"), bytes).expect("写入 UTF-16LE .inf");
+
+        let theme = import_source(src_dir.to_str().unwrap()).expect("导入应成功");
+        assert_eq!(theme.cursors.len(), 1);
+        assert_eq!(theme.cursors[0].registry_key, "Arrow");
+        assert!(
+            theme.cursors[0].file_path.ends_with("arrow.cur"),
+            "应落到标准槽位文件名，实际：{}",
+            theme.cursors[0].file_path
+        );
     }
 
     #[test]
@@ -922,6 +1100,94 @@ mod tests {
         assert!(
             warnings.iter().any(|w| w.contains("越出主题目录")),
             "应说明被丢弃的原因：{warnings:?}"
+        );
+    }
+
+    /// 旧绝对路径能相对化时，读取阶段就回写一次，别每次启动都靠内存修补
+    #[test]
+    fn 读取时把旧绝对路径回写为相对路径() {
+        let temp = TempDir::new("repair-absolute");
+        let _guard = temp.isolate_paths();
+
+        let id = "44444444-4444-4444-8444-444444444444";
+        let dir = paths::theme_dir(id).expect("解析主题目录");
+        let cursor = dir.join("cursors").join("arrow.cur");
+        fs::create_dir_all(cursor.parent().unwrap()).expect("建目录");
+        fs::write(&cursor, fixture_cur()).expect("写光标");
+        write_theme_json(&dir, &sample_theme(id, &cursor.to_string_lossy()));
+
+        let (themes, warnings) = read_user_themes();
+        assert_eq!(themes.len(), 1);
+        assert_eq!(
+            Path::new(&themes[0].cursors[0].file_path),
+            cursor,
+            "内存里仍返回绝对路径，预览/应用不用改"
+        );
+        assert!(warnings.is_empty(), "可修复的旧路径不该产生警告：{warnings:?}");
+
+        let raw = fs::read_to_string(dir.join("theme.json")).expect("读回 theme.json");
+        let stored: CursorTheme = serde_json::from_str(&raw).expect("解析 theme.json");
+        assert_eq!(stored.cursors[0].file_path, "cursors/arrow.cur");
+    }
+
+    /// 磁盘上的主题不能自称系统方案，否则会混进系统分组骗用户
+    #[test]
+    fn 读取时拒绝伪装成系统方案的主题() {
+        let temp = TempDir::new("fake-built-in");
+        let _guard = temp.isolate_paths();
+
+        let id = "55555555-5555-4555-8555-555555555555";
+        let dir = paths::theme_dir(id).expect("解析主题目录");
+        fs::create_dir_all(dir.join("cursors")).expect("建目录");
+        fs::write(dir.join("cursors/arrow.cur"), fixture_cur()).expect("写光标");
+        let mut theme = sample_theme(id, "cursors/arrow.cur");
+        theme.is_built_in = true;
+        write_theme_json(&dir, &theme);
+
+        let (themes, warnings) = read_user_themes();
+        assert!(themes.is_empty(), "伪装成系统方案的主题必须丢弃");
+        assert!(
+            warnings.iter().any(|w| w.contains("系统方案")),
+            "要说清为什么跳过：{warnings:?}"
+        );
+    }
+
+    /// 超大 theme.json 不能整个读进内存，按损坏主题跳过并给警告
+    /// `.inf` 与光标文件共用同一份额度，不能靠堆说明书绕过导入限额
+    #[test]
+    fn inf_也受条目预算约束() {
+        let temp = TempDir::new("inf-budget");
+        for i in 0..=limits::THEME_LIMITS.max_entries {
+            fs::write(temp.path().join(format!("{i}.inf")), "").expect("写 .inf");
+        }
+
+        let mut budget = limits::ScanBudget::new(&limits::THEME_LIMITS);
+        let mut warnings = Vec::new();
+        let mut files = Vec::new();
+        let err = collect_inf_files(temp.path(), 0, &mut budget, &mut warnings, &mut files)
+            .unwrap_err();
+        assert!(err.contains("文件太多"), "实际：{err}");
+    }
+
+    #[test]
+    fn 超过上限的_theme_json_被跳过() {
+        let temp = TempDir::new("oversized-theme-json");
+        let _guard = temp.isolate_paths();
+
+        let id = "66666666-6666-4666-8666-666666666666";
+        let dir = paths::theme_dir(id).expect("解析主题目录");
+        fs::create_dir_all(&dir).expect("建目录");
+        fs::write(
+            dir.join("theme.json"),
+            "x".repeat(limits::MAX_THEME_JSON_BYTES as usize + 1),
+        )
+        .expect("写超大 theme.json");
+
+        let (themes, warnings) = read_user_themes();
+        assert!(themes.is_empty());
+        assert!(
+            warnings.iter().any(|w| w.contains("上限")),
+            "警告要说明尺寸超限：{warnings:?}"
         );
     }
 }

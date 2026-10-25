@@ -53,16 +53,33 @@ fn write_dir_into(
     dir: &Path,
     prefix: &str,
     files: &mut usize,
+    warnings: &mut Vec<String>,
     skip_top: Option<&str>,
 ) -> Result<(), String> {
     let options = zip::write::SimpleFileOptions::default();
     let entries =
         fs::read_dir(dir).map_err(|err| format!("读目录失败（{}：{err}）", dir.display()))?;
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                warnings.push(format!("读取备份目录项失败，已跳过（{err}）"));
+                continue;
+            }
+        };
         let path = entry.path();
         let name = format!("{prefix}/{}", entry.file_name().to_string_lossy());
-        if path.is_dir() {
-            write_dir_into(writer, &path, &name, files, None)?;
+        // 不能跟随 junction / symlink：备份会把链接指向的外部文件一起打包
+        if limits::is_reparse_entry(&entry) {
+            warnings.push(format!("已跳过链接或目录联接：{}", path.display()));
+            continue;
+        }
+        let is_dir = entry
+            .file_type()
+            .map(|kind| kind.is_dir())
+            .unwrap_or(false);
+        if is_dir {
+            write_dir_into(writer, &path, &name, files, warnings, None)?;
         } else {
             if skip_top.is_some_and(|skip| entry.file_name().to_string_lossy().as_ref() == skip) {
                 continue;
@@ -93,16 +110,16 @@ fn write_theme_into(
     warnings: &mut Vec<String>,
 ) -> Result<(), String> {
     let json_path = dir.join("theme.json");
-    let parsed = fs::read_to_string(&json_path)
+    let parsed = limits::read_text_bounded(&json_path, limits::MAX_THEME_JSON_BYTES)
         .ok()
         .and_then(|raw| serde_json::from_str::<CursorTheme>(&raw).ok());
 
     let Some(theme) = parsed else {
         warnings.push(format!(
-            "主题目录 {} 的 theme.json 解析失败，已按原样打包",
+            "主题目录 {} 的 theme.json 读取失败或已损坏，已按原样打包",
             dir.display()
         ));
-        return write_dir_into(writer, dir, prefix, files, None);
+        return write_dir_into(writer, dir, prefix, files, warnings, None);
     };
 
     let (disk, path_warnings) = theme_paths::to_storage(&theme, dir);
@@ -110,7 +127,7 @@ fn write_theme_into(
         warnings.push(format!("主题《{}》{warning}", theme.name));
     }
 
-    write_dir_into(writer, dir, prefix, files, Some("theme.json"))?;
+    write_dir_into(writer, dir, prefix, files, warnings, Some("theme.json"))?;
     let json = serde_json::to_string_pretty(&disk).map_err(|err| format!("序列化主题失败（{err}）"))?;
     let options = zip::write::SimpleFileOptions::default();
     writer
@@ -189,12 +206,37 @@ fn write_backup_zip(
     if themes_dir.exists() {
         let entries = fs::read_dir(themes_dir)
             .map_err(|err| format!("读主题目录失败（{err}）"))?;
-        let theme_dirs: Vec<_> = entries
-            .flatten()
-            .map(|entry| entry.path())
+        let mut theme_dirs = Vec::new();
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    warnings.push(format!("读取主题目录项失败，已跳过（{err}）"));
+                    continue;
+                }
+            };
+            let dir = entry.path();
+            if limits::is_reparse_entry(&entry) {
+                warnings.push(format!("已跳过链接或目录联接：{}", dir.display()));
+                continue;
+            }
             // 一级子目录里有 theme.json 才算一套主题（口径与 importer 一致）
-            .filter(|dir| dir.is_dir() && dir.join("theme.json").exists())
-            .collect();
+            let is_dir = entry
+                .file_type()
+                .map(|kind| kind.is_dir())
+                .unwrap_or(false);
+            let json_path = dir.join("theme.json");
+            if is_dir && json_path.is_file() {
+                if limits::is_reparse_path(&json_path) {
+                    warnings.push(format!(
+                        "主题目录 {} 的 theme.json 是链接或目录联接，已跳过",
+                        dir.display()
+                    ));
+                    continue;
+                }
+                theme_dirs.push(dir);
+            }
+        }
         let total = theme_dirs.len();
 
         for (index, dir) in theme_dirs.iter().enumerate() {
@@ -203,10 +245,13 @@ fn write_backup_zip(
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
             // id 与目录名不一致的目录恢复后会被读取端跳过，备份里也不收
-            let stored_id = fs::read_to_string(dir.join("theme.json"))
-                .ok()
-                .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-                .and_then(|value| value.get("id")?.as_str().map(str::to_string));
+            let stored_id = limits::read_text_bounded(
+                &dir.join("theme.json"),
+                limits::MAX_THEME_JSON_BYTES,
+            )
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|value| value.get("id")?.as_str().map(str::to_string));
             if stored_id.as_deref() != Some(dir_name.as_str()) {
                 warnings.push(format!(
                     "主题目录 {dir_name} 的 theme.json 与目录名不一致，已跳过"
@@ -230,20 +275,22 @@ fn write_backup_zip(
         let size = fs::metadata(history_file)
             .map(|meta| meta.len())
             .unwrap_or(0);
-        if size > MAX_HISTORY_BYTES {
-            return Err(format!(
-                "最近使用记录超过 {}MB，已停止导出",
-                MAX_HISTORY_BYTES / 1024 / 1024
+        if size > limits::MAX_STATE_FILE_BYTES {
+            warnings.push(format!(
+                "最近使用记录超过 {}KB 上限，已跳过；主题仍会正常备份",
+                limits::MAX_STATE_FILE_BYTES / 1024
             ));
+        } else {
+            let data = limits::read_text_bounded(history_file, limits::MAX_STATE_FILE_BYTES)
+                .map_err(|err| format!("读最近使用记录失败（{err}）"))?;
+            writer
+                .start_file("history.json", options)
+                .map_err(|err| format!("打包失败（{err}）"))?;
+            writer
+                .write_all(data.as_bytes())
+                .map_err(|err| format!("写入压缩包失败（{err}）"))?;
+            files += 1;
         }
-        let data = fs::read(history_file).map_err(|err| format!("读最近使用记录失败（{err}）"))?;
-        writer
-            .start_file("history.json", options)
-            .map_err(|err| format!("打包失败（{err}）"))?;
-        writer
-            .write_all(&data)
-            .map_err(|err| format!("写入压缩包失败（{err}）"))?;
-        files += 1;
     }
 
     if files == 0 {
@@ -264,9 +311,6 @@ fn write_backup_zip(
 // ---------------------------------------------------------------------------
 // 恢复
 // ---------------------------------------------------------------------------
-
-/// 备份里的使用记录上限：正常只有几百条，超过这个尺寸基本是坏包
-const MAX_HISTORY_BYTES: u64 = 8 * 1024 * 1024;
 
 /// `themes/<uuid>/…` 条目 → (主题 id, 主题内相对路径)；其余返回 None
 fn theme_entry(parts: &[String]) -> Option<(&str, PathBuf)> {
@@ -294,6 +338,31 @@ fn collect_complete_themes(
     let mut complete: HashSet<String> = HashSet::new();
     let mut rejected: HashSet<String> = HashSet::new();
 
+    // 第一遍之前先做整包预算预检：只看条目名和声明大小，不读内容。
+    // 否则 4096 个 1MB 的 theme.json 能在真正开始恢复前就读掉 4GB。
+    let mut budget = limits::ArchiveBudget::new(&limits::BACKUP_LIMITS);
+    for index in 0..archive.len() {
+        let entry = archive
+            .by_index(index)
+            .map_err(|err| format!("读备份条目失败（{err}）"))?;
+        if entry.is_dir() {
+            continue;
+        }
+        if limits::safe_relative_parts(entry.name(), &limits::BACKUP_LIMITS)?.is_none() {
+            continue;
+        }
+        budget.note_entry()?;
+        let size = entry.size();
+        if size > limits::BACKUP_LIMITS.max_file_bytes {
+            return Err(format!(
+                "备份里的文件解压后超过单文件 {} 上限：{}",
+                limits::BACKUP_LIMITS.file_hint(),
+                entry.name()
+            ));
+        }
+        budget.commit(size)?;
+    }
+
     for index in 0..archive.len() {
         let mut entry = archive
             .by_index(index)
@@ -314,9 +383,9 @@ fn collect_complete_themes(
 
         let id = id.to_string();
         let mut raw = String::new();
-        let valid = entry.size() <= 1024 * 1024
+        let valid = entry.size() <= limits::MAX_THEME_JSON_BYTES
             && (&mut entry)
-                .take(1024 * 1024)
+                .take(limits::MAX_THEME_JSON_BYTES)
                 .read_to_string(&mut raw)
                 .is_ok()
             && serde_json::from_str::<serde_json::Value>(&raw)
@@ -424,7 +493,15 @@ fn import_from_with_progress(
 
             if parts.len() == 1 && parts[0] == "history.json" {
                 budget.note_entry()?;
-                let cap = budget.allowance().min(MAX_HISTORY_BYTES);
+                if entry.size() > limits::MAX_STATE_FILE_BYTES {
+                    budget.commit(entry.size())?;
+                    warnings.push(format!(
+                        "备份里的最近使用记录超过 {}KB，已忽略",
+                        limits::MAX_STATE_FILE_BYTES / 1024
+                    ));
+                    continue;
+                }
+                let cap = budget.allowance().min(limits::MAX_STATE_FILE_BYTES);
                 let mut raw = Vec::new();
                 let bytes =
                     limits::copy_bounded(&mut entry, &mut raw, cap, &limits::BACKUP_LIMITS)?;

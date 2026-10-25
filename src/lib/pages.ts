@@ -66,9 +66,9 @@ export const PAGE_META = {
     label: "最近使用",
     icon: History,
     title: "最近使用",
-    hint: "每次切换都会留一条记录",
+    hint: "按最近一次应用排序，每个主题一条",
     count: ({ recent }) => recent.length,
-    unit: "条记录",
+    unit: "个主题",
     hasInspector: false,
   },
   settings: {

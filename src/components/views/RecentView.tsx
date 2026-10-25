@@ -48,7 +48,7 @@ export function RecentView() {
         <EmptyState
           icon={History}
           title="还没有使用记录"
-          description="应用任意一个主题后，这里会按时间留下一条记录，方便随时切回去"
+          description="应用任意一个主题后，这里会按最近一次应用排列，每个主题一条，方便随时切回去"
           action={
             <Button variant="outline" onClick={() => setCurrentPage("gallery")}>
               去主题图库
@@ -68,7 +68,7 @@ export function RecentView() {
             <div className="mb-2 flex items-baseline gap-2">
               <h2 className="text-xs font-medium">{group.label}</h2>
               <span className="text-2xs text-muted-foreground tabular-nums">
-                {group.items.length} 次
+                {group.items.length} 个主题
               </span>
               <span aria-hidden className="h-px flex-1 bg-border" />
             </div>

@@ -58,7 +58,7 @@
 **② 23 个命令**
 主题类 `get_all_themes` / `get_cursor_preview` / `import_theme` / `apply_theme` / `restore_default` / `delete_theme` / `rename_theme` / `export_theme`；数据与系统类 `get_data_dir` / `open_data_dir` / `get_windows_version` / `open_mouse_panel` / `get_zip_menu_registered` / `set_zip_menu` / `take_pending_import`；设置类 `get_settings` / `update_settings` / `get_autostart` / `set_autostart` / `preview_themes_dir` / `set_themes_dir` / `export_backup` / `import_backup`。契约见架构设计 §5。几条容易记错：
 - `apply_theme` / `export_theme` 收**整个 `CursorTheme`**，不是 ID——系统方案只存在于注册表，没有磁盘目录，只给 ID 拿不到它的文件。
-- `import_theme` 收 `sourcePath`（**zip 或整个主题文件夹**，决策 16，后端权威校验）；包内带 `.inf` 时槽位按说明书映射、**优先于文件名推断**，没带或解析失败退回文件名推断、不缺槽位（决策 15，`utils/inf_parse.rs`）。
+- `import_theme` 收 `sourcePath`（**zip 或整个主题文件夹**，决策 16，后端权威校验），返回 `{ theme, warnings }`——目录里的链接 / 目录联接会被跳过并说明原因；包内带 `.inf` 时槽位按说明书映射、**优先于文件名推断**，没带或解析失败退回文件名推断、不缺槽位（决策 15，`utils/inf_parse.rs`），`.inf` 与光标文件共用 `ScanBudget`。
 - 没有 `list_themes`（是 `get_all_themes`）；没有 `create_custom_theme`（未实现）。
 - `get_data_dir` 只读不建目录；`open_data_dir` 才 `ensure_dir` + 调 opener。前端**禁止**用 `localDataDir()` 自己拼 `CursorStudio`（硬约束 1）。
 - `take_pending_import` 领取即删除（右键菜单 `--import` 转交通路），App 在启动与聚焦两个时机调用；`take_pending_import` 损坏返回 null 不报错。
@@ -90,8 +90,8 @@
 16. 外观三态（跟随系统 / 浅色 / 深色）只由 `lib/theme-mode.ts` 管：`html.dark` + 落盘 `cursorstudio.theme-mode` + `setTheme` 同步标题栏。**组件里不写 `dark:` 前缀**，颜色全走 token；手选浅/深后不再跟系统，选回「跟随系统」才恢复。控件在「设置 → 通用」（决策 14，已从侧栏迁走）；改这段先看 `design_check` 的 18 条断言。
 17. 设置的持久化分三处，别做大一统：行为类 `settings.json`（Rust 也要读：关闭行为、主题目录、开关）、外观 `localStorage`（首帧同步读）、自启动 `HKCU\...\Run`（注册表即真相）。
 18. 主题槽位路径**磁盘存相对、运行时用绝对**：`theme.json` / 备份 zip 里只准出现相对主题目录的路径（`utils/theme_paths.rs` 的 `to_storage` / `write_theme_json`），读盘后必须 `resolve_theme` 再交给预览/应用。主题目录迁移只走 `utils/themes_dir.rs`：目标先 canonicalize，拒绝 UNC / 重解析点 / 数据目录内部（默认除外）/ 祖先 / 互相嵌套 / 非空目录（含同名主题）；内容先写同级 `.cursorstudio-migrate-<uuid>` 暂存区、逐文件哈希校验后原子改名；注册表重绑或设置写入失败必须回滚，源目录只在全部成功后删除。
-19. 归档读取只走 `utils/limits.rs`：主题包 `THEME_LIMITS`（50MB / 单文件 20MB / 512 条目 / 8 层）、备份 `BACKUP_LIMITS`（1GiB / 64MB / 4096 / 10 层）共用 `ArchiveBudget`、`copy_bounded`（64KB 流式）、`safe_relative_parts`；文件夹导入用 `ScanBudget`。**禁止一次性读整个条目**，超限必须清理解压临时目录与半成品主题目录。预览源文件 8MB、光标文件 20MB 上限同理。
-20. 前端传来的 `CursorTheme` / 路径一律视为不可信：槽位必须命中 15 个白名单、`theme.id` 必须是规范 UUID 且等于目录名与 `theme.json` 里的 id、光标文件 canonicalize 后必须在主题目录或 `%SystemRoot%\Cursors` 内、`dest_path` 父目录存在且后缀正确。校验只在 `utils/validation.rs` 做，别在组件里复制。
+19. 归档与文本读取只走 `utils/limits.rs`：主题包 `THEME_LIMITS`（50MB / 单文件 20MB / 512 条目 / 8 层）、备份 `BACKUP_LIMITS`（1GiB / 64MB / 4096 / 10 层）共用 `ArchiveBudget`、`copy_bounded`（64KB 流式）、`safe_relative_parts`；文件夹导入用 `ScanBudget`，`.inf` 也占同一份额度；备份恢复第一遍必须先按条目声明大小做整包预检。所有 JSON 文本读走 `read_text_bounded`（`theme.json` 1MB，`settings.json` / `history.json` 512KB）；编码不定的 `.inf` 走 `read_bytes_bounded`（1MB）后直接交给 `inf_parse`，禁止先按 UTF-8 解码。禁止 `fs::read_to_string`。目录遍历一律用 `is_reparse_entry` 跳过 symlink / junction / 其它重解析点并 warning。**禁止一次性读整个条目**，超限必须清理解压临时目录与半成品主题目录。预览源文件 8MB、光标文件 20MB 上限同理。
+20. 前端传来的 `CursorTheme` / 路径一律视为不可信：槽位必须命中 15 个白名单、`theme.id` 必须是规范 UUID 且等于目录名与 `theme.json` 里的 id；用户主题的光标 canonicalize 后必须落在**这套主题自己的目录**内（系统方案才允许任意目录，预览路径允许主题根目录或系统光标目录）；`dest_path` 父目录存在且后缀正确。校验只在 `utils/validation.rs` 做，别在组件里复制。
 21. 重操作必须后台 + 互斥：导入、备份导出 / 恢复、主题目录迁移都要 `spawn_blocking` + `ops::try_begin`（`try_lock` 立即失败，不排队）+ 阶段进度事件；`spawn_blocking` 的 JoinError 也要转成中文错误，不能 `.unwrap()`。
 22. 前端安全基线：`main.tsx` 必须保留 `ErrorBoundary`；外链只走 `lib/open-external.ts` 的 `https://github.com` 白名单；检查更新必须 8 秒超时；busy 按 `动作:ID` 记且 `finally` 释放；导出默认文件名必须过 `sanitizeFileName`（Windows 非法字符 / 保留名）。
 23. 无障碍基线：标题 `h1 → h2 → h3` 不跳级；`Segmented` 保持 radiogroup + roving tabindex（方向键 / Home / End）；`.ani` 播放必须响应 `prefers-reduced-motion`（降级画一帧）；装饰性预览图 `alt=""`；时间用 `<time dateTime>`。

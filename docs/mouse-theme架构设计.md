@@ -127,9 +127,9 @@ App.tsx
 | `models/` | `struct` 定义 | 全部 `Serialize + Deserialize`，字段名即前后端契约（`snake_case`） |
 | `utils/` | 纯技术操作 | 不知道"主题"的业务语义，只管注册表/文件/二进制 |
 
-`utils` 只被 `commands` 调用，不反向依赖。归档读取统一走 `limits`（限额 + 流式复制 + 条目名白名单），IPC 输入统一走 `validation`，重操作互斥统一走 `ops`。所有触及文件 / 注册表 / 进程的命令都用 `spawn_blocking`，进度用 `progress::TaskProgress`。
+`utils` 只被 `commands` 调用，不反向依赖。归档与文本读取统一走 `limits`（限额 + 流式复制 + 条目名白名单 + 受限文本读取 + 重解析点识别），IPC 输入统一走 `validation`，重操作互斥统一走 `ops`。所有触及文件 / 注册表 / 进程的命令都用 `spawn_blocking`，进度用 `progress::TaskProgress`。
 
-测试的硬规矩：**不写真实用户数据**——数据根用线程局部临时目录（`paths::use_test_roots`），注册表用 `Software\CursorStudio.Tests\...` 隔离键（`TEST_CURSORS_KEY`；自启动 / 右键菜单用各自的 `TEST_KEY`），光标文件用 `test_support` 生成的 fixture；隔离键让用例可以并行，共享同一个键的用例才需自行串行（防中毒取回锁），见决策 21。历史用例覆盖 v1 兼容、v2 事件流与更高版本只读；预览缓存覆盖 LRU 淘汰与失效；导出用例断言失败后不留临时包且原目标不变。
+测试的硬规矩：**不写真实用户数据**——数据根用线程局部临时目录（`paths::use_test_roots`），注册表用 `Software\CursorStudio.Tests\...` 隔离键（`TEST_CURSORS_KEY`；自启动 / 右键菜单用各自的 `TEST_KEY`），光标文件用 `test_support` 生成的 fixture；隔离键让用例可以并行，共享同一个键的用例才需自行串行（防中毒取回锁），见决策 21。历史用例覆盖 v1 兼容、v2 事件流、更高版本只读与超限重建；预览缓存覆盖 LRU 淘汰与失效；导出用例断言失败后不留临时包且原目标不变；读取用例覆盖 theme.json 超限跳过、伪装系统方案拒绝与旧绝对路径回写；光标校验用例覆盖跨主题引用拒绝。
 
 ---
 
@@ -139,10 +139,10 @@ App.tsx
 |---|---|---|---|
 | `get_all_themes` | — | `ThemesResult` | 只有聚合本身崩溃才 `Err`；单个来源失败走 `warnings` |
 | `get_cursor_preview` | `filePath` | `CursorPreview` | **不失败**，解析不出来返回空帧 |
-| `import_theme` | `sourcePath` | `CursorTheme` | 不是 .zip 也不是文件夹、超限额（50MB 总量 / 20MB 单文件 / 512 条目 / 8 层）、条目名不合法、无光标文件、认不出槽位（且 .inf 无映射）、写盘失败；失败清理临时目录与半成品主题目录 |
+| `import_theme` | `sourcePath` | `ImportReport`（`theme` + `warnings`） | 不是 .zip 也不是文件夹、超限额（50MB 总量 / 20MB 单文件 / 512 条目 / 8 层，`.inf` 与光标共用额度）、条目名不合法、无光标文件、认不出槽位（且 .inf 无映射）、写盘失败；链接 / 目录联接跳过并进 `warnings`；失败清理临时目录与半成品主题目录 |
 | `apply_theme` | `theme`（整个对象） | `ApplyOutcome` | 注册表写失败；历史写失败只进 `warning` |
 | `restore_default` | — | `void` | 清空注册表失败 |
-| `delete_theme` | `themeId` | `void` | ID 非法、目录不存在、被占用 |
+| `delete_theme` | `themeId` | `void` | ID 非法、目录不存在、被占用；后端回读 `theme.json` 与注册表，拒绝系统方案和正在使用的主题 |
 | `rename_theme` | `themeId`, `newName` | `CursorTheme` | 空名、超 40 字、控制字符、json 损坏 |
 | `export_theme` | `theme`, `destPath` | `ExportSummary` | 槽位 / 主题 ID 校验失败、目标目录不存在或文件名非法、写 zip 失败（先写同目录临时包，失败删临时包并保留原目标） |
 | `get_data_dir` | — | `String`（展示路径） | `LOCALAPPDATA` 缺失或为空时返回中文错误（**不回退到当前目录**）；只读 `data_root()`，不创建目录 |
@@ -183,6 +183,7 @@ App.tsx
 |---|---|---|
 | `CursorSlot` | `registry_key`、`display_name`、`english_name`、`file_path`、`file_type` | `file_path` 运行时是绝对路径（直接写注册表）；**落盘到 `theme.json` / 备份 zip 时只存相对主题目录的路径**（决策 17） |
 | `CursorTheme` | `id`、`name`、`description`、`created_at`、`updated_at`、`is_built_in`、`cursors` | `id`：`sys_<名>` 或 UUID |
+| `ImportReport` | `theme`、`warnings` | `import_theme` 的返回值；链接 / 目录联接等跳过项进 `warnings` |
 | `ThemesResult` | `themes`、`warnings`、`active_theme_id`、`recent` | 部分成功的载体；`recent` 是从事件流派生的最近主题（去重、最多 50） |
 | `ApplyOutcome` | `recent`、`warning` | 主操作成功就不回滚；`recent` 为派生视图 |
 | `CursorPreview` | `is_animated`、`image`、`frames`、`rate_ms`、`hotspot` | base64 不含 `data:` 前缀 |
@@ -204,13 +205,13 @@ App.tsx
 
 **应用**：点「应用此主题」→ store 按 `apply:<id>` 加 busy → `apply_theme(theme)` 在 `spawn_blocking` 中先校验 15 槽位白名单、主题 ID 与目录一致、每个光标文件落可信目录且不超过 20MB → 按 `SLOT_DEFS` 写 15 个槽位值 + `SchemeName`（不写 `Schemes`）→ `SPI_SETCURSORS`（只 `SPIF_SENDCHANGE`）→ 向 `history.json` **追加一条事件**（不按主题合并）→ 返回派生的最近主题 → store 更新 `activeThemeId` + `recent`，`finally` 释放 busy。
 
-**导入**：对话框选 `.zip`（对话框只收 zip），或把 `.zip` / 整个主题文件夹拖进窗口（Tauri drag-drop 事件给完整路径，前端只拦多件拖入，zip / 文件夹 / 其它文件由后端权威校验，拖入时有全窗遮罩反馈）→ `import_theme` 在 `spawn_blocking` 中取 `ops` 锁（`importer::import_source` 分发：文件夹直接用，zip 流式解压到临时目录，两者走同一条落盘流程，决策 16）→ 每个条目先过名称白名单与 `THEME_LIMITS` 预算（决策 18），超限立即失败并清理解压临时目录 → 扫 `.cur/.ani/.ico` → 包里带 `.inf` 时先按说明书映射槽位（决策 15），剩余槽位退回文件名推断 → 落盘 `themes/<uuid>/`（失败时连半成品目录一起清理）→ `theme.json` 只写相对槽位路径（决策 17）→ 返回主题（内存里已 resolve 成绝对路径）→ store 追加并选中；执行期按阶段发 `import-progress`，侧栏显示进度文案。
+**导入**：对话框选 `.zip`（对话框只收 zip），或把 `.zip` / 整个主题文件夹拖进窗口（Tauri drag-drop 事件给完整路径，前端只拦多件拖入，zip / 文件夹 / 其它文件由后端权威校验，拖入时有全窗遮罩反馈）→ `import_theme` 在 `spawn_blocking` 中取 `ops` 锁（`importer::import_source` 分发：文件夹直接用，zip 流式解压到临时目录，两者走同一条落盘流程，决策 16）→ 每个条目先过名称白名单与 `THEME_LIMITS` 预算（决策 18），超限立即失败并清理解压临时目录 → 扫 `.cur/.ani/.ico` 与 `.inf`（共用 `ScanBudget`，链接 / 目录联接跳过并记 warning）→ 包里带 `.inf` 时先按说明书映射槽位（决策 15），剩余槽位退回文件名推断 → 落盘 `themes/<uuid>/`（失败时连半成品目录一起清理）→ `theme.json` 只写相对槽位路径（决策 17）→ 返回 `ImportReport`（主题已 resolve 成绝对路径 + warnings）→ store 追加并选中；执行期按阶段发 `import-progress`，侧栏显示进度文案。
 
-**迁移主题目录**：设置里选目录 → `preview_themes_dir` 做 canonicalize 与统计，返回源 / 目标 / 主题数 / 文件数 / 体积 / warnings → 确认框展示，确认后锁操作 → `set_themes_dir` 在 `spawn_blocking` 中执行：暂存复制并改写相对路径 → 逐文件校验 → 原子切换 → 重绑注册表槽位 → 写设置 → 删源目录，阶段经 `themes-dir-progress` 推给前端进度条 → 成功刷新设置与主题列表；失败保留对话框，可重试或关闭，源目录与设置不变。
+**迁移主题目录**：设置里选目录 → `preview_themes_dir` 做 canonicalize 与统计，返回源 / 目标 / 主题数 / 文件数 / 体积 / warnings → 确认框展示，确认后锁操作 → `set_themes_dir` 在 `spawn_blocking` 中执行：暂存复制并改写相对路径 → 逐文件校验 → 原子切换 → 重绑注册表槽位 → 写设置 → 删源目录，阶段经 `themes-dir-progress` 推给前端进度条 → 成功刷新设置与主题列表；失败保留对话框，可重试或关闭，源目录与设置不变。源目录里的链接 / 目录联接不复制、逐条进 warnings，避免把外部目录搬进主题库。
 
-**备份**：导出 `export_backup` 在 `spawn_blocking` + `ops` 锁中把 `themes/`（每个 `theme.json` 先改写成相对路径）与 `history.json`（使用事件流）打成一个 zip，先写同目录临时包、成功后才改名到目标；恢复 `import_backup` 走同一把锁，先按 `BACKUP_LIMITS` 流式解包（条目名白名单，超限删除本次新建目录），再按合并语义补回缺失主题，使用记录按「主题 + 时间」去重后并入本地事件流（本地事件不覆盖），按**新根目录**重写每个新增主题的 `theme.json`，最后返回计数与 warnings。备份包里的旧绝对路径与 v1 历史也在这一步落到新根 / 升级为事件。两者执行期都发 `backup-progress`，界面显示阶段进度条。
+**备份**：导出 `export_backup` 在 `spawn_blocking` + `ops` 锁中把 `themes/`（每个 `theme.json` 先改写成相对路径；链接 / 目录联接跳过并 warning）与 `history.json`（使用事件流，512KB 上限）打成一个 zip，先写同目录临时包、成功后才改名到目标；恢复 `import_backup` 走同一把锁，第一遍先按条目声明大小用 `BACKUP_LIMITS` 做整包预算预检，再按 `BACKUP_LIMITS` 流式解包（条目名白名单，超限删除本次新建目录），按合并语义补回缺失主题，使用记录按「主题 + 时间」去重后并入本地事件流（本地事件不覆盖；超过 512KB 的 history 忽略并 warning），按**新根目录**重写每个新增主题的 `theme.json`，最后返回计数与 warnings。备份包里的旧绝对路径与 v1 历史也在这一步落到新根 / 升级为事件。两者执行期都发 `backup-progress`，界面显示阶段进度条。
 
-**删除**：按钮禁用（使用中/系统方案）→ store 二次拦截 → 后端 `Uuid::parse_str` 校验 → `remove_dir_all`。
+**删除**：按钮禁用（使用中/系统方案）→ store 二次拦截 → 后端 `Uuid::parse_str` 校验 → 回读 `theme.json` 与注册表，拒绝系统方案和正在使用的主题 → `remove_dir_all`。
 
 ---
 
@@ -260,3 +261,4 @@ App.tsx
 | 2026-10-25 | 决策 17：槽位路径相对化（磁盘相对 / 运行时绝对），备份导出恢复与改名统一重写；主题目录迁移改为预检 + 暂存 + 校验 + 原子切换 + 回滚，新增 `preview_themes_dir`（命令契约 22 → 23）、迁移确认框与进度事件；命令表与类型契约同步 |
 | 2026-10-25 | 决策 18–21：新增 `limits` / `validation` / `ops` / `progress` / `test_support`；主题包与备份统一限额与流式解包、IPC 输入校验收口；所有 I/O 命令 `spawn_blocking` + 进度事件 + 重操作互斥；前端补 ErrorBoundary、按动作 busy、更新超时、外链白名单与无障碍基线；测试改用临时目录 / fixture / 隔离注册表键，新增 GitHub Actions 四道闸 |
 | 2026-10-25 | 体验与数据健壮性：设置损坏自动备份并随 `SettingsSnapshot.warnings` 告警、`data_root` 缺失直接报错、自启动展示注册表实际路径；`history.json` 升级为 v2 事件流并派生最近主题（v1 兼容、更高版本只读）；预览缓存改后端 LRU + 按路径 / 目录失效；主题与备份导出改临时包原子落盘（失败清理、保留旧目标）；前端备份动作与进度收口到 `settingsStore` |
+| 2026-10-25 | P2 边界加固：`.inf` 纳入 `ScanBudget`；备份首遍按条目声明大小整包预检；JSON 走 `read_text_bounded`（theme 1MB、settings/history 512KB），`.inf` 走 `read_bytes_bounded`（1MB）后交给解析器按 BOM 识别编码；导入 / 备份 / 迁移遍历跳过 symlink / junction 并 warning；`import_theme` 返回 `ImportReport`；用户主题光标限本主题目录、读取拒绝 `is_built_in`、删除后端复核使用中；旧绝对路径读盘时回写一次，`theme.json` 改临时文件 + rename |

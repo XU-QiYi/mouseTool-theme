@@ -12,7 +12,10 @@
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+use uuid::Uuid;
+
 use crate::models::CursorTheme;
+use crate::utils::limits;
 
 /// 去掉 Windows canonicalize 产生的 `\\?\` 前缀（UNC 形式保持原样）
 pub fn strip_verbatim(path: &Path) -> PathBuf {
@@ -89,8 +92,11 @@ fn collect_into(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
         return;
     };
     for entry in entries.flatten() {
+        if limits::is_reparse_entry(&entry) {
+            continue;
+        }
         let path = entry.path();
-        if path.is_dir() {
+        if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
             collect_into(root, &path, out);
         } else if let Some(relative) = relative_to(&path, root) {
             out.push(PathBuf::from(relative));
@@ -248,11 +254,28 @@ pub fn to_storage(theme: &CursorTheme, theme_dir: &Path) -> (CursorTheme, Vec<St
 /// 把主题写到 `theme_dir/theme.json`，槽位路径落盘前统一相对化
 pub fn write_theme_json(theme_dir: &Path, theme: &CursorTheme) -> Result<Vec<String>, String> {
     let (disk, warnings) = to_storage(theme, theme_dir);
-    let json =
-        serde_json::to_string_pretty(&disk).map_err(|err| format!("序列化主题失败：{err}"))?;
-    fs::write(theme_dir.join("theme.json"), json)
-        .map_err(|err| format!("写入 theme.json 失败：{err}"))?;
+    write_stored_theme(theme_dir, &disk)?;
     Ok(warnings)
+}
+
+/// 写入已经相对化好的主题副本（不再重复扫描文件）
+///
+/// 先写同目录临时文件再改名：中途崩溃只会留下 `.theme.json-*.tmp`，
+/// 不会把用户唯一的一份 `theme.json` 截断成半个 JSON。
+pub fn write_stored_theme(theme_dir: &Path, theme: &CursorTheme) -> Result<(), String> {
+    let json =
+        serde_json::to_string_pretty(theme).map_err(|err| format!("序列化主题失败：{err}"))?;
+    let target = theme_dir.join("theme.json");
+    let tmp = theme_dir.join(format!(".theme.json-{}.tmp", Uuid::new_v4()));
+    if let Err(err) = fs::write(&tmp, json) {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!("写入 theme.json 失败：{err}"));
+    }
+    if let Err(err) = fs::rename(&tmp, &target) {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!("保存 theme.json 失败：{err}"));
+    }
+    Ok(())
 }
 
 /// 读入磁盘上的 `theme.json`，把旧绝对路径改写成相对路径后写回
@@ -260,8 +283,11 @@ pub fn write_theme_json(theme_dir: &Path, theme: &CursorTheme) -> Result<Vec<Str
 /// 主题目录已经在目标位置时使用（迁移后的收尾）。文件解析失败返回 Err，
 /// 由调用方决定是原样保留还是中止。
 pub fn rewrite_theme_file(theme_dir: &Path) -> Result<Vec<String>, String> {
-    let raw = fs::read_to_string(theme_dir.join("theme.json"))
-        .map_err(|err| format!("读不到 theme.json（{err}）"))?;
+    let raw = limits::read_text_bounded(
+        &theme_dir.join("theme.json"),
+        limits::MAX_THEME_JSON_BYTES,
+    )
+    .map_err(|err| format!("读不到 theme.json（{err}）"))?;
     let theme: CursorTheme =
         serde_json::from_str(&raw).map_err(|err| format!("theme.json 解析失败（{err}）"))?;
     write_theme_json(theme_dir, &theme)

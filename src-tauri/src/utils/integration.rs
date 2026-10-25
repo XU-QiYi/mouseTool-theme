@@ -15,7 +15,7 @@ use windows::core::HSTRING;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE};
 
-use crate::utils::paths;
+use crate::utils::{limits, paths};
 
 /// 单实例互斥名。`Local\` 前缀 = 会话内命名空间，多用户互不干扰
 const MUTEX_NAME: &str = "Local\\CursorStudio.SingleInstance";
@@ -110,8 +110,11 @@ fn write_pending_import_at(file: &Path, zip_path: &str) -> Result<(), String> {
 }
 
 fn read_pending_import_at(file: &Path) -> Option<String> {
-    let raw = fs::read_to_string(file).ok()?;
-    let _ = fs::remove_file(file); // 领取即消费，读坏了也不能让文件残留反复触发
+    let raw = limits::read_text_bounded(file, limits::MAX_STATE_FILE_BYTES);
+    // 领取即消费：读取失败（过大 / 权限 / 非法 UTF-8）也必须删掉，
+    // 否则每次启动和聚焦都会重试同一个坏文件
+    let _ = fs::remove_file(file);
+    let raw = raw.ok()?;
     serde_json::from_str::<PendingImport>(&raw).ok().map(|p| p.path)
 }
 
@@ -239,6 +242,20 @@ mod tests {
 
         assert_eq!(read_pending_import_at(&file), None);
         assert!(!file.exists(), "读坏也应消费掉，不能反复触发");
+    }
+
+    /// 超过读取上限的转交文件同样要被消费，否则会反复触发启动检查
+    #[test]
+    fn 超大的转交文件也被消费() {
+        let file = std::env::temp_dir().join("cursorstudio-pending-oversized.json");
+        fs::write(
+            &file,
+            "x".repeat(limits::MAX_STATE_FILE_BYTES as usize + 1),
+        )
+        .expect("写超大转交文件");
+
+        assert_eq!(read_pending_import_at(&file), None);
+        assert!(!file.exists(), "读失败也必须删除，不能反复触发");
     }
 
     #[test]

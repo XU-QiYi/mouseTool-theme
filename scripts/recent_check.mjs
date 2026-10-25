@@ -118,7 +118,7 @@ try {
 
   const afterApply = JSON.parse(await timeline());
   check("应用后置顶为 firefly", afterApply.rows[0]?.text.includes("firefly"), afterApply.rows[0]?.text);
-  check("今天分组增加到 2 条", afterApply.groups[0]?.label === "今天" && afterApply.groups[0].count === 2, JSON.stringify(afterApply.groups[0]));
+  check("今天分组增加到 2 个主题", afterApply.groups[0]?.label === "今天" && afterApply.groups[0].count === 2, JSON.stringify(afterApply.groups[0]));
   check("原 Neon Night 记录仍在", afterApply.rows.some((r) => r.text.includes("Neon Night")));
 
   const shot = await send("Page.captureScreenshot", { format: "png" });

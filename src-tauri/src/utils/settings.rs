@@ -15,7 +15,7 @@ use std::sync::{OnceLock, RwLock};
 
 use serde::{Deserialize, Serialize};
 
-use crate::utils::paths;
+use crate::utils::{limits, paths};
 
 /// 关闭主窗口时的行为
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -101,8 +101,8 @@ fn cache() -> &'static RwLock<Option<SettingsLoad>> {
 /// 自己的设置丢了。改名成带时间戳的 `.bak` 既保住现场，也让下一次写入从干净
 /// 状态开始。
 pub fn load_from(path: &Path) -> SettingsLoad {
-    let raw = match fs::read_to_string(path) {
-        Ok(raw) => raw,
+    let meta = match fs::metadata(path) {
+        Ok(meta) => meta,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return SettingsLoad::defaults(),
         Err(err) => {
             return SettingsLoad {
@@ -111,28 +111,46 @@ pub fn load_from(path: &Path) -> SettingsLoad {
             }
         }
     };
+    if meta.len() > limits::MAX_STATE_FILE_BYTES {
+        return corrupted(
+            path,
+            &format!(
+                "文件 {} 字节，超过 {}KB 上限",
+                meta.len(),
+                limits::MAX_STATE_FILE_BYTES / 1024
+            ),
+        );
+    }
+
+    let raw = match limits::read_text_bounded(path, limits::MAX_STATE_FILE_BYTES) {
+        Ok(raw) => raw,
+        Err(err) => return corrupted(path, &err),
+    };
 
     match serde_json::from_str::<AppSettings>(&raw) {
         Ok(settings) => SettingsLoad {
             settings,
             warnings: Vec::new(),
         },
-        Err(err) => {
-            let warning = match backup_corrupt(path) {
-                Ok(backup) => format!(
-                    "设置文件已损坏，已备份为 {}，本次按默认设置运行（{err}）",
-                    backup.display()
-                ),
-                Err(backup_err) => format!(
-                    "设置文件已损坏，自动备份失败（{backup_err}）；本次按默认设置运行，请手动检查 {}（{err}）",
-                    path.display()
-                ),
-            };
-            SettingsLoad {
-                settings: AppSettings::default(),
-                warnings: vec![warning],
-            }
-        }
+        Err(err) => corrupted(path, &err.to_string()),
+    }
+}
+
+/// 损坏 / 超限 / 读不出来：先备份现场，再按默认值运行
+fn corrupted(path: &Path, reason: &str) -> SettingsLoad {
+    let warning = match backup_corrupt(path) {
+        Ok(backup) => format!(
+            "设置文件已损坏或无法读取，已备份为 {}，本次按默认设置运行（{reason}）",
+            backup.display()
+        ),
+        Err(backup_err) => format!(
+            "设置文件已损坏或无法读取，自动备份失败（{backup_err}）；本次按默认设置运行，请手动检查 {}（{reason}）",
+            path.display()
+        ),
+    };
+    SettingsLoad {
+        settings: AppSettings::default(),
+        warnings: vec![warning],
     }
 }
 
@@ -276,6 +294,35 @@ mod tests {
             "备份必须保住原始内容"
         );
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn 超过上限的设置文件按损坏备份() {
+        let dir = std::env::temp_dir().join(format!(
+            "cursorstudio-settings-oversized-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&dir).expect("建临时目录");
+        let path = dir.join("settings.json");
+        let raw = format!(
+            r#"{{"themes_dir":"{}"}}"#,
+            "a".repeat(limits::MAX_STATE_FILE_BYTES as usize + 1)
+        );
+        fs::write(&path, raw).expect("写超大设置");
+
+        let loaded = load_from(&path);
+        assert_eq!(loaded.settings.close_behavior, CloseBehavior::Exit);
+        assert!(
+            loaded.warnings[0].contains("上限"),
+            "警告要说清尺寸超限：{}",
+            loaded.warnings[0]
+        );
+        assert!(!path.exists(), "超限文件也要先移走");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -74,7 +74,7 @@ interface ThemeStore {
   themes: CursorTheme[];
   /** 当前系统正在使用的主题 ID */
   activeThemeId: string | null;
-  /** 最近使用记录，最新在前（由后端 history.json 提供） */
+  /** 最近主题，最新在前（后端由事件流派生，每个主题一条） */
   recent: HistoryEntry[];
   /** 每个页面各自选中的主题 ID；`recent` 页没有检查器，恒为 null */
   selection: Selection;
@@ -245,7 +245,7 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     // 把列表换成骨架会让用户以为原来的主题没了
     set({ importing: true, importProgress: null });
     try {
-      const theme = await apiImportTheme(sourcePath, (progress) =>
+      const { theme, warnings } = await apiImportTheme(sourcePath, (progress) =>
         set({ importProgress: progress }),
       );
       set((state) => ({
@@ -260,6 +260,13 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
         loadError: null,
       }));
       toast.success(`已导入「${theme.name}」`, `共 ${theme.cursors.length} 个光标槽位`);
+      if (warnings.length > 0) {
+        for (const warning of warnings) console.warn("[importTheme]", warning);
+        toast.warning(
+          "导入完成，但有内容被跳过",
+          warnings.length > 1 ? `${warnings[0]}（共 ${warnings.length} 条）` : warnings[0],
+        );
+      }
     } catch (err) {
       console.error("导入主题失败：", err);
       toast.error("导入失败", readableError(err));

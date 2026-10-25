@@ -19,6 +19,13 @@ export interface CursorTheme {
   cursors: CursorSlot[];
 }
 
+/** 与 Rust 端 `importer::ImportReport` 字段一一对应 */
+export interface ImportReport {
+  theme: CursorTheme;
+  /** 导入成功但被跳过的内容（典型：链接 / 目录联接） */
+  warnings: string[];
+}
+
 /**
  * 与 Rust 端 `models::HistoryEntry` 字段一一对应
  *

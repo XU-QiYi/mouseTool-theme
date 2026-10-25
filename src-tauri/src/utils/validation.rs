@@ -59,8 +59,8 @@ pub fn validate_theme_slots(theme: &CursorTheme) -> Result<(), String> {
     Ok(())
 }
 
-/// 光标文件允许的来源：当前主题目录与系统光标目录
-fn allowed_cursor_roots() -> Result<Vec<PathBuf>, String> {
+/// 预览等只有路径、没有主题上下文的调用：允许整个主题根目录与系统光标目录
+fn default_cursor_roots() -> Result<Vec<PathBuf>, String> {
     let mut roots = vec![paths::themes_dir()?];
     if let Ok(system_root) = std::env::var("SystemRoot") {
         roots.push(PathBuf::from(system_root).join("Cursors"));
@@ -78,23 +78,38 @@ fn canonical_within(path: &Path, root: &Path) -> bool {
     file.starts_with(root)
 }
 
-/// 校验一个将要读取/应用/导出的光标文件
+/// 校验预览用的光标文件（没有主题上下文）
 ///
-/// 返回规范化后的绝对路径；文件必须在主题目录或系统光标目录内，
-/// 且不超过单文件上限。`apply_theme` / `export_theme` / 预览共用。
+/// 返回规范化后的绝对路径；文件必须在主题根目录或系统光标目录内，
+/// 且不超过单文件上限。用户主题的应用 / 导出走 `ensure_cursor_file_in_theme`，
+/// 会进一步限制到本主题目录。
 pub fn ensure_cursor_file(path: &str) -> Result<PathBuf, String> {
-    check_cursor_file(path, true)
+    let roots = default_cursor_roots()?;
+    check_cursor_file(path, Some(&roots), "主题目录或系统光标目录")
+}
+
+/// 应用 / 导出用户主题：光标文件必须落在**这套主题自己的目录**内
+///
+/// 只校验整个 `themes/` 不够：传一套主题却引用另一套主题的文件，会让
+/// 「导出这套主题」把别人的光标打包走，删主题后这些槽位也会突然失效。
+pub fn ensure_cursor_file_in_theme(path: &str, theme_dir: &Path) -> Result<PathBuf, String> {
+    let roots = [theme_dir.to_path_buf()];
+    check_cursor_file(path, Some(&roots), "该主题目录")
 }
 
 /// 系统方案的光标文件：Windows 允许「已保存方案」引用任意目录，不做根限制
 ///
 /// 仍然要求存在、是光标文件且不超过体积上限；只用于 `is_built_in` 的主题，
-/// 用户主题一律走 `ensure_cursor_file`。
+/// 用户主题一律走 `ensure_cursor_file_in_theme`。
 pub fn ensure_readable_cursor_file(path: &str) -> Result<PathBuf, String> {
-    check_cursor_file(path, false)
+    check_cursor_file(path, None, "")
 }
 
-fn check_cursor_file(path: &str, require_containment: bool) -> Result<PathBuf, String> {
+fn check_cursor_file(
+    path: &str,
+    roots: Option<&[PathBuf]>,
+    roots_label: &str,
+) -> Result<PathBuf, String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         return Err("光标文件路径为空".to_string());
@@ -119,11 +134,10 @@ fn check_cursor_file(path: &str, require_containment: bool) -> Result<PathBuf, S
         ));
     }
 
-    if require_containment {
-        let roots = allowed_cursor_roots()?;
+    if let Some(roots) = roots {
         if !roots.iter().any(|root| canonical_within(&file, root)) {
             return Err(format!(
-                "光标文件不在主题目录或系统光标目录内，已拒绝：{trimmed}"
+                "光标文件不在{roots_label}内，已拒绝：{trimmed}"
             ));
         }
     }
@@ -170,7 +184,7 @@ pub fn ensure_theme_id_matches_dir(theme: &CursorTheme) -> Result<PathBuf, Strin
     }
 
     let json_path = dir.join("theme.json");
-    let Ok(raw) = limits::read_text_bounded(&json_path, 1024 * 1024) else {
+    let Ok(raw) = limits::read_text_bounded(&json_path, limits::MAX_THEME_JSON_BYTES) else {
         return Err("读不到主题信息，无法确认主题目录".to_string());
     };
     let stored: serde_json::Value =
@@ -359,5 +373,35 @@ mod tests {
         assert!(path_within_theme_dir(Path::new(r"C:\data\themes\abc\cursors\a.cur"), base));
         assert!(!path_within_theme_dir(Path::new(r"C:\data\themes\abc\..\evil.cur"), base));
         assert!(!path_within_theme_dir(Path::new(r"C:\data\other\a.cur"), base));
+    }
+
+    #[test]
+    fn 用户主题的光标不能引用另一套主题的文件() {
+        let root = std::env::temp_dir().join(format!(
+            "cursorstudio-validation-theme-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let mine = root.join("mine");
+        let other = root.join("other");
+        fs::create_dir_all(&mine).expect("建主题目录");
+        fs::create_dir_all(&other).expect("建另一套主题目录");
+        let own_cursor = mine.join("arrow.cur");
+        let other_cursor = other.join("evil.cur");
+        fs::write(&own_cursor, b"cursor").expect("写自己的光标");
+        fs::write(&other_cursor, b"cursor").expect("写别人的光标");
+
+        assert!(
+            ensure_cursor_file_in_theme(&own_cursor.to_string_lossy(), &mine).is_ok(),
+            "自己目录内的文件应放行"
+        );
+        let err = ensure_cursor_file_in_theme(&other_cursor.to_string_lossy(), &mine)
+            .unwrap_err();
+        assert!(err.contains("该主题目录"), "实际：{err}");
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

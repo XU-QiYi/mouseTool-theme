@@ -57,6 +57,12 @@ fn testing() -> bool {
     TEST_CURSORS_KEY.with(|slot| slot.borrow().is_some())
 }
 
+/// 让其它模块的测试把注册表读写指到隔离键，避免碰真实光标设置
+#[cfg(test)]
+pub fn set_test_cursors_key(path: Option<String>) {
+    TEST_CURSORS_KEY.with(|slot| *slot.borrow_mut() = path);
+}
+
 /// 把 `%SystemRoot%\cursors\arrow.cur` 这类写法展开为真实路径
 fn expand_env(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());

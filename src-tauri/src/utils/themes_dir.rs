@@ -25,7 +25,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::models::CursorTheme;
-use crate::utils::{paths, registry, settings, theme_paths};
+use crate::utils::{limits, paths, registry, settings, theme_paths};
 
 /// 重解析点（符号链接 / 目录联接 / OneDrive 占位）的文件属性位
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
@@ -206,9 +206,26 @@ fn count_files(root: &Path, scan: &mut Scan) {
     let Ok(entries) = fs::read_dir(root) else {
         return;
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                scan.warnings
+                    .push(format!("读取目录项失败，已跳过（{err}）"));
+                continue;
+            }
+        };
+        if limits::is_reparse_entry(&entry) {
+            scan.warnings
+                .push(format!("已跳过链接或目录联接：{}", entry.path().display()));
+            continue;
+        }
         let path = entry.path();
-        if path.is_dir() {
+        let is_dir = entry
+            .file_type()
+            .map(|kind| kind.is_dir())
+            .unwrap_or(false);
+        if is_dir {
             count_files(&path, scan);
         } else {
             scan.file_count += 1;
@@ -227,19 +244,42 @@ fn scan_source(root: &Path) -> Scan {
     }
     match fs::read_dir(root) {
         Ok(entries) => {
-            for entry in entries.flatten() {
+            for entry in entries {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(err) => {
+                        scan.warnings
+                            .push(format!("读取目录项失败，已跳过（{err}）"));
+                        continue;
+                    }
+                };
                 let path = entry.path();
-                if !path.is_dir() {
+                if limits::is_reparse_entry(&entry) {
+                    scan.warnings
+                        .push(format!("已跳过链接或目录联接：{}", path.display()));
+                    continue;
+                }
+                if !entry
+                    .file_type()
+                    .map(|kind| kind.is_dir())
+                    .unwrap_or(false)
+                {
                     continue;
                 }
                 let name = entry.file_name().to_string_lossy().into_owned();
                 let json_path = path.join("theme.json");
+                if limits::is_reparse_path(&json_path) {
+                    scan.warnings.push(format!(
+                        "主题 {name} 的 theme.json 是链接或目录联接，已跳过读取（迁移后该主题可能不完整）"
+                    ));
+                    continue;
+                }
                 if !json_path.is_file() {
                     scan.warnings
                         .push(format!("目录 {name} 没有 theme.json，会按原样搬过去"));
                     continue;
                 }
-                match fs::read_to_string(&json_path)
+                match limits::read_text_bounded(&json_path, limits::MAX_THEME_JSON_BYTES)
                     .ok()
                     .and_then(|raw| serde_json::from_str::<CursorTheme>(&raw).ok())
                 {
@@ -247,9 +287,9 @@ fn scan_source(root: &Path) -> Scan {
                         scan.theme_count += 1;
                         scan.themes.insert(name, theme);
                     }
-                    None => scan
-                        .warnings
-                        .push(format!("主题 {name} 的 theme.json 已损坏，会按原样搬过去")),
+                    None => scan.warnings.push(format!(
+                        "主题 {name} 的 theme.json 无法读取或已损坏，会按原样搬过去"
+                    )),
                 }
             }
         }
@@ -360,16 +400,25 @@ fn copy_into(
     to: &Path,
     copied: &mut usize,
     total: usize,
+    warnings: &mut Vec<String>,
     progress: &mut dyn FnMut(MoveProgress),
 ) -> Result<(), String> {
     let entries = fs::read_dir(from).map_err(|err| format!("读取原目录失败（{err}）"))?;
     for entry in entries {
         let entry = entry.map_err(|err| format!("读取目录项失败（{err}）"))?;
         let src = entry.path();
+        if limits::is_reparse_entry(&entry) {
+            warnings.push(format!("已跳过链接或目录联接：{}", src.display()));
+            continue;
+        }
         let dest = to.join(entry.file_name());
-        if src.is_dir() {
+        if entry
+            .file_type()
+            .map_err(|err| format!("读不到目录项类型（{err}）"))?
+            .is_dir()
+        {
             fs::create_dir_all(&dest).map_err(|err| format!("创建目录失败（{err}）"))?;
-            copy_into(&src, &dest, copied, total, progress)?;
+            copy_into(&src, &dest, copied, total, warnings, progress)?;
         } else {
             fs::copy(&src, &dest).map_err(|err| {
                 format!("复制文件 {} 失败（{err}）", src.display())
@@ -390,6 +439,7 @@ fn copy_source(
     source: &Path,
     staging: &Path,
     total: usize,
+    warnings: &mut Vec<String>,
     progress: &mut dyn FnMut(MoveProgress),
 ) -> Result<(), String> {
     paths::ensure_dir(staging)?;
@@ -397,7 +447,7 @@ fn copy_source(
         return Ok(());
     }
     let mut copied = 0usize;
-    copy_into(source, staging, &mut copied, total, progress)
+    copy_into(source, staging, &mut copied, total, warnings, progress)
 }
 
 /// 把暂存区里每个主题的 `theme.json` 改写成相对路径
@@ -436,8 +486,15 @@ fn collect_files_into(
     let entries = fs::read_dir(dir).map_err(|err| format!("读取目录失败（{err}）"))?;
     for entry in entries {
         let entry = entry.map_err(|err| format!("读取目录项失败（{err}）"))?;
+        if limits::is_reparse_entry(&entry) {
+            continue;
+        }
         let path = entry.path();
-        if path.is_dir() {
+        if entry
+            .file_type()
+            .map_err(|err| format!("读不到目录项类型（{err}）"))?
+            .is_dir()
+        {
             collect_files_into(root, &path, out)?;
         } else {
             let relative = theme_paths::relative_to(&path, root)
@@ -508,7 +565,7 @@ fn verify(source: &Path, staging: &Path, scan: &Scan) -> Result<(), String> {
         if is_theme_json {
             let theme_name = top_dir.unwrap_or_default();
             if let Some(original) = scan.themes.get(&theme_name) {
-                let raw = fs::read_to_string(staged_path)
+                let raw = limits::read_text_bounded(staged_path, limits::MAX_THEME_JSON_BYTES)
                     .map_err(|err| format!("读不到暂存主题信息（{err}）"))?;
                 let stored: CursorTheme = serde_json::from_str(&raw)
                     .map_err(|err| format!("暂存主题信息解析失败（{err}）"))?;
@@ -609,16 +666,17 @@ pub fn change_with(
     let _ = fs::remove_dir_all(&staging);
 
     // 1. 复制到暂存目录 + 2. 改写 theme.json 为相对路径
+    let mut warnings = prepared.scan.warnings.clone();
     let copied = (|| -> Result<Vec<String>, String> {
         copy_source(
             &source,
             &staging,
             prepared.scan.file_count,
+            &mut warnings,
             on_progress,
         )?;
         Ok(rewrite_staged(&staging))
     })();
-    let mut warnings = prepared.scan.warnings.clone();
     let rewrite_warnings = match copied {
         Ok(warnings) => warnings,
         Err(err) => {
