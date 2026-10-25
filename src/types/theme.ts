@@ -19,7 +19,12 @@ export interface CursorTheme {
   cursors: CursorSlot[];
 }
 
-/** 与 Rust 端 `models::HistoryEntry` 字段一一对应 */
+/**
+ * 与 Rust 端 `models::HistoryEntry` 字段一一对应
+ *
+ * 后端磁盘存的是**事件流**（每次应用一条）；界面拿到的 `recent` 是派生后的
+ * **最近主题**（同主题只留最新一条）。这里只描述一条记录本身。
+ */
 export interface HistoryEntry {
   /** 系统方案为 `sys_<方案名>`，用户主题为 UUID */
   theme_id: string;
@@ -43,13 +48,13 @@ export interface ThemesResult {
    * 不要指望从本地存储恢复它：重启后注册表才是事实来源。
    */
   active_theme_id: string | null;
-  /** 最近使用记录，最新在前 */
+  /** 最近主题（由后端事件流派生，按主题去重），最新在前 */
   recent: HistoryEntry[];
 }
 
 /** 与 Rust 端 `models::ApplyOutcome` 字段一一对应 */
 export interface ApplyOutcome {
-  /** 记录之后的最新历史，最新在前 */
+  /** 记录之后派生出的最近主题（按主题去重），最新在前 */
   recent: HistoryEntry[];
   /** 光标已切换、但历史没记上时的原因；正常为 null */
   warning: string | null;

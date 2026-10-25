@@ -60,12 +60,12 @@ pub fn validate_theme_slots(theme: &CursorTheme) -> Result<(), String> {
 }
 
 /// 光标文件允许的来源：当前主题目录与系统光标目录
-fn allowed_cursor_roots() -> Vec<PathBuf> {
-    let mut roots = vec![paths::themes_dir()];
+fn allowed_cursor_roots() -> Result<Vec<PathBuf>, String> {
+    let mut roots = vec![paths::themes_dir()?];
     if let Ok(system_root) = std::env::var("SystemRoot") {
         roots.push(PathBuf::from(system_root).join("Cursors"));
     }
-    roots
+    Ok(roots)
 }
 
 fn canonical_within(path: &Path, root: &Path) -> bool {
@@ -119,14 +119,13 @@ fn check_cursor_file(path: &str, require_containment: bool) -> Result<PathBuf, S
         ));
     }
 
-    if require_containment
-        && !allowed_cursor_roots()
-            .iter()
-            .any(|root| canonical_within(&file, root))
-    {
-        return Err(format!(
-            "光标文件不在主题目录或系统光标目录内，已拒绝：{trimmed}"
-        ));
+    if require_containment {
+        let roots = allowed_cursor_roots()?;
+        if !roots.iter().any(|root| canonical_within(&file, root)) {
+            return Err(format!(
+                "光标文件不在主题目录或系统光标目录内，已拒绝：{trimmed}"
+            ));
+        }
     }
     Ok(file)
 }
@@ -162,7 +161,7 @@ pub fn ensure_theme_id_matches_dir(theme: &CursorTheme) -> Result<PathBuf, Strin
         return Err("主题 ID 必须是规范的小写 UUID".to_string());
     }
 
-    let dir = paths::theme_dir(&theme.id);
+    let dir = paths::theme_dir(&theme.id)?;
     if !dir.is_dir() {
         return Err("主题目录已经不在了，可能要重新导入".to_string());
     }

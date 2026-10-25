@@ -14,7 +14,7 @@ use crate::utils::paths;
 /// 「打开」这一步才负责创建。纯路径计算，不占后台线程。
 #[tauri::command]
 pub fn get_data_dir() -> Result<String, String> {
-    Ok(paths::data_root().to_string_lossy().into_owned())
+    Ok(paths::data_root()?.to_string_lossy().into_owned())
 }
 
 /// 在系统文件管理器中打开数据目录，返回实际打开的路径
@@ -24,7 +24,7 @@ pub fn get_data_dir() -> Result<String, String> {
 #[tauri::command]
 pub async fn open_data_dir() -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        let dir = paths::data_root();
+        let dir = paths::data_root()?;
         paths::ensure_dir(&dir)?;
         open_path(&dir, None::<&str>).map_err(|err| format!("打开数据目录失败（{err}）"))?;
         Ok(dir.to_string_lossy().into_owned())

@@ -22,12 +22,14 @@ export interface SettingsSnapshot {
   effective_themes_dir: string;
   auto_check_update: boolean;
   shortcuts_enabled: boolean;
+  /** 读取设置时的非致命问题（典型：文件损坏已自动备份） */
+  warnings: string[];
 }
 
 /** 开机自启动状态 */
 export interface AutostartStatus {
   enabled: boolean;
-  /** 注册后命令指向的程序路径 */
+  /** 注册表里实际登记的程序路径；未开启时为空串 */
   exe_path: string;
 }
 
@@ -51,6 +53,7 @@ const MOCK_DEFAULT: SettingsSnapshot = {
   effective_themes_dir: "C:\\Users\\demo\\AppData\\Local\\CursorStudio\\themes",
   auto_check_update: true,
   shortcuts_enabled: true,
+  warnings: [],
 };
 
 function mockSettings(): SettingsSnapshot {
@@ -73,12 +76,10 @@ function mockSave(settings: SettingsSnapshot): SettingsSnapshot {
 
 function mockAutostart(): AutostartStatus {
   try {
-    return {
-      enabled: localStorage.getItem("cursorstudio.autostart") === "1",
-      exe_path: MOCK_EXE,
-    };
+    const enabled = localStorage.getItem("cursorstudio.autostart") === "1";
+    return { enabled, exe_path: enabled ? MOCK_EXE : "" };
   } catch {
-    return { enabled: false, exe_path: MOCK_EXE };
+    return { enabled: false, exe_path: "" };
   }
 }
 

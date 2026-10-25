@@ -117,12 +117,20 @@ fn read_pending_import_at(file: &Path) -> Option<String> {
 
 /// 落盘待导入路径（转交通路的一半）
 pub fn write_pending_import(zip_path: &str) -> Result<(), String> {
-    write_pending_import_at(&paths::pending_import_file(), zip_path)
+    write_pending_import_at(&paths::pending_import_file()?, zip_path)
 }
 
-/// 领取待导入路径；没有或已损坏返回 `None`（领取即删除，只消费一次）
+/// 领取待导入路径；没有、已损坏或数据目录不可用都返回 `None`
+/// （领取即删除，只消费一次）
 pub fn take_pending_import() -> Option<String> {
-    read_pending_import_at(&paths::pending_import_file())
+    let file = match paths::pending_import_file() {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("[integration] 读取待导入路径失败：{err}");
+            return None;
+        }
+    };
+    read_pending_import_at(&file)
 }
 
 // ---------------------------------------------------------------------------

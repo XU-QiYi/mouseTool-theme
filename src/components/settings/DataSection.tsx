@@ -14,7 +14,7 @@ import { SettingCard, SettingsGroup } from "@/components/settings/SettingCard";
 import { useDiagnostics } from "@/hooks/useDiagnostics";
 import { toast, readableError } from "@/lib/toast";
 import { inTauri, type TaskProgress } from "@/services/theme";
-import { exportBackup, importBackup } from "@/services/settings";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { useThemeStore } from "@/stores/themeStore";
 
 function progressPercent(progress: TaskProgress): number {
@@ -32,14 +32,13 @@ export function DataSection() {
   const dataDir = useThemeStore((s) => s.dataDir);
   const loadDataDir = useThemeStore((s) => s.loadDataDir);
   const openDataDir = useThemeStore((s) => s.openDataDir);
-  const loadThemes = useThemeStore((s) => s.loadThemes);
-  const [busy, setBusy] = useState<"export" | "import" | null>(null);
-  const [progress, setProgress] = useState<TaskProgress | null>(null);
+  const backupBusy = useSettingsStore((s) => s.backupBusy);
+  const backupProgress = useSettingsStore((s) => s.backupProgress);
+  const backupNote = useSettingsStore((s) => s.backupNote);
+  const exportBackupTo = useSettingsStore((s) => s.exportBackupTo);
+  const restoreBackupFrom = useSettingsStore((s) => s.restoreBackupFrom);
   // 选好备份文件后先停下确认：恢复会往数据目录里写东西，不能点错文件就直接跑
   const [pendingRestore, setPendingRestore] = useState<string | null>(null);
-  const [backupNote, setBackupNote] = useState(
-    "备份内容：全部主题（themes\\）与最近使用记录（history.json）",
-  );
 
   const diagnostics = useDiagnostics();
 
@@ -63,28 +62,16 @@ export function DataSection() {
       toast.info("开发模式无法备份", "文件选择需要桌面环境，请用 npm run tauri dev 启动");
       return;
     }
-    setBusy("export");
-    setProgress(null);
     try {
       const dest = await save({
         defaultPath: "cursorstudio-backup.zip",
         filters: [{ name: "备份包", extensions: ["zip"] }],
       });
       if (typeof dest !== "string") return;
-      const summary = await exportBackup(dest, setProgress);
-      const warnNote = summary.warnings.length ? `；${summary.warnings.length} 条提示` : "";
-      setBackupNote(`已导出到 ${dest}${warnNote}`);
-      if (summary.warnings.length > 0) {
-        toast.warning("备份已导出，但有提示", summary.warnings[0]);
-      } else {
-        toast.success("备份已导出", `${summary.themes} 套主题、${summary.files} 个文件`);
-      }
+      await exportBackupTo(dest);
     } catch (err) {
-      console.error("导出备份失败：", err);
-      toast.error("导出失败", readableError(err));
-    } finally {
-      setBusy(null);
-      setProgress(null);
+      console.error("选择备份位置失败：", err);
+      toast.error("无法选择备份位置", readableError(err));
     }
   };
 
@@ -107,38 +94,7 @@ export function DataSection() {
     }
   };
 
-  // 恢复备份：合并式补回，恢复完重读列表让新主题立刻出现
-  const runRestore = async (zipPath: string) => {
-    setBusy("import");
-    setProgress(null);
-    try {
-      const summary = await importBackup(zipPath, setProgress);
-      const skipped = summary.themes_skipped
-        ? `，${summary.themes_skipped} 套本地已有而跳过`
-        : "";
-      const warnNote = summary.warnings.length ? `；${summary.warnings.length} 条提示` : "";
-      setBackupNote(
-        `已补回 ${summary.themes_added} 套主题、${summary.history_added} 条使用记录${skipped}${warnNote}`,
-      );
-      if (summary.warnings.length > 0) {
-        toast.warning("已从备份恢复，但有提示", summary.warnings[0]);
-      } else {
-        toast.success(
-          "已从备份恢复",
-          `补回 ${summary.themes_added} 套主题、${summary.history_added} 条记录${skipped}`,
-        );
-      }
-      await loadThemes();
-    } catch (err) {
-      console.error("恢复备份失败：", err);
-      toast.error("恢复失败", readableError(err));
-    } finally {
-      setBusy(null);
-      setProgress(null);
-    }
-  };
-
-  const percent = progress ? progressPercent(progress) : 0;
+  const percent = backupProgress ? progressPercent(backupProgress) : 0;
 
   return (
     <div>
@@ -171,25 +127,25 @@ export function DataSection() {
                 size="sm"
                 variant="outline"
                 onClick={() => void onExportBackup()}
-                disabled={busy !== null}
+                disabled={backupBusy !== null}
               >
-                {busy === "export" ? "导出中…" : "导出备份"}
+                {backupBusy === "export" ? "导出中…" : "导出备份"}
               </Button>
               <Button
                 size="sm"
                 variant="outline"
                 onClick={() => void pickRestoreFile()}
-                disabled={busy !== null}
+                disabled={backupBusy !== null}
               >
-                {busy === "import" ? "恢复中…" : "从备份恢复"}
+                {backupBusy === "import" ? "恢复中…" : "从备份恢复"}
               </Button>
             </div>
           }
         >
-          {busy && progress && (
-            <div data-backup-progress={progress.stage} aria-live="polite" className="mt-3">
+          {backupBusy && backupProgress && (
+            <div data-backup-progress={backupProgress.stage} aria-live="polite" className="mt-3">
               <div className="flex items-baseline justify-between gap-3 text-xs">
-                <span className="text-muted-foreground">{progress.message}</span>
+                <span className="text-muted-foreground">{backupProgress.message}</span>
                 <span className="font-mono text-2xs text-muted-foreground">{percent}%</span>
               </div>
               <div
@@ -259,7 +215,7 @@ export function DataSection() {
                 onClick={() => {
                   const path = pendingRestore;
                   setPendingRestore(null);
-                  void runRestore(path);
+                  void restoreBackupFrom(path);
                 }}
               >
                 开始恢复

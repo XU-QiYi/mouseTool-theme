@@ -7,7 +7,9 @@ use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use crate::models::{ApplyOutcome, CursorSlot, CursorTheme, ThemesResult};
-use crate::utils::{history, importer, inf_export, ops, paths, registry, theme_paths, validation};
+use crate::utils::{
+    cursor, history, importer, inf_export, ops, paths, registry, theme_paths, validation,
+};
 
 /// `export_theme` 的返回值：跳过项要说清是哪个槽位，否则用户不知道少了什么
 #[derive(Debug, Serialize)]
@@ -239,7 +241,7 @@ fn delete(theme_id: &str) -> Result<(), String> {
     if id.to_string() != theme_id {
         return Err("非法的主题 ID".to_string());
     }
-    let dir = paths::theme_dir(theme_id);
+    let dir = paths::theme_dir(theme_id)?;
 
     if !dir.exists() {
         return Err("这个主题已经不在了，可能要重新导入".to_string());
@@ -248,6 +250,8 @@ fn delete(theme_id: &str) -> Result<(), String> {
     fs::remove_dir_all(&dir).map_err(|err| {
         format!("删不掉主题目录，它可能正被其它程序占用（{err}）")
     })?;
+    // 预览缓存里可能还抱着刚删掉的文件，及时释放
+    cursor::invalidate_dir(&dir);
     Ok(())
 }
 
@@ -269,7 +273,7 @@ fn rename(theme_id: &str, new_name: &str) -> Result<CursorTheme, String> {
     }
     let name = validation::validate_theme_name(new_name)?;
 
-    let theme_dir = paths::theme_dir(theme_id);
+    let theme_dir = paths::theme_dir(theme_id)?;
     let json_path = theme_dir.join("theme.json");
     if !json_path.exists() {
         return Err("找不到这个主题，它可能已被删除".to_string());
@@ -313,9 +317,31 @@ fn export_to(theme: &CursorTheme, dest_path: &str) -> Result<ExportSummary, Stri
     validation::validate_theme_slots(theme)?;
     validation::ensure_theme_id_matches_dir(theme)?;
     let dest = validation::validate_dest_path(dest_path, "zip")?;
+    let parent = dest.parent().ok_or_else(|| "目标路径无效".to_string())?;
 
-    let file = fs::File::create(&dest)
+    // 先写同目录临时文件，成功后再改名：中途失败不会留下半个 zip，
+    // 也不会破坏用户原有的同名文件
+    let tmp = parent.join(format!(".cursorstudio-export-{}.zip", Uuid::new_v4()));
+    let file = fs::File::create(&tmp)
         .map_err(|err| format!("无法创建文件，它可能正被占用（{err}）"))?;
+
+    match write_export_zip(theme, file) {
+        Ok(summary) => {
+            if let Err(err) = fs::rename(&tmp, &dest) {
+                let _ = fs::remove_file(&tmp);
+                return Err(format!("保存压缩包失败（{err}）"));
+            }
+            Ok(summary)
+        }
+        Err(err) => {
+            // write_export_zip 返回时 writer 已释放，Windows 上这时才删得掉
+            let _ = fs::remove_file(&tmp);
+            Err(err)
+        }
+    }
+}
+
+fn write_export_zip(theme: &CursorTheme, file: fs::File) -> Result<ExportSummary, String> {
     let mut writer = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default();
 
@@ -373,9 +399,7 @@ fn export_to(theme: &CursorTheme, dest_path: &str) -> Result<ExportSummary, Stri
     }
 
     if file_count == 0 {
-        // 先关掉句柄再删，否则 Windows 上文件被占用删不掉，会留个空 zip
-        drop(writer);
-        let _ = fs::remove_file(&dest);
+        // 临时文件的清理由 export_to 统一负责（返回时 writer 已释放）
         return Err("没有可导出的光标文件，源文件可能已被移动或删除".to_string());
     }
 
@@ -409,7 +433,7 @@ mod tests {
     /// 在隔离的主题目录里放一套可导出的主题，返回 (主题, 主题目录)
     fn seed_exportable_theme(label: &str, slots: &[(&str, &str, Vec<u8>)]) -> (CursorTheme, PathBuf) {
         let id = Uuid::new_v4().to_string();
-        let dir = paths::theme_dir(&id);
+        let dir = paths::theme_dir(&id).expect("解析主题目录");
         fs::create_dir_all(dir.join("cursors")).expect("建主题目录");
 
         let mut cursors = Vec::new();
@@ -609,7 +633,7 @@ mod tests {
         let _guard = root.isolate_paths();
 
         let id = Uuid::new_v4().to_string();
-        let dir = paths::theme_dir(&id);
+        let dir = paths::theme_dir(&id).expect("解析主题目录");
         paths::ensure_dir(&dir).expect("建临时主题目录");
         let theme = fake_theme(&id);
         fs::write(
@@ -694,7 +718,7 @@ mod tests {
         let _guard = root.isolate_paths();
 
         let id = Uuid::new_v4().to_string();
-        let dir = paths::theme_dir(&id);
+        let dir = paths::theme_dir(&id).expect("解析主题目录");
         fs::create_dir_all(&dir).expect("建主题目录");
         let theme = theme_with_slots(
             &id,
@@ -755,7 +779,7 @@ mod tests {
         let _guard = root.isolate_paths();
 
         let id = Uuid::new_v4().to_string();
-        let dir = paths::theme_dir(&id);
+        let dir = paths::theme_dir(&id).expect("解析主题目录");
         paths::ensure_dir(&dir).expect("建临时主题目录");
         fs::write(dir.join("theme.json"), "{}").expect("写占位文件");
         assert!(dir.exists());

@@ -8,13 +8,29 @@ import {
   setAutostart as apiSetAutostart,
   setThemesDir as apiSetThemesDir,
   updateSettings as apiUpdateSettings,
+  exportBackup as apiExportBackup,
+  importBackup as apiImportBackup,
   type AutostartStatus,
   type SettingsPatch,
   type SettingsSnapshot,
   type ThemesDirPlan,
   type ThemesDirProgress,
 } from "@/services/settings";
+import type { TaskProgress } from "@/services/theme";
 import { useThemeStore } from "@/stores/themeStore";
+
+const DEFAULT_BACKUP_NOTE = "备份内容：全部主题（themes\\）与最近使用记录（history.json）";
+
+// 同一个警告只在本次会话弹一次：设置页反复挂载不该反复弹同一条
+let announcedSettingsWarnings: string | null = null;
+
+function announceSettingsWarnings(warnings: string[]) {
+  if (warnings.length === 0) return;
+  const key = warnings.join("\n");
+  if (announcedSettingsWarnings === key) return;
+  announcedSettingsWarnings = key;
+  toast.warning("设置文件需要处理", warnings[0]);
+}
 
 /**
  * 行为设置（设置 → 通用 / 快捷键）
@@ -29,8 +45,8 @@ interface SettingsStore {
   settings: SettingsSnapshot | null;
   /** 自启动状态；null = 还没读到 */
   autostart: AutostartStatus | null;
-  /** 读取失败（典型：前端新、Rust 旧）；与「还没读到」区分开 */
-  settingsError: boolean;
+  /** 读取失败原因；null = 没有失败（与「还没读到」区分开） */
+  settingsError: string | null;
 
   /** 迁移确认框是否打开 */
   themesDirOpen: boolean;
@@ -48,6 +64,13 @@ interface SettingsStore {
   /** 迁移失败原因；失败后保留对话框，可重试或关闭 */
   themesDirError: string | null;
 
+  /** 备份动作；null = 空闲 */
+  backupBusy: "export" | "import" | null;
+  /** 备份 / 恢复进度（来自 `backup-progress` 事件） */
+  backupProgress: TaskProgress | null;
+  /** 上次备份或恢复的结果说明 */
+  backupNote: string;
+
   loadSettings: () => Promise<void>;
   loadAutostart: () => Promise<void>;
   /** 局部更新（只有通用页的三个行为项）；失败回读真实状态 */
@@ -61,12 +84,16 @@ interface SettingsStore {
   retryThemesDirPlan: () => Promise<void>;
   /** 确认迁移；成功后设置与主题列表一起刷新 */
   confirmThemesDirChange: () => Promise<void>;
+  /** 导出备份到指定路径；状态与提示都由 store 持有，切走再回来仍能看到进度 */
+  exportBackupTo: (destPath: string) => Promise<void>;
+  /** 从指定备份合并恢复；成功后重读主题列表 */
+  restoreBackupFrom: (zipPath: string) => Promise<void>;
 }
 
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
   settings: null,
   autostart: null,
-  settingsError: false,
+  settingsError: null,
   themesDirOpen: false,
   themesDirTarget: null,
   themesDirPlan: null,
@@ -75,14 +102,20 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   themesDirBusy: false,
   themesDirProgress: null,
   themesDirError: null,
+  backupBusy: null,
+  backupProgress: null,
+  backupNote: DEFAULT_BACKUP_NOTE,
 
   loadSettings: async () => {
     try {
-      set({ settings: await apiGetSettings(), settingsError: false });
+      const snapshot = await apiGetSettings();
+      set({ settings: snapshot, settingsError: null });
+      announceSettingsWarnings(snapshot.warnings);
     } catch (err) {
-      // 卡在「读取中…」比失败更骗人：挂错误态让界面能说清原因
-      console.warn("[loadSettings]", readableError(err));
-      set({ settingsError: true });
+      // 卡在「读取中…」比失败更骗人：保留错误原文，让界面能说清原因
+      const message = readableError(err);
+      console.warn("[loadSettings]", message);
+      set({ settingsError: message });
     }
   },
 
@@ -216,6 +249,59 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       // 后端已回滚：保留对话框、显示原因，用户可以重试或关掉稍后再来
       set({ themesDirBusy: false, themesDirProgress: null, themesDirError: readableError(err) });
       await get().loadSettings();
+    }
+  },
+
+  exportBackupTo: async (destPath) => {
+    if (get().backupBusy) return;
+    set({ backupBusy: "export", backupProgress: null });
+    try {
+      const summary = await apiExportBackup(destPath, (progress) => {
+        if (get().backupBusy === "export") set({ backupProgress: progress });
+      });
+      const warnNote = summary.warnings.length ? `；${summary.warnings.length} 条提示` : "";
+      set({ backupNote: `已导出到 ${destPath}${warnNote}` });
+      if (summary.warnings.length > 0) {
+        toast.warning("备份已导出，但有提示", summary.warnings[0]);
+      } else {
+        toast.success("备份已导出", `${summary.themes} 套主题、${summary.files} 个文件`);
+      }
+    } catch (err) {
+      console.error("导出备份失败：", err);
+      toast.error("导出失败", readableError(err));
+    } finally {
+      set({ backupBusy: null, backupProgress: null });
+    }
+  },
+
+  restoreBackupFrom: async (zipPath) => {
+    if (get().backupBusy) return;
+    set({ backupBusy: "import", backupProgress: null });
+    try {
+      const summary = await apiImportBackup(zipPath, (progress) => {
+        if (get().backupBusy === "import") set({ backupProgress: progress });
+      });
+      const skipped = summary.themes_skipped
+        ? `，${summary.themes_skipped} 套本地已有而跳过`
+        : "";
+      const warnNote = summary.warnings.length ? `；${summary.warnings.length} 条提示` : "";
+      set({
+        backupNote: `已补回 ${summary.themes_added} 套主题、${summary.history_added} 条使用记录${skipped}${warnNote}`,
+      });
+      if (summary.warnings.length > 0) {
+        toast.warning("已从备份恢复，但有提示", summary.warnings[0]);
+      } else {
+        toast.success(
+          "已从备份恢复",
+          `补回 ${summary.themes_added} 套主题、${summary.history_added} 条记录${skipped}`,
+        );
+      }
+      await useThemeStore.getState().loadThemes();
+    } catch (err) {
+      console.error("恢复备份失败：", err);
+      toast.error("恢复失败", readableError(err));
+    } finally {
+      set({ backupBusy: null, backupProgress: null });
     }
   },
 }));

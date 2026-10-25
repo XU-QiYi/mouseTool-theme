@@ -334,7 +334,9 @@ fn import_dir_as(
 /// 「跳过主题目录」的 warning。NotFound = 落盘前的失败、目录可能根本没建过，
 /// 不是清理失败，别把用户支去删一个从不存在的目录。
 fn discard_partial(theme_id: &str, err: String) -> String {
-    let theme_dir = paths::theme_dir(theme_id);
+    let Ok(theme_dir) = paths::theme_dir(theme_id) else {
+        return err;
+    };
     match fs::remove_dir_all(&theme_dir) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => err,
         // 清不掉要说明，别让人对着一个来历不明的坏目录发呆；原始错误优先
@@ -415,7 +417,7 @@ fn persist_theme(
             .unwrap_or(usize::MAX)
     });
 
-    let cursors_dir = paths::theme_dir(theme_id).join("cursors");
+    let cursors_dir = paths::theme_dir(theme_id)?.join("cursors");
     paths::ensure_dir(&cursors_dir)?;
 
     let total = picked.len();
@@ -483,7 +485,7 @@ fn persist_theme(
     };
 
     // 磁盘只存相对主题目录的路径；返回给调用方的仍是绝对路径（预览/应用直接用）
-    theme_paths::write_theme_json(&paths::theme_dir(theme_id), &theme)?;
+    theme_paths::write_theme_json(&paths::theme_dir(theme_id)?, &theme)?;
 
     progress_fn(progress::TaskProgress::new("done", total, total, "导入完成"));
     Ok(theme)
@@ -495,7 +497,10 @@ fn persist_theme(
 /// 目录本身读不出来也要让调用方知情，否则用户只会看到"主题凭空消失"。
 pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
     let mut warnings = Vec::new();
-    let dir = paths::themes_dir();
+    let dir = match paths::themes_dir() {
+        Ok(dir) => dir,
+        Err(err) => return (Vec::new(), vec![err]),
+    };
     if !dir.exists() {
         return (Vec::new(), warnings);
     }
@@ -635,7 +640,9 @@ mod tests {
         assert!(arrow.file_path.contains("themes"));
 
         // 磁盘上只留相对路径：换主题目录后旧绝对路径不会失效
-        let raw = std::fs::read_to_string(paths::theme_dir(&theme.id).join("theme.json"))
+        let raw = std::fs::read_to_string(
+            paths::theme_dir(&theme.id).expect("解析主题目录").join("theme.json"),
+        )
             .expect("读 theme.json");
         let stored: CursorTheme = serde_json::from_str(&raw).expect("解析 theme.json");
         assert!(stored.cursors.iter().all(|c| !theme_paths::is_absolute(&c.file_path)));
@@ -760,7 +767,7 @@ mod tests {
 
         // 预先制造半成品：cursors 被一个同名文件占住，后面 ensure_dir 必然失败
         let theme_id = "00000000-0000-4000-8000-000000000001";
-        let theme_dir = paths::theme_dir(theme_id);
+        let theme_dir = paths::theme_dir(theme_id).expect("解析主题目录");
         paths::ensure_dir(&theme_dir).expect("建主题目录");
         fs::write(theme_dir.join("cursors"), "不是目录").expect("造占位文件");
 
@@ -881,7 +888,8 @@ mod tests {
         let temp = TempDir::new("id-mismatch");
         let _guard = temp.isolate_paths();
 
-        let dir = paths::theme_dir("11111111-1111-4111-8111-111111111111");
+        let dir = paths::theme_dir("11111111-1111-4111-8111-111111111111")
+            .expect("解析主题目录");
         fs::create_dir_all(dir.join("cursors")).expect("建目录");
         fs::write(dir.join("cursors/arrow.cur"), fixture_cur()).expect("写光标");
         write_theme_json(
@@ -904,7 +912,7 @@ mod tests {
         let _guard = temp.isolate_paths();
 
         let id = "33333333-3333-4333-8333-333333333333";
-        let dir = paths::theme_dir(id);
+        let dir = paths::theme_dir(id).expect("解析主题目录");
         fs::create_dir_all(dir.join("cursors")).expect("建目录");
         fs::write(dir.join("cursors/arrow.cur"), fixture_cur()).expect("写光标");
         write_theme_json(&dir, &sample_theme(id, r"C:\Windows\Cursors\aero_arrow.cur"));

@@ -341,8 +341,8 @@ fn prepare(new_dir: Option<&str>, data_root: &Path, current: &Path) -> Result<Pr
 pub fn preview(new_dir: Option<&str>) -> Result<ThemesDirPlan, String> {
     let prepared = prepare(
         new_dir,
-        &paths::data_root(),
-        &paths::themes_dir(),
+        &paths::data_root()?,
+        &paths::themes_dir()?,
     )?;
     Ok(ThemesDirPlan {
         source: prepared.source.to_string_lossy().into_owned(),
@@ -711,8 +711,8 @@ pub fn change(
     new_dir: Option<String>,
     mut on_progress: impl FnMut(MoveProgress),
 ) -> Result<ThemesDirChange, String> {
-    let data_root = paths::data_root();
-    let current = paths::themes_dir();
+    let data_root = paths::data_root()?;
+    let current = paths::themes_dir()?;
     let mut commit_settings = |value: Option<&str>| -> Result<(), String> {
         let mut state = settings::read();
         state.themes_dir = value.map(str::to_string);

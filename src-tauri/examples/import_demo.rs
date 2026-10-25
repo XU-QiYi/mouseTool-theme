@@ -11,7 +11,13 @@ fn main() {
         return;
     };
 
-    println!("数据根目录: {}", paths::data_root().display());
+    match paths::data_root() {
+        Ok(root) => println!("数据根目录: {}", root.display()),
+        Err(err) => {
+            println!("✗ {err}");
+            return;
+        }
+    }
     println!("导入: {zip_path}");
     println!();
 
@@ -25,7 +31,9 @@ fn main() {
                 println!("    {:<12} {}", slot.registry_key, slot.file_path);
             }
             println!();
-            println!("  主题目录: {}", paths::theme_dir(&theme.id).display());
+            if let Ok(dir) = paths::theme_dir(&theme.id) {
+                println!("  主题目录: {}", dir.display());
+            }
 
             let (all, warnings) = importer::read_user_themes();
             for warn in &warnings {

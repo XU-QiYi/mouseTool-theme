@@ -153,8 +153,33 @@ fn export_to_with_progress(
         return Err("还没有可备份的内容（没导入过主题，也没有使用记录）".to_string());
     }
 
-    let file =
-        fs::File::create(dest).map_err(|err| format!("无法创建文件，它可能正被占用（{err}）"))?;
+    // 先写同目录临时文件，成功后再改名：中途失败不会留下半个 zip，
+    // 也不会破坏用户原有的同名备份
+    let tmp = parent.join(format!(".cursorstudio-backup-{}.zip", Uuid::new_v4()));
+    let file = fs::File::create(&tmp)
+        .map_err(|err| format!("无法创建文件，它可能正被占用（{err}）"))?;
+
+    let summary = write_backup_zip(file, themes_dir, history_file, has_history, progress_fn)
+        .map_err(|err| {
+            // write_backup_zip 返回时 writer 已释放，Windows 上这时才删得掉
+            let _ = fs::remove_file(&tmp);
+            err
+        })?;
+
+    fs::rename(&tmp, dest).map_err(|err| {
+        let _ = fs::remove_file(&tmp);
+        format!("保存备份压缩包失败（{err}）")
+    })?;
+    Ok(summary)
+}
+
+fn write_backup_zip(
+    file: fs::File,
+    themes_dir: &Path,
+    history_file: &Path,
+    has_history: bool,
+    progress_fn: &mut dyn FnMut(progress::TaskProgress),
+) -> Result<ExportBackupSummary, String> {
     let mut writer = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default();
     let mut themes = 0usize;
@@ -206,8 +231,6 @@ fn export_to_with_progress(
             .map(|meta| meta.len())
             .unwrap_or(0);
         if size > MAX_HISTORY_BYTES {
-            drop(writer);
-            let _ = fs::remove_file(dest);
             return Err(format!(
                 "最近使用记录超过 {}MB，已停止导出",
                 MAX_HISTORY_BYTES / 1024 / 1024
@@ -224,8 +247,7 @@ fn export_to_with_progress(
     }
 
     if files == 0 {
-        drop(writer);
-        let _ = fs::remove_file(dest);
+        // 临时文件的清理由出口统一负责（返回时 writer 已释放）
         return Err("没有可备份的文件".to_string());
     }
 
@@ -464,7 +486,7 @@ fn import_from_with_progress(
 
     // 记录是附属数据：合并失败不回滚已经恢复的主题，只提示原因
     let history_added = match history_raw {
-        Some(raw) => match history::parse_entries(&raw) {
+        Some(raw) => match history::parse_events(&raw) {
             Ok(entries) => match history::merge_into(history_file, &entries) {
                 Ok(added) => added,
                 Err(err) => {
@@ -539,8 +561,8 @@ pub async fn export_backup(
         let emitter = app.clone();
         export_to_with_progress(
             &dest,
-            &paths::themes_dir(),
-            &paths::history_file(),
+            &paths::themes_dir()?,
+            &paths::history_file()?,
             &mut |progress| {
                 let _ = emitter.emit("backup-progress", progress);
             },
@@ -563,8 +585,8 @@ pub async fn import_backup(app: AppHandle, zip_path: String) -> Result<ImportBac
         let emitter = app.clone();
         import_from_with_progress(
             &source,
-            &paths::themes_dir(),
-            &paths::history_file(),
+            &paths::themes_dir()?,
+            &paths::history_file()?,
             &mut |progress| {
                 let _ = emitter.emit("backup-progress", progress);
             },
@@ -634,6 +656,41 @@ mod tests {
             .read_to_string(&mut text)
             .expect("读条目");
         text
+    }
+
+    /// 导出中途失败：不留半成品，也不能破坏用户原有的同名备份
+    #[test]
+    fn 导出失败时清理临时包并保留原目标文件() {
+        let root = temp_root("cleanup");
+        let themes = root.join("themes");
+        // 主题目录位置被一个文件占住：预检能看到 history，进到读目录时失败
+        fs::write(&themes, b"not a dir").expect("占住主题目录路径");
+        let history_file = root.join("history.json");
+        fs::write(&history_file, r#"{"version":2,"events":[]}"#).expect("写记录");
+
+        let zip = root.join("backup.zip");
+        fs::write(&zip, b"old backup").expect("预置旧备份");
+
+        let err = export_to(&zip, &themes, &history_file).unwrap_err();
+        assert!(err.contains("读主题目录失败"), "实际：{err}");
+        assert_eq!(
+            fs::read(&zip).expect("旧备份应还在"),
+            b"old backup".to_vec(),
+            "失败不能顺手把用户原有的备份删掉"
+        );
+
+        let leftovers: Vec<_> = fs::read_dir(&root)
+            .expect("读临时目录")
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".cursorstudio-backup-")
+            })
+            .collect();
+        assert!(leftovers.is_empty(), "不能留下半成品临时包");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -865,7 +922,7 @@ mod tests {
     }
 
     #[test]
-    fn 记录合并本地优先() {
+    fn 记录合并按事件去重且保留本地记录() {
         let root = temp_root("history-merge");
         let history_file = root.join("history.json");
         fs::write(
@@ -874,17 +931,23 @@ mod tests {
         )
         .expect("写本地记录");
 
-        let incoming = history::parse_entries(
+        let incoming = history::parse_events(
             r#"{"version":1,"entries":[{"theme_id":"a","name":"备份","is_built_in":false,"applied_at":"2026-10-22 09:00"},{"theme_id":"b","name":"B","is_built_in":false,"applied_at":"2026-10-22 08:00"}]}"#,
         )
         .expect("解析备份记录");
 
         let added = history::merge_into(&history_file, &incoming).expect("合并");
-        assert_eq!(added, 1, "同主题不重复补，只补 b");
+        assert_eq!(added, 2, "同主题不同时间是不同事件，两条都应补回");
 
-        let (entries, _) = history::read_from(&history_file);
-        let a = entries.iter().find(|e| e.theme_id == "a").expect("a 应保留");
-        assert_eq!(a.name, "本地", "本地记录优先，不被备份覆盖");
+        let events = history::read_events_from(&history_file).events;
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].name, "本地", "最新的本地事件仍在最前");
+        assert!(
+            events
+                .iter()
+                .any(|e| e.theme_id == "a" && e.applied_at == "2026-10-22 09:00"),
+            "备份里的旧事件也要保留，不能被本地同主题记录吞掉"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }

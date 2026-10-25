@@ -21,30 +21,34 @@ pub struct SettingsSnapshot {
     pub effective_themes_dir: String,
     pub auto_check_update: bool,
     pub shortcuts_enabled: bool,
+    /// 读取设置时的非致命问题（典型：文件损坏已自动备份）
+    pub warnings: Vec<String>,
 }
 
 /// 自启动状态
 #[derive(Debug, Serialize)]
 pub struct AutostartStatus {
     pub enabled: bool,
-    /// 注册后命令指向的程序路径（移动安装目录会让它过期，界面要展示）
+    /// 注册表里实际登记的程序路径（程序移动后会过期，界面要展示）
+    /// 未开启时为空串
     pub exe_path: String,
 }
 
-fn snapshot(state: &settings::AppSettings) -> SettingsSnapshot {
-    SettingsSnapshot {
-        close_behavior: state.close_behavior.as_str().to_string(),
-        themes_dir: state.themes_dir.clone(),
-        effective_themes_dir: paths::themes_dir().to_string_lossy().into_owned(),
-        auto_check_update: state.auto_check_update,
-        shortcuts_enabled: state.shortcuts_enabled,
-    }
+fn snapshot(loaded: &settings::SettingsLoad) -> Result<SettingsSnapshot, String> {
+    Ok(SettingsSnapshot {
+        close_behavior: loaded.settings.close_behavior.as_str().to_string(),
+        themes_dir: loaded.settings.themes_dir.clone(),
+        effective_themes_dir: paths::themes_dir()?.to_string_lossy().into_owned(),
+        auto_check_update: loaded.settings.auto_check_update,
+        shortcuts_enabled: loaded.settings.shortcuts_enabled,
+        warnings: loaded.warnings.clone(),
+    })
 }
 
 /// 读取全部行为设置
 #[tauri::command]
 pub async fn get_settings() -> Result<SettingsSnapshot, String> {
-    tauri::async_runtime::spawn_blocking(|| Ok(snapshot(&settings::read())))
+    tauri::async_runtime::spawn_blocking(|| snapshot(&settings::load()))
         .await
         .map_err(|err| format!("读取设置任务异常退出（{err}）"))?
 }
@@ -72,7 +76,7 @@ pub async fn update_settings(
             state.shortcuts_enabled = flag;
         }
         settings::write(&state)?;
-        Ok::<_, String>(snapshot(&state))
+        snapshot(&settings::load())
     })
     .await
     .map_err(|err| format!("保存设置任务异常退出（{err}）"))??;
@@ -142,7 +146,7 @@ pub async fn set_themes_dir(
     .map_err(|err| format!("迁移任务异常退出（{err}）"))??;
 
     Ok(ThemesDirChangeResult {
-        settings: snapshot(&settings::read()),
+        settings: snapshot(&settings::load())?,
         report,
     })
 }

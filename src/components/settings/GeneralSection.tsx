@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Monitor, Moon, Sun } from "lucide-react";
+import { Monitor, Moon, Sun, TriangleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
@@ -70,6 +70,28 @@ export function GeneralSection() {
 
   return (
     <div>
+      {settings && settings.warnings.length > 0 && (
+        <div
+          role="alert"
+          data-settings-warning
+          className="mb-4 rounded-lg bg-warning/10 px-3 py-2 ring-1 ring-warning/25"
+        >
+          <div className="flex items-start gap-2">
+            <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-warning" />
+            <div className="min-w-0">
+              <p className="text-xs font-medium">设置文件需要处理</p>
+              <ul className="mt-0.5 space-y-0.5">
+                {settings.warnings.map((warning) => (
+                  <li key={warning} className="break-all text-2xs text-muted-foreground">
+                    {warning}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+
       <SettingsGroup title="外观">
         <SettingCard
           title="应用主题"
@@ -134,8 +156,8 @@ export function GeneralSection() {
           }
         >
           {settingsError && (
-            <p className="mt-3 text-2xs text-muted-foreground">
-              设置读取失败：应用可能是旧版本，重启应用后重试
+            <p className="mt-3 break-all text-2xs text-muted-foreground">
+              设置读取失败：{settingsError}
             </p>
           )}
         </SettingCard>
