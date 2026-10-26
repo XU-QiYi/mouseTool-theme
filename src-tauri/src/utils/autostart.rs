@@ -18,15 +18,33 @@ fn current_exe_path() -> Result<String, String> {
         .map_err(|err| format!("定位当前程序失败（{err}）"))
 }
 
-/// 自启动状态：是否已注册 + 注册命令指向的 exe（界面展示用）
+/// 从注册表值里取出程序路径：写入时带引号，读回要剥掉
+fn exe_from_command(command: &str) -> String {
+    let trimmed = command.trim();
+    match trimmed.strip_prefix('"').and_then(|rest| rest.split_once('"')) {
+        Some((exe, _)) => exe.to_string(),
+        // 没有引号（旧版或手工写入）：整串就是命令，原样展示
+        None => trimmed.to_string(),
+    }
+}
+
+/// 自启动状态：是否已注册 + **注册表里实际登记**的 exe（界面展示用）
+///
+/// 不能拿 `current_exe()` 顶上：程序移动过之后，注册表里仍是旧路径，
+/// 界面上「命令指向」必须显示那个旧路径，用户才知道自启动为什么失效。
 pub fn status_at(key_path: &str, name: &str) -> (bool, String) {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let registered = hkcu
+    let command = hkcu
         .open_subkey(key_path)
         .and_then(|key| key.get_value::<String, _>(name))
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
-    (registered, current_exe_path().unwrap_or_default())
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    match command {
+        Some(command) => (true, exe_from_command(&command)),
+        None => (false, String::new()),
+    }
 }
 
 /// 写入 / 移除自启动项
@@ -82,7 +100,12 @@ mod tests {
         assert!(!status_at(TEST_KEY, "TestApp").0, "起点应未注册");
 
         set_at(TEST_KEY, "TestApp", "C:\\demo\\app.exe", true).expect("注册");
-        assert!(status_at(TEST_KEY, "TestApp").0, "注册后应可读到");
+        let (enabled, exe) = status_at(TEST_KEY, "TestApp");
+        assert!(enabled, "注册后应可读到");
+        assert_eq!(
+            exe, "C:\\demo\\app.exe",
+            "状态里的路径必须来自注册表且剥掉引号，不能拿当前进程路径顶替"
+        );
 
         // 值必须带引号包住 exe：路径含空格时不被 Run 键劈开
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);

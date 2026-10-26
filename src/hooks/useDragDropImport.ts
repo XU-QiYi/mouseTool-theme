@@ -3,6 +3,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 import { toast } from "@/lib/toast";
 import { inTauri } from "@/services/theme";
+import { useImportStore } from "@/stores/importStore";
 import { useThemeStore } from "@/stores/themeStore";
 
 /** 拖入内容的最小描述：Tauri 给完整路径，浏览器给文件名 */
@@ -14,6 +15,9 @@ interface DropItem {
 }
 
 const ZIP_EXT = /\.zip$/i;
+
+/** 一次拖入能进队列的上限：防误拖整个下载目录把界面塞爆 */
+const MAX_DROP_ITEMS = 20;
 
 /** 从完整路径取文件名（正反斜杠都兼容） */
 function fileNameOf(path: string): string {
@@ -28,14 +32,18 @@ function fileNameOf(path: string): string {
  * （「我的主题.v2」），前端也判不了路径是不是目录——zip / 文件夹 / 其它文件
  * 交给后端 `import_theme` 权威校验，各自给出精准文案。
  * 只有浏览器通路（拿到的只有文件名、没有路径）维持只收 .zip。
+ * 多项（2–20 个）放行进导入中心；单项保持原导入链路。
  */
 export function validateDrop(items: DropItem[]): string | null {
-  if (items.length > 1) return "一次只能导入一个主题包";
-  const item = items[0];
-  if (!item) return null;
-  const isFullPath = /[\\/]/.test(item.path);
-  if (!isFullPath && !ZIP_EXT.test(item.name)) {
-    return "只支持 .zip 主题包";
+  if (items.length === 0) return null;
+  if (items.length > MAX_DROP_ITEMS) {
+    return `一次最多导入 ${MAX_DROP_ITEMS} 个主题包`;
+  }
+  for (const item of items) {
+    const isFullPath = /[\\/]/.test(item.path);
+    if (!isFullPath && !ZIP_EXT.test(item.name)) {
+      return "只支持 .zip 主题包";
+    }
   }
   return null;
 }
@@ -43,10 +51,12 @@ export function validateDrop(items: DropItem[]): string | null {
 /**
  * 全窗口拖拽导入（.zip 主题包或主题文件夹）
  *
- * 两条通路收敛到同一套校验与导入链路：
+ * 三条通路收敛到同一套校验：
  * - Tauri：`dragDropEnabled` 接管原生拖放后，WebView2 的 HTML5 drag 事件不会触发，
  *   必须监听 Tauri 的 drag-drop 事件——负载直接给文件路径，正是 `import_theme` 的入参；
  * - 浏览器（开发与自动化验收）：HTML5 dragenter/dragover/drop，从 dataTransfer.files 取文件名。
+ * - 拖入 1 项走原单文件链路（toast / 侧栏进度）；拖入 2–20 项全部进导入中心
+ *   队列，由用户点「开始导入」串行执行（批量导入中心见 importStore）。
  *
  * 拖放是全局动作：侧栏「导入主题」在三页都有入口，拖放不该比它受限。
  */
@@ -65,12 +75,26 @@ export function useDragDropImport() {
         toast.error("导入失败", error);
         return;
       }
+      // 批量队列在跑时不再接新拖入：后端互斥锁会拒绝并发，先说清原因
+      const importCenter = useImportStore.getState();
+      if (importCenter.running) {
+        toast.warning("正在批量导入，请稍候", "等队列跑完再拖入新的主题");
+        return;
+      }
       const { importing, importTheme } = useThemeStore.getState();
       if (importing) {
         toast.warning("正在导入，请稍候", "上一次导入还没完成");
         return;
       }
-      void importTheme(items[0].path);
+      if (items.length === 1) {
+        void importTheme(items[0].path);
+        return;
+      }
+      importCenter.enqueue(items.map((item) => item.path));
+      toast.info(
+        `已加入导入队列（${items.length} 个）`,
+        "在导入中心点「开始导入」后会逐个执行",
+      );
     };
 
     if (inTauri) {

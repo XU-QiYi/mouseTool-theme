@@ -12,6 +12,7 @@ import { GalleryView } from "@/components/views/GalleryView";
 import { MyThemesView } from "@/components/views/MyThemesView";
 import { RecentView } from "@/components/views/RecentView";
 import { SettingsView } from "@/components/views/SettingsView";
+import { ImportCenterDialog } from "@/components/import/ImportCenterDialog";
 import { Toaster } from "@/components/ui/toaster";
 import { useDragDropImport } from "@/hooks/useDragDropImport";
 import { useInspectorWidth } from "@/hooks/useInspectorWidth";
@@ -44,6 +45,7 @@ function App() {
   const selectedTheme = useThemeStore(selectSelectedTheme);
   const loadError = useThemeStore((s) => s.loadError);
   const pickupPendingImport = useThemeStore((s) => s.pickupPendingImport);
+  const refreshActive = useThemeStore((s) => s.refreshActive);
   const settings = useSettingsStore((s) => s.settings);
   const loadSettings = useSettingsStore((s) => s.loadSettings);
   const [inspectorWidth, resizeInspector] = useInspectorWidth();
@@ -77,15 +79,18 @@ function App() {
   }, [settings]);
 
   // 右键菜单 / 二次启动转交的待导入路径：启动时领一次，
-  // 之后每次窗口聚焦再领（第二个实例写完文件会拉起本窗口）
+  // 之后每次窗口聚焦再领（第二个实例写完文件会拉起本窗口）。
+  // 聚焦同时轻量重查「当前使用」：系统指针样式页随时可能整体改写注册表，
+  // 不重查状态卡会带着旧的「正在使用」骗人（决策 24，2026-10-26 真机实验）
   useEffect(() => {
     const pick = () => {
       void pickupPendingImport();
+      void refreshActive();
     };
     pick();
     window.addEventListener("focus", pick);
     return () => window.removeEventListener("focus", pick);
-  }, [pickupPendingImport]);
+  }, [pickupPendingImport, refreshActive]);
 
   // 显式标注成 PageMeta：字面量收窄后，dependsOnThemes 这类可选字段访问不过编译
   const meta: PageMeta = PAGE_META[currentPage];
@@ -126,6 +131,7 @@ function App() {
         </main>
       </div>
       <DropOverlay active={dragActive} />
+      <ImportCenterDialog />
       <Toaster />
     </>
   );

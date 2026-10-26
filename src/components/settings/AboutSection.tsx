@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
-import { getVersion } from "@tauri-apps/api/app";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { SettingCard, SettingsGroup } from "@/components/settings/SettingCard";
-import { APP_VERSION, REPO_URL } from "@/lib/app-meta";
+import { useAppVersion } from "@/hooks/use-app-version";
+import { REPO_URL } from "@/lib/app-meta";
 import { openExternal } from "@/lib/open-external";
 import { checkForUpdates, type UpdateCheckResult } from "@/lib/update-check";
 import { toast } from "@/lib/toast";
@@ -11,28 +11,13 @@ import { toast } from "@/lib/toast";
 /**
  * 关于：版本、开源地址、更新检查
  *
- * 版本以 `getVersion()`（tauri.conf.json）为准，浏览器开发模式退回常量；
+ * 版本号走 `useAppVersion()`（`getVersion()`，浏览器退回常量），与侧栏共用一份；
  * 更新检查的版本源是 GitHub Releases（发布指南的唯一发布通道）。
  */
 export function AboutSection() {
-  const [version, setVersion] = useState<string | null>(null);
+  const version = useAppVersion();
   const [checking, setChecking] = useState(false);
   const [result, setResult] = useState<UpdateCheckResult | null>(null);
-
-  // 版本号是静态值，挂载后取一次即可
-  useEffect(() => {
-    let alive = true;
-    void getVersion()
-      .then((v) => {
-        if (alive) setVersion(v);
-      })
-      .catch(() => {
-        if (alive) setVersion(APP_VERSION);
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
 
   const onCheckUpdate = async () => {
     setChecking(true);
@@ -55,7 +40,7 @@ export function AboutSection() {
           description="当前安装的程序版本；报障时请附上这串版本号"
         >
           <p data-app-version className="mt-3 font-mono text-2xs text-muted-foreground select-text">
-            鼠标主题工具 v{version ?? "…"}
+            鼠标主题工具 v{version}
           </p>
         </SettingCard>
 

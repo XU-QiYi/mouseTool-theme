@@ -1,6 +1,7 @@
 import { FolderDown, History, LayoutGrid, Settings } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
+import { filterByName } from "@/lib/themes";
 import type { CursorTheme, HistoryEntry } from "@/types/theme";
 
 /**
@@ -15,6 +16,11 @@ import type { CursorTheme, HistoryEntry } from "@/types/theme";
 export interface PageCountContext {
   themes: CursorTheme[];
   recent: HistoryEntry[];
+  /**
+   * 当前搜索词（页头计数用）；侧栏调用时不传——侧栏计数永远是总数，
+   * 只有页头才回答"过滤后还剩几个"
+   */
+  query?: string;
 }
 
 export interface PageMeta {
@@ -46,29 +52,33 @@ export const PAGE_META = {
     label: "主题图库",
     icon: LayoutGrid,
     title: "主题图库",
-    hint: "选中方案后在右侧预览并应用",
-    search: "搜索方案…",
-    count: ({ themes }) => themes.length,
-    unit: "个方案",
+    hint: "选中主题后在右侧预览并应用",
+    search: "搜索主题…",
+    count: ({ themes, query }) => filterByName(themes, query ?? "").length,
+    unit: "个主题",
     hasInspector: true,
   },
   mine: {
     label: "我的主题",
     icon: FolderDown,
     title: "我的主题",
-    hint: "从 ZIP 导入；可改名、导出、删除",
+    hint: "管理导入的主题：改名、导出、删除；支持 ZIP 与文件夹",
     search: "搜索我的主题…",
-    count: ({ themes }) => themes.reduce((n, theme) => (theme.is_built_in ? n : n + 1), 0),
-    unit: "个方案",
+    count: ({ themes, query }) =>
+      filterByName(
+        themes.filter((theme) => !theme.is_built_in),
+        query ?? "",
+      ).length,
+    unit: "个主题",
     hasInspector: true,
   },
   recent: {
     label: "最近使用",
     icon: History,
     title: "最近使用",
-    hint: "每次切换都会留一条记录",
+    hint: "按最近一次应用排序，每个主题一条",
     count: ({ recent }) => recent.length,
-    unit: "条记录",
+    unit: "个主题",
     hasInspector: false,
   },
   settings: {

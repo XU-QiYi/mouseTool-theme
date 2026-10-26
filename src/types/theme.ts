@@ -3,6 +3,7 @@ export interface CursorSlot {
   registry_key: string;
   display_name: string;
   english_name: string;
+  /** 运行时绝对路径；落盘到 theme.json 时只存相对主题目录的路径 */
   file_path: string;
   file_type: string;
 }
@@ -18,7 +19,19 @@ export interface CursorTheme {
   cursors: CursorSlot[];
 }
 
-/** 与 Rust 端 `models::HistoryEntry` 字段一一对应 */
+/** 与 Rust 端 `importer::ImportReport` 字段一一对应 */
+export interface ImportReport {
+  theme: CursorTheme;
+  /** 导入成功但被跳过的内容（典型：链接 / 目录联接） */
+  warnings: string[];
+}
+
+/**
+ * 与 Rust 端 `models::HistoryEntry` 字段一一对应
+ *
+ * 后端磁盘存的是**事件流**（每次应用一条）；界面拿到的 `recent` 是派生后的
+ * **最近主题**（同主题只留最新一条）。这里只描述一条记录本身。
+ */
 export interface HistoryEntry {
   /** 系统方案为 `sys_<方案名>`，用户主题为 UUID */
   theme_id: string;
@@ -42,13 +55,27 @@ export interface ThemesResult {
    * 不要指望从本地存储恢复它：重启后注册表才是事实来源。
    */
   active_theme_id: string | null;
-  /** 最近使用记录，最新在前 */
+  /** 注册表当前非空槽位数（只统计 15 个标准槽位）；0 = 系统默认 */
+  current_slots_filled: number;
+  /** 槽位非空但匹配不到任何主题：被系统设置或其它工具改写（决策 24） */
+  active_external: boolean;
+  /** 最近主题（由后端事件流派生，按主题去重），最新在前 */
   recent: HistoryEntry[];
+}
+
+/** 与 Rust 端 `models::ActiveState` 字段一一对应（`get_active_state`） */
+export interface ActiveState {
+  /** 注册表里当前生效的主题 ID；null = 系统默认或被外部改写 */
+  active_theme_id: string | null;
+  /** 注册表当前非空槽位数（只统计 15 个标准槽位） */
+  current_slots_filled: number;
+  /** 槽位非空但匹配不到任何主题（被系统设置 / 其它工具改写） */
+  active_external: boolean;
 }
 
 /** 与 Rust 端 `models::ApplyOutcome` 字段一一对应 */
 export interface ApplyOutcome {
-  /** 记录之后的最新历史，最新在前 */
+  /** 记录之后派生出的最近主题（按主题去重），最新在前 */
   recent: HistoryEntry[];
   /** 光标已切换、但历史没记上时的原因；正常为 null */
   warning: string | null;

@@ -66,9 +66,9 @@ src/
 ├── stores/           唯一全局状态
 └── services/         invoke 封装 + 浏览器示例数据
 src-tauri/
-├── commands/         22 个命令：主题读取/导入/应用/删除/改名/导出 + 数据目录/设置/系统集成/备份等
+├── commands/         23 个命令：主题读取/导入/应用/删除/改名/导出 + 数据目录/设置/系统集成/备份等
 ├── models/           前后端共用的数据结构
-└── utils/            注册表、光标解码、主题导入（zip/文件夹/.inf）、历史
+└── utils/            注册表、光标解码、主题导入（zip/文件夹/.inf）、路径相对化、目录迁移、历史
 docs/                 决策记录、需求、架构、设计系统、动效
 ```
 
@@ -92,9 +92,12 @@ docs/                 决策记录、需求、架构、设计系统、动效
 
 ```bash
 npm run build                    # tsc + vite
-cd src-tauri && cargo test       # 后端单测（碰注册表的用例自带备份/恢复）
+cd src-tauri && cargo test       # 后端单测（临时目录 + 隔离注册表键，不碰真实光标）
+node scripts/design_audit.mjs    # 设计 token 审计（违规退出码 1）
 node scripts/doc_ref_check.mjs   # 文档交叉引用是否指空
 ```
+
+CI（`.github/workflows/ci.yml`）在 `windows-latest` 上跑 `npm ci` → `npm run build` → `cargo test` → `design_audit` → `doc_ref_check`。
 
 界面验收脚本跑在浏览器里、走示例数据，不会改系统光标；**必须与 dev server 写在同一条命令**：
 
@@ -103,5 +106,9 @@ node scripts/dev_bg.mjs start
 node scripts/nav_check.mjs     # 三页结构签名
 node scripts/design_check.mjs  # 焦点、检查器宽度、外观三态、删除链
 node scripts/motion_check.mjs  # 逐帧采样动效
+node scripts/migration_check.mjs # 迁移确认框/进度/失败回滚（mock）
+node scripts/recent_check.mjs  # 最近使用时间轴
+node scripts/ui_check.mjs      # 点击 / 应用 / 删除链路
+node scripts/dnd_check.mjs     # 拖拽遮罩 / 类型与数量校验
 node scripts/dev_bg.mjs stop
 ```

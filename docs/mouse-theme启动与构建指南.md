@@ -256,7 +256,9 @@ src-tauri\target\release\mousetool-theme.exe
 | `node scripts/motion_check.mjs` | 逐帧采样 Toast 与弹窗的进出场：时长、中间态、倒计时条、降级是否生效（33 项断言） | 不会 |
 | `node scripts/recent_check.mjs` | 「最近使用」排序、应用后置顶、删除后的提示 | 会（mock，不写系统） |
 | `node scripts/ui_check.mjs` | 点第一个主题卡 + 点应用按钮，截图 | 会（mock，不写系统） |
-| `node scripts/nav_check.mjs` | 依次点三个导航项，输出三栏结构与截图 | 不会 |
+| `node scripts/nav_check.mjs` | 逐页断言结构签名（网格 / 表格 / 时间轴 / 设置面板、有无检查器与搜索框） | 不会 |
+| `node scripts/dnd_check.mjs` | 拖放导入的遮罩、反馈与「两种入口共用一条链路」 | 不会 |
+| `node scripts/migration_check.mjs` | 主题目录迁移的确认框、执行期锁、进度、失败回滚与恢复默认（`?mock-migrate-error` / `?mock-migrate-fail=settings` 注入失败） | 不会 |
 
 > 改文档时另有一条不依赖浏览器的检查：`node scripts/doc_ref_check.mjs`。它校验 `AGENTS.md` 与 `docs/*.md` 里的 `§x` / `决策 N` 是否还指得着（章节重排后最容易静默失效），指空会列出 `文件:行号` 并以退出码 1 失败。
 
@@ -333,7 +335,7 @@ mouseTool-theme/
 │   ├── tauri.conf.json     ← 窗口/打包配置（含 --no-sandbox，勿删）
 │   ├── Cargo.toml          ← Rust 依赖
 │   └── src/
-│       ├── commands/       ← 前端可调用的 Tauri 命令（8 个）
+│       ├── commands/       ← 前端可调用的 Tauri 命令（23 个）
 │       ├── models/         ← 数据结构（前后端契约）
 │       └── utils/          ← paths 数据目录 / registry 注册表 / cursor 解析 / importer 导入 / history 历史
 ├── scripts/                ← 验收脚本（设计/动效/交互/文档引用/后台起服务）

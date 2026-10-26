@@ -2,17 +2,19 @@ import { useMemo, useState } from "react";
 import { Archive, FolderDown, MousePointer2, SearchX, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { ContentFrame } from "@/components/layout/ContentFrame";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { CursorPreviewImage } from "@/components/cursor/CursorPreviewImage";
+import { SlotMeter } from "@/components/theme/SlotMeter";
 import { DeleteThemeDialog } from "@/components/theme/DeleteThemeDialog";
 import { useExportTheme } from "@/hooks/useExportTheme";
 import { useImportTheme } from "@/hooks/useImportTheme";
-import { coverage, coverSlot, slotStats } from "@/lib/slots";
+import { coverSlot, slotStats } from "@/lib/slots";
 import { mineThemes } from "@/lib/themes";
 import { cn } from "@/lib/utils";
-import { useThemeStore } from "@/stores/themeStore";
+import { actionBusyKey, useThemeStore } from "@/stores/themeStore";
 import type { CursorTheme } from "@/types/theme";
 
 /**
@@ -21,6 +23,10 @@ import type { CursorTheme } from "@/types/theme";
  * 与图库看的是同一批对象，但回答的是完全不同的问题：
  * 槽位覆盖了几个、什么时候导入的、要不要改名/导出/删除。
  * 所以用表格而不是卡片 —— 这一页要比对，不是要欣赏。
+ *
+ * 整行可选中：名称按钮用 `after:absolute after:inset-0` 把点击区铺满整行
+ * （鼠标 + 键盘仍只有这一个入口）；操作列 `z-10` 压在铺层之上，
+ * 行内按钮都阻止冒泡，点「导出」不会顺带选中。
  */
 export function MyThemesView() {
   const themes = useThemeStore((s) => s.themes);
@@ -30,8 +36,9 @@ export function MyThemesView() {
   const activeThemeId = useThemeStore((s) => s.activeThemeId);
   const selectedId = useThemeStore((s) => s.selection.mine);
   const selectTheme = useThemeStore((s) => s.selectTheme);
+  const busy = useThemeStore((s) => s.busy);
   const { picking, pick } = useImportTheme();
-  const { exporting, pickAndExport } = useExportTheme();
+  const { isExporting, pickAndExport } = useExportTheme();
 
   const [pendingDelete, setPendingDelete] = useState<CursorTheme | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -65,7 +72,7 @@ export function MyThemesView() {
         <EmptyState
           icon={FolderDown}
           title="还没有导入过主题"
-          description="支持 .zip 主题包；包内光标按 arrow、busy、hand 这类标准命名，导入时会自动对上槽位"
+          description="导入 ZIP 或整个主题文件夹后，主题会出现在这里。"
           action={
             <Button onClick={pick} disabled={picking}>
               {picking ? "选择中…" : "导入主题"}
@@ -95,15 +102,16 @@ export function MyThemesView() {
 
   return (
     <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-6 py-4">
-      {/* 表格列宽固定，窗口拉宽时给一个上限，免得名称列被撑成一片空白 */}
-      <table className="w-full max-w-4xl table-fixed text-sm">
+      <ContentFrame width="wide">
+        {/* 抵消首末列 padding：表格首列文字与页标题左缘对齐 */}
+        <table className="-mx-3 w-[calc(100%+1.5rem)] table-fixed text-sm">
         <caption className="sr-only">我导入的主题：槽位覆盖、导入时间与操作</caption>
         <thead>
           <tr className="border-b border-border/60">
             <th scope="col" className="px-3 py-2 text-left text-xs font-normal text-muted-foreground">
-              方案
+              主题
             </th>
-            <th scope="col" className="w-28 px-3 py-2 text-left text-xs font-normal text-muted-foreground">
+            <th scope="col" className="w-32 px-3 py-2 text-left text-xs font-normal text-muted-foreground">
               槽位
             </th>
             <th scope="col" className="w-28 px-3 py-2 text-left text-xs font-normal text-muted-foreground">
@@ -118,6 +126,8 @@ export function MyThemesView() {
           {rows.map((theme) => {
             const selected = theme.id === selectedId;
             const isActive = theme.id === activeThemeId;
+            const exporting = isExporting(theme.id);
+            const deleting = Boolean(busy[actionBusyKey("delete", theme.id)]);
             const stats = slotStats(theme);
             const cover = coverSlot(theme);
             const [importDate, importTime] = theme.updated_at
@@ -146,7 +156,7 @@ export function MyThemesView() {
                     type="button"
                     onClick={() => selectTheme(theme.id)}
                     aria-pressed={selected}
-                    className="focus-ring flex w-full min-w-0 items-center gap-2.5 rounded-md text-left"
+                    className="focus-ring relative flex w-full min-w-0 items-center gap-2.5 rounded-md text-left after:absolute after:inset-0"
                   >
                     <span className="preview-surface grid size-9 shrink-0 place-items-center rounded-md ring-1 ring-border/60">
                       {cover ? (
@@ -164,7 +174,11 @@ export function MyThemesView() {
                       </span>
                     </span>
                     {isActive && (
-                      <Badge className="shrink-0">使用中</Badge>
+                      <span className="z-10 shrink-0">
+                        <StatusBadge tone="success" dot>
+                          使用中
+                        </StatusBadge>
+                      </span>
                     )}
                   </button>
                 </td>
@@ -175,12 +189,7 @@ export function MyThemesView() {
                     {" / "}
                     {stats.total}
                   </span>
-                  <span className="mt-1 block h-1 w-14 overflow-hidden rounded-4xl bg-muted">
-                    <span
-                      className="block h-full rounded-4xl bg-primary"
-                      style={{ width: `${coverage(stats)}%` }}
-                    />
-                  </span>
+                  <SlotMeter compact filled={stats.filled} total={stats.total} className="mt-1 w-14" />
                 </td>
 
                 <td className="px-3 py-2.5 text-xs text-muted-foreground tabular-nums">
@@ -188,27 +197,50 @@ export function MyThemesView() {
                   {importTime && <span className="block text-2xs">{importTime}</span>}
                 </td>
 
-                <td className="px-3 py-2.5">
+                <td className="relative z-10 px-3 py-2.5">
                   <span className="flex items-center justify-end gap-0.5">
                     <Button
                       variant="ghost"
-                      size="icon-xs"
+                      size="icon-sm"
                       aria-label={`导出「${theme.name}」`}
                       title={exporting ? "导出中…" : "导出 ZIP"}
-                      onClick={() => pickAndExport(theme)}
-                      disabled={exporting}
-                      className="text-muted-foreground"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void pickAndExport(theme);
+                      }}
+                      disabled={exporting || deleting}
+                      className="text-muted-foreground [&_svg:not([class*='size-'])]:size-3.5"
                     >
                       <Archive />
                     </Button>
                     <Button
                       variant="ghost"
-                      size="icon-xs"
-                      aria-label={`删除「${theme.name}」`}
-                      title={isActive ? "正在使用这个主题，请先切换到其它主题" : "删除此主题"}
-                      onClick={() => requestDelete(theme)}
-                      disabled={isActive}
-                      className="text-muted-foreground hover:text-destructive"
+                      size="icon-sm"
+                      aria-label={
+                        isActive
+                          ? `「${theme.name}」使用中，需先恢复默认才能删除`
+                          : `删除「${theme.name}」`
+                      }
+                      title={
+                        deleting
+                          ? "删除中…"
+                          : isActive
+                            ? "使用中的主题需要先恢复默认才能删除"
+                            : "删除此主题"
+                      }
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        // 使用中的主题不能用原生 disabled——那会把 title 一起藏掉，
+                        // 用户永远不知道为什么点不了；改成可聚焦 + 点击守卫说明原因
+                        if (isActive) return;
+                        requestDelete(theme);
+                      }}
+                      aria-disabled={isActive || deleting}
+                      disabled={deleting}
+                      className={cn(
+                        "text-muted-foreground",
+                        !isActive && "hover:text-destructive hover:ring-1 hover:ring-destructive/40",
+                      )}
                     >
                       <Trash2 />
                     </Button>
@@ -219,6 +251,7 @@ export function MyThemesView() {
           })}
         </tbody>
       </table>
+      </ContentFrame>
 
       <DeleteThemeDialog theme={pendingDelete} open={confirmOpen} onOpenChange={setConfirmOpen} />
     </div>

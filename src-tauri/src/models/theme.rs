@@ -9,7 +9,7 @@ pub struct CursorSlot {
     pub display_name: String,
     /// 英文名，如 `Normal Select`
     pub english_name: String,
-    /// 光标文件绝对路径
+    /// 光标的运行时绝对路径；`theme.json` 里落盘的是相对主题目录的路径
     pub file_path: String,
     /// 文件类型：`cur` 或 `ani`
     pub file_type: String,
@@ -45,12 +45,38 @@ pub struct ThemesResult {
     /// 由「注册表当前光标路径」与各主题的槽位路径比对得出，而不是界面自己记。
     /// `None` 表示识别不出：既可能是系统默认光标，也可能是用户手工改过设置。
     pub active_theme_id: Option<String>,
-    /// 最近使用记录，最新在前
+    /// 注册表当前非空槽位数（只统计 15 个标准槽位）
+    ///
+    /// 用于区分 `active_theme_id = None` 的两种成因：0 = 系统默认，
+    /// 大于 0 = 槽位有值但不属于任何已知主题（被系统设置或其它工具改写）。
+    pub current_slots_filled: usize,
+    /// 槽位非空但匹配不到任何主题：光标被系统设置 / 其它工具改写
+    ///
+    /// 2026-10-26 真机实验结论：系统「鼠标指针样式」设置页会整体改写 15 个
+    /// 经典槽位（如选黑色写入 `%SystemRoot%\cursors\*_r.cur`），本应用不重查
+    /// 就会带着旧的「正在使用」状态骗人。前端据此在状态卡上给出警示。
+    pub active_external: bool,
+    /// **最近主题**（不是原始事件流）：同一主题只留最新一条，最多 50 个，最新在前
     pub recent: Vec<HistoryEntry>,
 }
 
-/// 一条「最近使用」记录
+/// `get_active_state` 的返回值：窗口聚焦时轻量重查「当前使用」
 ///
+/// 只重读注册表与主题清单做比对，不重读历史、不动界面其余状态——
+/// 聚焦很频繁，别把整个 `get_all_themes` 的成本都压上去。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveState {
+    /// 注册表里当前生效的主题 ID；`None` = 系统默认或被外部改写
+    pub active_theme_id: Option<String>,
+    /// 注册表当前非空槽位数（只统计 15 个标准槽位）
+    pub current_slots_filled: usize,
+    /// 槽位非空但匹配不到任何主题（被系统设置 / 其它工具改写）
+    pub active_external: bool,
+}
+
+/// 一条历史事件（每次应用主题产生一条，不去重）
+///
+/// 磁盘上的 `history.json` 存事件流；界面拿到的 `recent` 由它派生。
 /// 只存应用当时的名称快照，不存整份主题：主题随时可能被改名或删除，
 /// 历史要能独立成立，不能因为主题没了就整条消失。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,7 +96,7 @@ pub struct HistoryEntry {
 /// 但必须把原因带回去，不能静默当作记上了。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyOutcome {
-    /// 记录之后的最新历史，最新在前
+    /// 记录之后派生出的最近主题，最新在前（按主题去重）
     pub recent: Vec<HistoryEntry>,
     /// 光标已切换、但历史没记上时的原因；正常为 `None`
     pub warning: Option<String>,

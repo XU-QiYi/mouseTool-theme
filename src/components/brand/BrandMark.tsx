@@ -8,14 +8,18 @@
  *
  * 所以这里只取指针的轮廓，用 currentColor 跟随主题 —— 明暗两套都不用额外适配，
  * 形状又和任务栏、开始菜单里的应用图标同源。
+ *
+ * 纯装饰：名称由旁边的文字承担，图标标成 `aria-hidden` 且不可聚焦；
+ * `data-brand-mark` 是 design_check 的品牌断言锚点。
  */
 export function BrandMark({ className }: { className?: string }) {
   return (
     <svg
       viewBox="0 0 1024 1024"
       fill="currentColor"
-      role="img"
-      aria-label="鼠标主题工具"
+      aria-hidden="true"
+      focusable="false"
+      data-brand-mark
       className={className}
     >
       <polygon points="188.8,134.4 835.2,437.8 565.1,519.7 699.5,826.9 554.8,889.6 421.7,585 209.2,793.6" />

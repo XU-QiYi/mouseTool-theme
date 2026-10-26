@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # 先出 dist：tauri-build 在 cargo test 前会检查前端产物
+      - name: Build frontend
+        run: npm run build
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # 注册表用例只写 HKCU 下的隔离键，光标 fixture 由代码生成：
+      # CI 不需要系统里存在某个光标文件，也不会改动运行机器的光标设置
+      - name: Run Rust tests
+        working-directory: src-tauri
+        run: cargo test
+
+      # 两条静态检查都不需要起 dev server
+      - name: Design audit
+        run: node scripts/design_audit.mjs
+
+      - name: Document reference check
+        run: node scripts/doc_ref_check.mjs

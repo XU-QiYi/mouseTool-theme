@@ -46,6 +46,9 @@ async function currentVersion(): Promise<string> {
   }
 }
 
+/** 检查更新的超时：GitHub 在弱网下可能挂很久，启动检查不能一直悬着 */
+const REQUEST_TIMEOUT_MS = 8000;
+
 export async function checkForUpdates(): Promise<UpdateCheckResult> {
   const current = await currentVersion();
   const base = {
@@ -54,9 +57,13 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
     releaseUrl: REPO_URL,
   };
 
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
   try {
     const res = await fetch(RELEASES_API, {
       headers: { Accept: "application/vnd.github+json" },
+      signal: controller.signal,
     });
     if (res.status === 404) {
       return {
@@ -106,11 +113,16 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
       releaseUrl,
       message: `已是最新版本（v${current}）`,
     };
-  } catch {
+  } catch (err) {
     return {
       ...base,
       status: "error",
-      message: "网络不可用或 GitHub 暂时访问不了，稍后再试",
+      message:
+        err instanceof DOMException && err.name === "AbortError"
+          ? `检查超时（${REQUEST_TIMEOUT_MS / 1000} 秒），网络可能不稳定，稍后再试`
+          : "网络不可用或 GitHub 暂时访问不了，稍后再试",
     };
+  } finally {
+    clearTimeout(timer);
   }
 }

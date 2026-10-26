@@ -1,11 +1,15 @@
 import { useMemo } from "react";
-import { History } from "lucide-react";
+import { History, MousePointer2, RotateCcw } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SectionLabel } from "@/components/ui/section-label";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { ContentFrame } from "@/components/layout/ContentFrame";
 import { EmptyState } from "@/components/layout/EmptyState";
-import { buildRecentItems, groupRecentByDay, timeOfDay } from "@/lib/themes";
+import { CursorPreviewImage } from "@/components/cursor/CursorPreviewImage";
+import { buildRecentItems, groupRecentByDay, appliedAtMachine, timeOfDay } from "@/lib/themes";
+import { coverSlot } from "@/lib/slots";
 import { cn } from "@/lib/utils";
 import { useThemeStore } from "@/stores/themeStore";
 import type { RecentItem } from "@/lib/themes";
@@ -16,6 +20,7 @@ import type { RecentItem } from "@/lib/themes";
  * 这一页没有检查器 —— 它回答的是「我什么时候用过什么」，
  * 时间顺序本身就是唯一的结构，塞一个详情面板只会把时间轴挤窄。
  * 按自然日分组、时间靠左、竖线串联，和表格、画廊都不是一个读法。
+ * 每行带 32px 封面缩略图：找东西先靠脸认，认出来再读字。
  */
 export function RecentView() {
   const themes = useThemeStore((s) => s.themes);
@@ -47,8 +52,8 @@ export function RecentView() {
       <div className="flex min-h-0 flex-1 items-center justify-center">
         <EmptyState
           icon={History}
-          title="还没有切换记录"
-          description="应用任意一个主题后，这里会按时间留下一条记录，方便随时切回去"
+          title="还没有使用记录"
+          description="应用任意一个主题后，这里会按最近一次应用排列，每个主题一条，方便随时切回去"
           action={
             <Button variant="outline" onClick={() => setCurrentPage("gallery")}>
               去主题图库
@@ -62,16 +67,10 @@ export function RecentView() {
   return (
     <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-6 py-5">
       {/* 阅读宽度上限：窗口拉宽时时间与动作不会被拉到屏幕两端 */}
-      <div className="max-w-3xl">
+      <ContentFrame width="data">
         {groups.map((group) => (
           <section key={group.key} className="mb-7 last:mb-0">
-            <div className="mb-2 flex items-baseline gap-2">
-              <h2 className="text-xs font-medium">{group.label}</h2>
-              <span className="text-2xs text-muted-foreground tabular-nums">
-                {group.items.length} 次
-              </span>
-              <span aria-hidden className="h-px flex-1 bg-border" />
-            </div>
+            <SectionLabel label={group.label} count={group.items.length} unit="个主题" />
 
             <ol>
               {group.items.map((item, index) => (
@@ -87,7 +86,7 @@ export function RecentView() {
             </ol>
           </section>
         ))}
-      </div>
+      </ContentFrame>
     </div>
   );
 }
@@ -105,6 +104,7 @@ function Row({ item, active, first, last, onApply }: RowProps) {
   const { entry, theme } = item;
   const deleted = theme === null;
   const name = theme?.name ?? entry.name;
+  const cover = theme ? coverSlot(theme) : undefined;
 
   return (
     <li
@@ -112,7 +112,7 @@ function Row({ item, active, first, last, onApply }: RowProps) {
       className="grid grid-cols-[48px_16px_1fr_auto] gap-x-2 rounded-lg py-2 transition-[background-color] duration-(--motion-fast) ease-standard hover:bg-muted/50"
     >
       <time
-        dateTime={entry.applied_at}
+        dateTime={appliedAtMachine(entry.applied_at)}
         className="pt-0.5 text-right text-2xs text-muted-foreground tabular-nums"
       >
         {timeOfDay(entry.applied_at)}
@@ -140,32 +140,46 @@ function Row({ item, active, first, last, onApply }: RowProps) {
         />
       </span>
 
-      <span className="min-w-0">
-        <span className="flex items-center gap-1.5">
-          <span className="truncate text-sm">{name}</span>
-          {entry.is_built_in && (
-            <span className="shrink-0 text-2xs text-muted-foreground">系统方案</span>
+      <span className="flex min-w-0 items-center gap-2.5">
+        {/* 32px 棋盘格缩略图：主题还在用封面，已删除给占位图标 */}
+        <span
+          aria-hidden
+          className="preview-surface grid size-8 shrink-0 place-items-center rounded-md ring-1 ring-border/60"
+        >
+          {cover ? (
+            <CursorPreviewImage slot={cover} size="sm" />
+          ) : (
+            <MousePointer2 className="size-4 text-muted-foreground/60" />
           )}
         </span>
-        <span className="mt-0.5 block truncate text-2xs text-muted-foreground">
-          {deleted
-            ? "主题文件已被删除，无法再应用"
-            : theme && `${theme.cursors.length} 个槽位`}
+        <span className="min-w-0">
+          <span className="flex items-center gap-1.5">
+            <span className="truncate text-sm">{name}</span>
+            {entry.is_built_in && <StatusBadge tone="neutral">系统方案</StatusBadge>}
+          </span>
+          <span className="mt-0.5 block truncate text-2xs text-muted-foreground">
+            {deleted
+              ? "主题文件已被删除，无法再应用"
+              : theme && `${theme.cursors.length} 个槽位`}
+          </span>
         </span>
       </span>
 
       <span className="flex items-center justify-end self-center">
         {deleted ? (
-          <span className="px-2 text-2xs text-muted-foreground">已删除</span>
+          <StatusBadge tone="muted">已删除</StatusBadge>
         ) : active ? (
-          <Badge variant="secondary">使用中</Badge>
+          <StatusBadge tone="success" dot>
+            使用中
+          </StatusBadge>
         ) : (
           <Button
-            variant="ghost"
-            size="xs"
+            variant="outline"
+            size="sm"
             onClick={() => theme && onApply(theme.id)}
             aria-label={`再次应用「${name}」`}
           >
+            <RotateCcw data-icon="inline-start" />
             再次应用
           </Button>
         )}

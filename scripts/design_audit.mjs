@@ -2,8 +2,11 @@
 // 注意：text-* 同时承载字号、颜色、对齐三种语义，必须分开归类，否则统计会失真
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT = "F:/forge/mouse-theme/mouseTool-theme/src";
+// 相对脚本定位：CI 与本地都在仓库任意位置可跑，不绑定某台机器的绝对路径
+const ROOT = fileURLToPath(new URL("../src", import.meta.url));
+const REPO_ROOT = path.dirname(ROOT);
 
 function walk(dir) {
   const out = [];
@@ -94,7 +97,7 @@ for (const f of walk(ROOT)) {
   for (const m of src.matchAll(/\bduration-(\(--motion-[a-z]+\)|\d+|\[[^\]]+\])/g)) {
     if (!m[1].startsWith("(--motion-")) bareDurations.add(m[1]);
   }
-  if (/\btransition-all\b/.test(src)) transitionAllFiles.push(path.basename(f));
+  if (/\btransition-all\b/.test(src)) transitionAllFiles.push(path.relative(REPO_ROOT, f));
 }
 
 console.log("\n## 合规判定");
@@ -102,3 +105,9 @@ console.log(`   非 2px 网格的间距：${spacingOffGrid.length ? spacingOffGr
 console.log(`   字号魔法值：${magicType.length ? magicType.join(", ") : "无"}`);
 console.log(`   裸写时长（应用 --motion-*）：${bareDurations.size ? [...bareDurations].join(", ") : "无"}`);
 console.log(`   transition-all：${transitionAllFiles.length ? transitionAllFiles.join(", ") : "无"}`);
+
+// 规范项一旦违规就以非零退出，CI 才能真的拦住回潮；没有违规时保持安静
+if (spacingOffGrid.length || magicType.length || bareDurations.size || transitionAllFiles.length) {
+  console.error("\n设计审计未通过：请按上方「合规判定」修正后再提交。");
+  process.exitCode = 1;
+}

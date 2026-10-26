@@ -7,6 +7,7 @@ use base64::Engine;
 use image::{DynamicImage, GenericImageView};
 
 use crate::models::CursorPreview;
+use crate::utils::limits;
 
 /// 单帧最长边上限，避免高分辨率光标撑爆 IPC
 const MAX_EDGE: u32 = 128;
@@ -204,13 +205,81 @@ pub fn parse_cur_preview(bytes: &[u8]) -> Option<CursorPreview> {
     })
 }
 
-/// 预览缓存：key 为 (路径, 修改时间秒, 大小)，同一文件只解析一次
-static CACHE: LazyLock<Mutex<HashMap<(String, u64, u64), Arc<CursorPreview>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+/// 缓存条目上限：每个条目最多 32 帧 base64 PNG，不设上限会随浏览持续涨内存
+const CACHE_CAPACITY: usize = 64;
 
-fn cache_key(path: &Path) -> Option<(String, u64, u64)> {
+/// key = (路径, 修改时间秒, 大小)
+type CacheKey = (String, u64, u64);
+
+/// 手写 LRU：`HashMap` + 递增访问计数，淘汰计数最小（最久未用）的条目
+///
+/// 不引第三方依赖；容量只有 64，线性找最旧项的开销可以忽略。
+#[derive(Default)]
+struct PreviewCache {
+    entries: HashMap<CacheKey, (u64, Arc<CursorPreview>)>,
+    tick: u64,
+}
+
+impl PreviewCache {
+    fn next_tick(&mut self) -> u64 {
+        self.tick += 1;
+        self.tick
+    }
+
+    fn get(&mut self, key: &CacheKey) -> Option<Arc<CursorPreview>> {
+        let tick = self.next_tick();
+        let (access, preview) = self.entries.get_mut(key)?;
+        *access = tick;
+        Some(preview.clone())
+    }
+
+    fn insert(&mut self, key: CacheKey, preview: Arc<CursorPreview>) {
+        let tick = self.next_tick();
+        self.entries.insert(key, (tick, preview));
+        while self.entries.len() > CACHE_CAPACITY {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (access, _))| *access)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+    }
+
+    fn invalidate_path(&mut self, path: &Path) {
+        let target = normalize_for_compare(path);
+        self.entries.retain(|(cached, _, _), _| {
+            !normalize_for_compare(Path::new(cached)).eq_ignore_ascii_case(&target)
+        });
+    }
+
+    fn invalidate_dir(&mut self, dir: &Path) {
+        let prefix = normalize_for_compare(dir);
+        let prefix = prefix.trim_end_matches('\\');
+        self.entries.retain(|(cached, _, _), _| {
+            let cached = normalize_for_compare(Path::new(cached));
+            !(cached == prefix || cached.starts_with(&format!("{prefix}\\")))
+        });
+    }
+}
+
+/// 比较口径：Windows 路径不区分大小写，正反斜杠等价
+fn normalize_for_compare(path: &Path) -> String {
+    path.to_string_lossy().replace('/', "\\").to_lowercase()
+}
+
+static CACHE: LazyLock<Mutex<PreviewCache>> = LazyLock::new(|| Mutex::new(PreviewCache::default()));
+
+fn cache_key(path: &Path) -> Option<CacheKey> {
     let meta = std::fs::metadata(path).ok()?;
     let size = meta.len();
+    // 预览上限：超大文件不读、不解析，也不进缓存
+    if size > limits::MAX_PREVIEW_BYTES {
+        return None;
+    }
     let mtime = meta
         .modified()
         .ok()
@@ -228,9 +297,10 @@ pub fn preview_file(path: &str) -> CursorPreview {
     };
 
     if let Some(hit) = CACHE.lock().unwrap().get(&key) {
-        return (**hit).clone();
+        return (*hit).clone();
     }
 
+    // 解析可能耗时（.ani 逐帧解码），不要持锁做 I/O
     let result = std::fs::read(path)
         .ok()
         .and_then(|bytes| match Path::new(path)
@@ -246,67 +316,41 @@ pub fn preview_file(path: &str) -> CursorPreview {
         .unwrap_or_default();
 
     let shared = Arc::new(result);
-    CACHE
-        .lock()
-        .unwrap()
-        .insert(key, shared.clone());
+    CACHE.lock().unwrap().insert(key, shared.clone());
     (*shared).clone()
+}
+
+/// 让单个文件的预览失效（文件被替换、但大小与秒级修改时间恰好相同时兜底）
+pub fn invalidate_path(path: &Path) {
+    CACHE.lock().unwrap().invalidate_path(path);
+}
+
+/// 让目录下所有预览失效（删除主题后调用，避免缓存继续持有已删文件）
+pub fn invalidate_dir(dir: &Path) {
+    CACHE.lock().unwrap().invalidate_dir(dir);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::GenericImage;
-
-    const CUR_FILE: &str = r"C:\Windows\Cursors\aero_arrow.cur";
-    const ANI_FILE: &str = r"C:\Windows\Cursors\荧1.0\arrow.ani";
+    use crate::utils::test_support::{fixture_ani, fixture_cur, TempDir};
 
     #[test]
-    fn 能解析系统静态光标() {
-        let bytes = std::fs::read(CUR_FILE).expect("系统应存在 aero_arrow.cur");
-        let p = parse_cur_preview(&bytes).expect("解析 .cur 应成功");
+    fn 能解析静态光标() {
+        let p = parse_cur_preview(&fixture_cur()).expect("解析 fixture .cur 应成功");
         assert!(!p.image.is_empty());
         assert!(!p.is_animated);
         assert_eq!(p.hotspot, (0, 0));
-        println!("cur 预览 base64 长度: {}", p.image.len());
     }
 
     #[test]
     fn 能解析动态光标且帧率合理() {
-        let bytes = std::fs::read(ANI_FILE).expect("系统应存在 荧1.0 arrow.ani");
-        let p = parse_ani(&bytes).expect("解析 .ani 应成功");
-        assert!(p.is_animated, "应有多个帧，实际 {}", p.frames.len());
-        assert!(p.rate_ms >= 16 && p.rate_ms <= 1000, "帧率异常: {}", p.rate_ms);
+        let p = parse_ani(&fixture_ani()).expect("解析 fixture .ani 应成功");
+        assert!(p.is_animated, "应有多帧，实际 {}", p.frames.len());
+        assert_eq!(p.frames.len(), 2);
+        assert_eq!(p.rate_ms, 100);
         assert!(p.frames.len() <= MAX_FRAMES);
-        println!("ani 帧数: {}，帧间隔: {}ms，热点: {:?}", p.frames.len(), p.rate_ms, p.hotspot);
-
-        // 落盘首帧与拼图，供人工核对
-        let dir = std::env::temp_dir();
-        let first = base64::engine::general_purpose::STANDARD
-            .decode(&p.image)
-            .expect("首帧应为合法 base64");
-        std::fs::write(dir.join("mousetool_cur_first.png"), &first).unwrap();
-
-        let count = p.frames.len().min(8);
-        let imgs: Vec<DynamicImage> = p.frames[..count]
-            .iter()
-            .filter_map(|f| {
-                let raw = base64::engine::general_purpose::STANDARD.decode(f).ok()?;
-                image::load_from_memory(&raw).ok()
-            })
-            .collect();
-        if !imgs.is_empty() {
-            let w = imgs.iter().map(|i| i.width()).max().unwrap();
-            let h = imgs.iter().map(|i| i.height()).max().unwrap();
-            let mut sheet = DynamicImage::new_rgba8(w * imgs.len() as u32, h);
-            for (i, im) in imgs.iter().enumerate() {
-                let _ = sheet.copy_from(im, i as u32 * w, 0);
-            }
-            sheet
-                .save(dir.join("mousetool_ani_sheet.png"))
-                .expect("拼图应能保存");
-            println!("拼图已保存: {}", dir.join("mousetool_ani_sheet.png").display());
-        }
+        assert_eq!(p.hotspot, (0, 0));
     }
 
     #[test]
@@ -319,11 +363,81 @@ mod tests {
 
     #[test]
     fn 缓存命中同一实例() {
-        preview_file(CUR_FILE);
-        let a = preview_file(CUR_FILE);
-        let b = preview_file(CUR_FILE);
+        let dir = TempDir::new("cursor-cache");
+        let file = dir.join("arrow.cur");
+        std::fs::write(&file, fixture_cur()).expect("写 fixture");
+        let path = file.to_string_lossy().into_owned();
+
+        preview_file(&path);
+        let a = preview_file(&path);
+        let b = preview_file(&path);
         assert_eq!(a.image, b.image);
-        assert!(CACHE.lock().unwrap().contains_key(&cache_key(Path::new(CUR_FILE)).unwrap()));
+        assert!(CACHE
+            .lock()
+            .unwrap()
+            .entries
+            .contains_key(&cache_key(&file).unwrap()));
+    }
+
+    fn demo_preview() -> Arc<CursorPreview> {
+        Arc::new(CursorPreview::default())
+    }
+
+    #[test]
+    fn 缓存超过上限时淘汰最久未使用的条目() {
+        let mut cache = PreviewCache::default();
+        for i in 0..CACHE_CAPACITY {
+            cache.insert((format!("k{i}"), 0, 0), demo_preview());
+        }
+
+        // 访问最旧的一条，让它重新变新
+        assert!(cache.get(&("k0".to_string(), 0, 0)).is_some());
+        cache.insert(("new".to_string(), 0, 0), demo_preview());
+
+        assert_eq!(cache.entries.len(), CACHE_CAPACITY, "容量必须守住上限");
+        assert!(
+            cache.entries.contains_key(&("k0".to_string(), 0, 0)),
+            "刚访问过的条目不该被淘汰"
+        );
+        assert!(
+            !cache.entries.contains_key(&("k1".to_string(), 0, 0)),
+            "应淘汰最久未使用的那条"
+        );
+    }
+
+    #[test]
+    fn 失效接口按路径与目录清理缓存() {
+        let mut cache = PreviewCache::default();
+        let dir = Path::new(r"C:\Themes\abc");
+        let arrow = (r"C:\Themes\abc\cursors\arrow.cur".to_string(), 0, 0);
+        let hand = (r"C:\Themes\abc\cursors\hand.cur".to_string(), 0, 0);
+        let outside = (r"C:\Other\cursor.cur".to_string(), 0, 0);
+        for key in [&arrow, &hand, &outside] {
+            cache.insert(key.clone(), demo_preview());
+        }
+
+        // 大小写与斜杠不同也应命中
+        cache.invalidate_path(Path::new("c:/themes/ABC/cursors/ARROW.cur"));
+        assert!(!cache.entries.contains_key(&arrow));
+        assert!(cache.entries.contains_key(&hand));
+
+        cache.invalidate_dir(dir);
+        assert!(!cache.entries.contains_key(&hand), "目录下条目应全部清掉");
+        assert!(cache.entries.contains_key(&outside), "目录外条目不受影响");
+    }
+
+    #[test]
+    fn 超过预览上限的文件不读也不缓存() {
+        let dir = TempDir::new("cursor-large");
+        let file = dir.join("huge.cur");
+        let handle = std::fs::File::create(&file).expect("建大文件");
+        handle
+            .set_len(limits::MAX_PREVIEW_BYTES + 1)
+            .expect("撑大文件");
+
+        assert!(cache_key(&file).is_none(), "超限文件不该生成缓存键");
+        let p = preview_file(&file.to_string_lossy());
+        assert!(p.image.is_empty());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 import { MousePointer2 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { CursorPreviewImage } from "@/components/cursor/CursorPreviewImage";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { coverSlot, slotStats } from "@/lib/slots";
 import { cn } from "@/lib/utils";
 import type { CursorTheme } from "@/types/theme";
@@ -18,6 +18,7 @@ interface GalleryCardProps {
  *
  * 与旧版的最大区别是封面用棋盘格底（透明光标在纯色底上看不见）
  * 并把尺寸放大 —— 图库这一页的工作是「逛」，卡片得先好看，再谈信息量。
+ * 「使用中」是 success 语义的状态徽标，不是 primary 底色的胶囊。
  */
 export function GalleryCard({ theme, active, selected, onSelect }: GalleryCardProps) {
   const cover = coverSlot(theme);
@@ -43,7 +44,13 @@ export function GalleryCard({ theme, active, selected, onSelect }: GalleryCardPr
         ) : (
           <MousePointer2 className="size-5 text-muted-foreground" />
         )}
-        {active && <Badge className="absolute top-2 right-2">使用中</Badge>}
+        {active && (
+          <span className="absolute top-2 right-2">
+            <StatusBadge tone="success" dot>
+              使用中
+            </StatusBadge>
+          </span>
+        )}
       </div>
 
       <div className="flex flex-col gap-0.5 p-3">
