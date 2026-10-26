@@ -27,6 +27,7 @@
 - **行为设置**（`utils/settings.rs` / `tray.rs` / `autostart.rs`）：`settings.json` 存关闭行为/主题目录/开关（Rust 与前端共用）；关闭到托盘时托盘图标动态创建移除；自启动写 `HKCU\...\Run`。外观三态留 `localStorage`（`lib/theme-mode.ts`，首帧落色要同步读）。
 - **系统集成**（`utils/integration.rs`）：单实例互斥（`CreateMutexW`）、`--import` 转交（`pending_import.json`，领取即删）、`.zip` 右键菜单注册（试点，决策 12）。**窗口激活按标题查找**——改窗口标题必须同步 `WINDOW_TITLE` 常量。
 - **Integration**（`models/` ↔ `types/`、`capabilities/`）：前后端字段逐个同名，共用 `snake_case`，不做驼峰转换。
+- **安装器**（`src-tauri/installer/` + `tauri.conf.json` 的 `bundle` 段）：NSIS 走**自定义模板** `installer/template/installer.nsi`（以 `docs/安装器原型/setup-ui-prototype.html` 为设计源：常驻侧栏四页步骤高亮 / 安装选项页 / 品牌色进度条）。改位图跑 `installer/src/make_bitmaps.ps1`（产出 sidebar-1..4，改许可文本后跑 `make_license_rtf.mjs`）；QA 脚本 `capture_setup_window.ps1` / `walkthrough_capture.ps1` / `verify_install_cycle.ps1`。容易踩的：许可页**按原型裁掉了**（MIT 全文靠 `bundle.resources` 的 `LICENSE.txt` 进安装目录）；主程序名是 Cargo 包名 `mousetool-theme` 不是 productName；自启动注册表值名是 **`CursorStudio`**（`autostart.rs` 的 `RUN_NAME`，安装器与卸载器都写/删这个值）；模板里 `System::Call` **不求值 `|` 表达式**（先 IntOp）且 `LoadImage` 在 **user32**；makensis 工作目录是 `target/release/nsis/x64`（模板里的相对 `File` 路径按四级上级算）；bundler 会自己给模板加 UTF-8 BOM（模板文件本身不要带）。MSI 需 `wix.language: "zh-CN"` 才能装下中文 productName。
 
 ---
 

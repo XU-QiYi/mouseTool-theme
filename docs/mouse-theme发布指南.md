@@ -4,7 +4,7 @@
 > 本文档只讲「怎么把做好的东西放到 Releases 页面上」，代码怎么写不在此范围。
 >
 > **本文档的命令与结论均在本仓库实测过**（2026-10-22）。实测过程中发现并修复了两个
-> 会直接卡住发布的问题，详见 §1.3（版本错位）与 §2.2 坑 ⑧（MSI 与中文产品名冲突）。
+> 会直接卡住发布的问题，详见 §1.3（版本错位）与 §2.2 坑 ⑧（MSI 与中文产品名冲突，已修复）。
 >
 > 文档版本：2026-10-22，对应仓库 `XU-QiYi/mouseTool-theme`，首个发布版本 v0.1.0。
 
@@ -19,7 +19,7 @@
 | 托管平台 | **GitHub Releases** | 仓库远端就是 `https://github.com/XU-QiYi/mouseTool-theme.git` |
 | 目标平台 | **仅 Windows 10/11 x64** | 应用依赖 `HKCU` 注册表 + `SPI_SETCURSORS`，macOS/Linux 无法运行 |
 | 工具链 | Node 22 · Rust 1.95 · Visual Studio 生成工具 2026 | 本机 `tauri info` 实测值 |
-| 安装包格式 | **NSIS**（`.exe`）为主 | MSI 因中文 `productName` 与代码页 1252 冲突而构建失败，见 §2.2 坑 ⑧ |
+| 安装包格式 | **NSIS**（`.exe`）为主，MSI 同轮产出备用 | MSI 曾因中文 `productName` 与代码页 1252 冲突构建失败，已用 `wix.language: "zh-CN"` 修复，见 §2.2 坑 ⑧ |
 | 代码签名 | **暂无证书，产物未签名** | 当前状态；用户装机会遇到 SmartScreen 提示，§3.4 有应对话术 |
 | 上传方式 | **GitHub 网页手动拖拽** | 你已选定；`gh` CLI 作为备选写在 §7.2 |
 | 版本号 | **0.1.0**，tag 为 **v0.1.0** | 与 `package.json` / `Cargo.toml` / `tauri.conf.json` 三处现状一致 |
@@ -205,12 +205,10 @@ cd F:\forge\mouse-theme\mouseTool-theme
 npm run tauri build -- --ci --bundles nsis
 
 # 同时出 NSIS + MSI
-# ⚠️ 当前会失败：MSI 代码页 1252 装不下中文 productName，见 §2.2 坑 ⑧
-#    要出 MSI 需先把 productName 改成 ASCII
+# （坑 ⑧ 已修复：tauri.conf.json 已配 wix.language: "zh-CN"，中文 productName 可直接构建）
 npm run tauri build -- --ci --bundles nsis msi
 
-# 按 tauri.conf.json 的 "targets": "all" 出全部
-# ⚠️ 同上，MSI 阶段会失败
+# 按 tauri.conf.json 的 "targets": "all" 出全部（NSIS + MSI）
 npm run tauri build -- --ci
 ```
 
@@ -252,49 +250,24 @@ src-tauri\target\release\mousetool-theme.exe   ← 免安装绿色版（可选�
 > ⚠️ 上表的 SHA256 只对**那一次构建**有效。你重新构建后校验和必然不同，
 > 请用 §2.4 的命令**重新计算**，不要照抄这一串。
 
-> **⚠️ 坑 ⑧：MSI 目前构建不出来——中文 `productName` 的硬限制。**
+> **✅ 坑 ⑧（已修复，2026-10-27）：MSI 曾因中文 `productName` 构建失败。**
 >
-> 实测 `npm run tauri build -- --ci --bundles msi` 会在链接阶段失败：
+> 历史症状：`npm run tauri build -- --ci --bundles msi` 在链接阶段失败，
+> `light.exe` 报 `error LGHT0311 : ... code page '1252'`——MSI 数据库代码页
+> 1252（西欧）装不下中文，`candle` 阶段其实是成功的。
 >
-> ```
-> Running light to produce ...\鼠标主题工具_0.1.0_x64_en-US.msi
-> failed to bundle project `failed to run ...\WixTools314\light.exe`
-> ```
+> **修法**：在 `tauri.conf.json` 的 `bundle.windows` 加一行，让 WiX 换用
+> 中文代码页（936）：
 >
-> 直接运行 `light.exe` 能看到真实原因：
->
-> ```
-> error LGHT0311 : A string was provided with characters that are not available in
-> the specified database code page '1252'.
-> ```
->
-> **根因**：MSI 数据库的代码页是 1252（西欧），**装不下中文**。
-> 本项目的 `productName` 是「鼠标主题工具」，因此 MSI 打包必然失败——
-> 这不是工具链问题，也不是 WiX 没装好（WiX 已自动下载到
-> `%LOCALAPPDATA%\tauri\WixTools314`，`candle` 阶段是成功的）。
->
-> **已实测验证**：把 `productName` 临时改成 ASCII 的 `MouseThemeTool` 后，
-> MSI **一次构建成功**（产物 `MouseThemeTool_0.1.0_x64_en-US.msi`）。
-> 改回中文后又失败。因果链已闭环。
->
-> **两个选择**：
->
-> | 方案 | 做法 | 代价 |
-> |---|---|---|
-> | **A. 只发 NSIS**（推荐） | `npm run tauri build -- --ci --bundles nsis` | 无。NSIS 体积更小、分发更广，普通用户双击即装 |
-> | B. 要 MSI 就改产品名 | `productName` 改 ASCII，再把**窗口标题**单独设回中文 | 用户看到的安装程序名变英文 |
->
-> 方案 B 的具体改法（若将来选它）：
 > ```json
-> {
->   "productName": "MouseThemeTool",
->   "app": { "windows": [{ "title": "鼠标主题工具" }] }
-> }
+> "wix": { "language": "zh-CN" }
 > ```
-> `productName` 只影响安装程序名与默认安装目录名，`app.windows[].title` 才是窗口标题。
-> 改完需重新构建。
 >
-> **当前建议：首发只发 NSIS。** 顺带的好处是 NSIS 产物名带中文也无所谓——
+> **已实测验证**：`npm run tauri build`（targets: "all"）双产物一次通过，
+> 产物 `鼠标主题工具_0.1.0_x64_zh-CN.msi`。`productName` 无需改 ASCII。
+>
+> **当前建议不变：分发以 NSIS（.exe）为主**（体积更小、双击即装）；
+> MSI 作为企业/组播场景的补充产物同轮产出。NSIS 产物名带中文也无所谓——
 > 上传前按 §2.3 改成 ASCII 文件名即可。
 
 查看实际产物：
@@ -660,7 +633,7 @@ git push origin v0.1.1
 | `link.exe` not found | 缺 Visual Studio C++ 生成工具 | 装「使用 C++ 的桌面开发」工作负荷 |
 | `cannot find module '@tauri-apps/api'` | 依赖没装 | `npm install` |
 | NSIS 构建失败 | WiX/NSIS 工具链问题 | 首次构建会下载工具链，检查网络；NSIS 免额外依赖 |
-| MSI 构建失败 `light.exe` | **中文 `productName` 与 MSI 代码页 1252 冲突**（`LGHT0311`） | 见 §2.2 坑 ⑧：改 ASCII 产品名，或首发只发 NSIS |
+| MSI 构建失败 `light.exe` | **中文 `productName` 与 MSI 代码页 1252 冲突**（`LGHT0311`） | 已修复：确认 `tauri.conf.json` 里有 `"wix": { "language": "zh-CN" }`（§2.2 坑 ⑧）；若被删掉则 MSI 必然失败 |
 | 磁盘空间不足 | `src-tauri/target` 累积数 GB | 清 `src-tauri\target\release`（可再生，删了要重编） |
 
 ### 7.2 GitHub 阶段

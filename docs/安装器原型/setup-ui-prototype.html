@@ -1,0 +1,275 @@
+1	<!doctype html>
+2	<html lang="zh-CN">
+3	<head>
+4	<meta charset="utf-8">
+5	<title>Mouse Theme 安装向导 · UI 原型</title>
+6	<meta name="viewport" content="width=device-width, initial-scale=1">
+7	<style>
+8	:root {
+9	  color-scheme: light;
+10	  /* 与应用 App.css 同一套中性色与状态色 */
+11	  --bg: oklch(1 0 0);
+12	  --fg: oklch(0.145 0 0);
+13	  --muted: oklch(0.97 0 0);
+14	  --muted-fg: oklch(0.5 0 0);
+15	  --border: oklch(0.922 0 0);
+16	  --primary: oklch(0.205 0 0);
+17	  --primary-fg: oklch(0.985 0 0);
+18	  --success: oklch(0.55 0.13 152);
+19	  --ring: oklch(0.55 0.16 255);
+20	  /* 取自应用图标的两个强调色，仅用于品牌面与进度 */
+21	  --brand-dark: #1f2128;
+22	  --brand-teal: #4cc9c0;
+23	  --brand-blue: #4a6fe3;
+24	  --radius: 10px;
+25	  --fast: 120ms; --base: 180ms; --slow: 240ms;
+26	  --font: "Geist Variable", "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+27	}
+28	* { box-sizing: border-box; margin: 0; }
+29	body {
+30	  min-height: 100vh; display: grid; place-items: center;
+31	  background: oklch(0.93 0 0); font: 14px/1.5 var(--font); color: var(--fg);
+32	}
+33	.win {
+34	  width: 680px; height: 480px; display: grid;
+35	  grid-template: 32px 1fr / 200px 1fr; overflow: hidden;
+36	  background: var(--bg); border-radius: 8px;
+37	  box-shadow: 0 16px 48px oklch(0 0 0 / .22), 0 0 0 1px oklch(0 0 0 / .1);
+38	}
+39	.titlebar {
+40	  grid-column: 1 / -1; display: flex; align-items: center; gap: 8px;
+41	  padding-left: 12px; font-size: 12px; color: var(--muted-fg);
+42	  background: var(--muted); border-bottom: 1px solid var(--border);
+43	}
+44	.titlebar img, .titlebar svg { width: 14px; height: 14px; }
+45	.titlebar .spacer { flex: 1; }
+46	.titlebar button {
+47	  width: 46px; height: 32px; border: 0; background: none; color: inherit; font-size: 12px;
+48	}
+49	.titlebar button:hover { background: oklch(0 0 0 / .06); }
+50	.titlebar button.close:hover { background: #c42b1c; color: #fff; }
+51	
+52	.side {
+53	  position: relative; padding: 28px 20px; color: #e8eaf0; overflow: hidden;
+54	  background: var(--brand-dark);
+55	}
+56	.side::before {
+57	  content: ""; position: absolute; width: 220px; height: 220px; right: -110px; bottom: -70px;
+58	  border-radius: 40px; transform: rotate(18deg); opacity: .5;
+59	  background: linear-gradient(135deg, var(--brand-teal), var(--brand-blue));
+60	  filter: blur(2px);
+61	}
+62	.logo { width: 44px; height: 44px; border-radius: 11px; display: block; }
+63	.side h1 { margin: 14px 0 2px; font-size: 18px; font-weight: 600; letter-spacing: .2px; }
+64	.side .ver { font-size: 12px; color: #9aa0ae; }
+65	.steps { position: relative; margin-top: 36px; list-style: none; padding: 0; display: grid; gap: 4px; }
+66	.steps li {
+67	  display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 8px;
+68	  font-size: 13px; color: #8d93a3; transition: color var(--base), background var(--base);
+69	}
+70	.steps .dot {
+71	  width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
+72	  font-size: 11px; border: 1px solid #4a4f5d; flex: none;
+73	  transition: background var(--base), border-color var(--base);
+74	}
+75	.steps li.active { color: #fff; background: oklch(1 0 0 / .08); }
+76	.steps li.active .dot { border-color: var(--brand-teal); color: var(--brand-teal); }
+77	.steps li.done { color: #c9cddb; }
+78	.steps li.done .dot { background: var(--brand-teal); border-color: var(--brand-teal); color: var(--brand-dark); }
+79	
+80	.main { display: grid; grid-template-rows: 1fr 64px; min-width: 0; }
+81	.pages { position: relative; padding: 32px 36px 0; }
+82	.page { position: absolute; inset: 32px 36px 0; opacity: 0; visibility: hidden; transform: translateX(16px);
+83	  transition: opacity var(--slow) ease, transform var(--slow) ease, visibility 0s linear var(--slow); }
+84	.page.show { opacity: 1; visibility: visible; transform: none; transition-delay: 0s; }
+85	.page.back { transform: translateX(-16px); }
+86	h2 { font-size: 22px; font-weight: 600; letter-spacing: -.2px; margin-bottom: 6px; }
+87	.lead { color: var(--muted-fg); margin-bottom: 22px; }
+88	.feat { list-style: none; padding: 0; display: grid; gap: 12px; }
+89	.feat li { display: flex; gap: 12px; align-items: flex-start; }
+90	.feat .ic { width: 32px; height: 32px; flex: none; border-radius: 8px; display: grid; place-items: center;
+91	  background: var(--muted); border: 1px solid var(--border); }
+92	.feat b { display: block; font-weight: 600; }
+93	.feat span { color: var(--muted-fg); font-size: 13px; }
+94	.field { display: grid; gap: 6px; margin-bottom: 16px; }
+95	.field label { font-weight: 500; font-size: 13px; }
+96	.row { display: flex; gap: 8px; }
+97	.row input[type=text] { flex: 1; min-width: 0; }
+98	input[type=text] { height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px;
+99	  font: inherit; background: var(--bg); color: var(--fg); transition: border-color var(--fast); }
+100	input[type=text]:hover { border-color: oklch(0.8 0 0); }
+101	.hint { font-size: 12px; color: var(--muted-fg); }
+102	.check { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; margin-bottom: 8px;
+103	  border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer;
+104	  transition: border-color var(--fast), background var(--fast); }
+105	.check:hover { background: var(--muted); }
+106	.check input { margin-top: 3px; accent-color: var(--primary); width: 16px; height: 16px; }
+107	.check b { font-weight: 500; display: block; }
+108	.check span { font-size: 12px; color: var(--muted-fg); }
+109	
+110	button.btn { height: 36px; padding: 0 18px; border-radius: 8px; font: inherit; font-weight: 500; cursor: pointer;
+111	  border: 1px solid var(--border); background: var(--bg); color: var(--fg);
+112	  transition: background var(--fast), transform var(--fast), opacity var(--fast); }
+113	button.btn:hover { background: var(--muted); }
+114	button.btn:active { transform: scale(.98); }
+115	button.btn.primary { background: var(--primary); color: var(--primary-fg); border-color: var(--primary); min-width: 96px; }
+116	button.btn.primary:hover { background: oklch(0.3 0 0); }
+117	button.btn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+118	:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+119	.footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 0 36px;
+120	  border-top: 1px solid var(--border); background: oklch(0.985 0 0); }
+121	.footer .left { margin-right: auto; font-size: 12px; color: var(--muted-fg); }
+122	
+123	.progress { height: 8px; border-radius: 99px; background: var(--muted); overflow: hidden; border: 1px solid var(--border); }
+124	.progress i { display: block; height: 100%; width: 0; border-radius: inherit;
+125	  background: linear-gradient(90deg, var(--brand-teal), var(--brand-blue)); transition: width var(--base) linear; }
+126	.status { display: flex; justify-content: space-between; margin-top: 10px; font-size: 13px; }
+127	.status .pct { font-variant-numeric: tabular-nums; color: var(--muted-fg); }
+128	.log { margin-top: 18px; display: grid; gap: 8px; font-size: 13px; color: var(--muted-fg); }
+129	.log div { display: flex; gap: 8px; align-items: center; }
+130	.log .mk { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--border); flex: none; }
+131	.log .on .mk { border-color: var(--brand-blue); border-top-color: transparent; animation: spin 0.8s linear infinite; }
+132	.log .ok { color: var(--fg); }
+133	.log .ok .mk { background: var(--success); border-color: var(--success); animation: none; }
+134	.tip { margin-top: 20px; padding: 12px 14px; border-radius: var(--radius); background: var(--muted);
+135	  font-size: 13px; color: var(--muted-fg); }
+136	.done-badge { width: 56px; height: 56px; border-radius: 50%; background: var(--success); display: grid; place-items: center;
+137	  margin-bottom: 16px; transform: scale(.6); opacity: 0; }
+138	.page.show .done-badge { animation: pop var(--slow) 120ms cubic-bezier(.2,1.4,.4,1) forwards; }
+139	@keyframes spin { to { transform: rotate(360deg); } }
+140	@keyframes pop { to { transform: none; opacity: 1; } }
+141	@media (prefers-reduced-motion: reduce) {
+142	  *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
+143	}
+144	</style>
+145	</head>
+146	<body>
+147	<div class="win" role="application" aria-label="Mouse Theme 安装向导">
+148	  <div class="titlebar">
+149	    <img src="../../src-tauri/icons/32x32.png" alt="">
+150	    <span>Mouse Theme 安装向导</span><span class="spacer"></span>
+151	    <button aria-label="最小化">&#8211;</button><button class="close" aria-label="关闭">&#10005;</button>
+152	  </div>
+153	
+154	  <aside class="side">
+155	    <img class="logo" src="../../src-tauri/icons/128x128.png" alt="Mouse Theme 图标">
+156	    <h1>Mouse Theme</h1><div class="ver">版本 0.1.0</div>
+157	    <ol class="steps" aria-label="安装步骤">
+158	      <li class="active"><span class="dot">1</span>欢迎</li>
+159	      <li><span class="dot">2</span>安装选项</li>
+160	      <li><span class="dot">3</span>正在安装</li>
+161	      <li><span class="dot">4</span>完成</li>
+162	    </ol>
+163	  </aside>
+164	
+165	  <section class="main">
+166	    <div class="pages">
+167	      <div class="page show" data-step="0">
+168	        <h2>欢迎使用 Mouse Theme</h2>
+169	        <p class="lead">几步即可完成安装，约需 30 秒。</p>
+170	        <ul class="feat">
+171	          <li><span class="ic">&#10022;</span><div><b>一键切换鼠标主题</b><span>预览、应用、随时还原</span></div></li>
+172	          <li><span class="ic">&#8635;</span><div><b>可靠还原</b><span>改动前自动备份系统光标方案</span></div></li>
+173	          <li><span class="ic">&#9737;</span><div><b>仅当前用户</b><span>无需管理员权限，不改动系统文件</span></div></li>
+174	        </ul>
+175	      </div>
+176	
+177	      <div class="page" data-step="1">
+178	        <h2>安装选项</h2>
+179	        <p class="lead">使用推荐设置即可，也可自行调整。</p>
+180	        <div class="field">
+181	          <label for="dir">安装位置</label>
+182	          <div class="row"><input id="dir" type="text" value="C:\Users\你\AppData\Local\Mouse Theme"><button class="btn" type="button">浏览…</button></div>
+183	          <span class="hint">需要约 48 MB 可用空间</span>
+184	        </div>
+185	        <label class="check"><input type="checkbox" checked><div><b>创建桌面快捷方式</b><span>在桌面放置启动图标</span></div></label>
+186	        <label class="check"><input type="checkbox"><div><b>开机自动启动</b><span>登录后在后台守护所选光标</span></div></label>
+187	      </div>
+188	
+189	      <div class="page" data-step="2">
+190	        <h2>正在安装</h2>
+191	        <p class="lead">请稍候，无需任何操作。</p>
+192	        <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
+193	        <div class="status"><span id="cur">准备中…</span><span class="pct" id="pct">0%</span></div>
+194	        <div class="log" id="log">
+195	          <div><span class="mk"></span>复制程序文件</div>
+196	          <div><span class="mk"></span>写入用户设置</div>
+197	          <div><span class="mk"></span>创建快捷方式</div>
+198	        </div>
+199	      </div>
+200	
+201	      <div class="page" data-step="3">
+202	        <div class="done-badge"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>
+203	        <h2>安装完成</h2>
+204	        <p class="lead">Mouse Theme 已准备就绪。</p>
+205	        <label class="check"><input type="checkbox" checked><div><b>立即启动 Mouse Theme</b><span>点击“完成”后打开应用</span></div></label>
+206	        <div class="tip">提示：应用内可随时还原为系统默认光标。</div>
+207	      </div>
+208	    </div>
+209	
+210	    <div class="footer">
+211	      <span class="left" id="note"></span>
+212	      <button class="btn" id="back" type="button">上一步</button>
+213	      <button class="btn primary" id="next" type="button">下一步</button>
+214	    </div>
+215	  </section>
+216	</div>
+217	<script>
+218	const pages = [...document.querySelectorAll('.page')];
+219	const steps = [...document.querySelectorAll('.steps li')];
+220	const back = document.getElementById('back'), next = document.getElementById('next');
+221	const bar = document.querySelector('.progress i'), pb = document.querySelector('.progress');
+222	const pct = document.getElementById('pct'), cur = document.getElementById('cur');
+223	const logRows = [...document.querySelectorAll('#log > div')];
+224	const labels = ['复制程序文件…', '写入用户设置…', '创建快捷方式…'];
+225	let step = 0, timer = null;
+226	
+227	function go(n) {
+228	  const forward = n > step;
+229	  pages[step].classList.remove('show');
+230	  pages[step].classList.toggle('back', forward);
+231	  pages[n].classList.remove('back');
+232	  pages[n].classList.add('show');
+233	  step = n;
+234	  steps.forEach((li, i) => {
+235	    li.classList.toggle('active', i === n);
+236	    li.classList.toggle('done', i < n);
+237	    li.querySelector('.dot').textContent = i < n ? '✓' : i + 1;
+238	  });
+239	  back.style.visibility = n === 0 || n >= 2 ? 'hidden' : 'visible';
+240	  next.disabled = n === 2;
+241	  next.textContent = ['下一步', '安装', '安装中…', '完成'][n];
+242	  document.getElementById('note').textContent = n === 2 ? '安装过程中请勿关闭窗口' : '';
+243	  if (n === 2) install();
+244	}
+245	
+246	function install() {
+247	  let p = 0;
+248	  logRows.forEach(r => r.className = '');
+249	  timer = setInterval(() => {
+250	    p = Math.min(100, p + 2 + Math.random() * 3);
+251	    const idx = Math.min(2, Math.floor(p / 34));
+252	    bar.style.width = p + '%';
+253	    pb.setAttribute('aria-valuenow', Math.round(p));
+254	    pct.textContent = Math.round(p) + '%';
+255	    cur.textContent = labels[idx];
+256	    logRows.forEach((r, i) => r.className = i < idx ? 'ok' : i === idx ? 'on' : '');
+257	    if (p >= 100) {
+258	      clearInterval(timer);
+259	      logRows.forEach(r => r.className = 'ok');
+260	      cur.textContent = '安装完成';
+261	      setTimeout(() => go(3), 500);
+262	    }
+263	  }, 90);
+264	}
+265	
+266	next.addEventListener('click', () => {
+267	  if (step < 2) go(step + 1);
+268	  else if (step === 3) next.textContent = '已关闭（原型）';
+269	});
+270	back.addEventListener('click', () => step > 0 && go(step - 1));
+271	go(0);
+272	</script>
+273	</body>
+274	</html>
+275	

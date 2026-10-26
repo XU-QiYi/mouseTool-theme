@@ -37,5 +37,8 @@ dist-ssr
 # 本地工具测试碎片
 .tmp_shim_test/
 
+# 安装器真机验收的截图与临时脚本（验证证据，不入库）
+.qa-shots/
+
 # 图片/资产生成工具的落盘目录（成品另复制到 src-tauri/icons、public）
 output/
