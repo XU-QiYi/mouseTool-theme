@@ -4,6 +4,7 @@ import {
   applyTheme as apiApplyTheme,
   deleteTheme as apiDeleteTheme,
   exportTheme as apiExportTheme,
+  getActiveState,
   getAllThemes,
   getDataDir as apiGetDataDir,
   importTheme as apiImportTheme,
@@ -74,6 +75,15 @@ interface ThemeStore {
   themes: CursorTheme[];
   /** 当前系统正在使用的主题 ID */
   activeThemeId: string | null;
+  /**
+   * 光标被系统设置 / 其它工具改写（槽位非空但匹配不到任何主题，决策 24）
+   *
+   * 系统指针样式页随时可能整体改写注册表；没有这个标志，界面只能把
+   * 这种状态误报成「系统默认」。
+   */
+  activeExternal: boolean;
+  /** 注册表当前非空槽位数（诊断信息用；0 = 系统默认） */
+  currentSlotsFilled: number;
   /** 最近主题，最新在前（后端由事件流派生，每个主题一条） */
   recent: HistoryEntry[];
   /** 每个页面各自选中的主题 ID；`recent` 页没有检查器，恒为 null */
@@ -106,12 +116,16 @@ interface ThemeStore {
   warningsDismissed: boolean;
   /** 数据目录展示路径（设置页用）；null = 还没读到 */
   dataDir: string | null;
+  /** 数据目录读取失败原因；null = 没有失败。设置页据此显示「读取失败 + 重试」 */
+  dataDirError: string | null;
   /** `.zip` 右键菜单注册状态；null = 还没读到 */
   zipMenu: ZipMenuStatus | null;
   /** 右键菜单状态读取失败（典型原因：前端新、Rust 旧，重启应用即恢复） */
   zipMenuError: boolean;
 
   loadThemes: () => Promise<void>;
+  /** 窗口聚焦时轻量重查「当前使用」：注册表可能已被系统设置改写（决策 24） */
+  refreshActive: () => Promise<void>;
   applyTheme: (id: string) => Promise<void>;
   restoreDefault: () => Promise<void>;
   importTheme: (sourcePath: string) => Promise<void>;
@@ -143,6 +157,8 @@ interface ThemeStore {
 export const useThemeStore = create<ThemeStore>((set, get) => ({
   themes: [],
   activeThemeId: null,
+  activeExternal: false,
+  currentSlotsFilled: 0,
   recent: [],
   selection: NO_SELECTION,
   searchQuery: "",
@@ -157,13 +173,15 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
   warnings: [],
   warningsDismissed: false,
   dataDir: null,
+  dataDirError: null,
   zipMenu: null,
   zipMenuError: false,
 
   loadThemes: async () => {
     set({ loading: true, loadError: null });
     try {
-      const { themes, warnings, active_theme_id, recent } = await getAllThemes();
+      const { themes, warnings, active_theme_id, current_slots_filled, active_external, recent } =
+        await getAllThemes();
       // 「正在使用」每次都由后端从注册表反推，不沿用内存旧值：
       // 内存状态一重开就过期，会把已应用的主题当成还能再应用一次。
       // recent 兜底：前端热更新、后端还是旧二进制时字段会缺失，
@@ -173,6 +191,8 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
       set((state) => ({
         themes,
         activeThemeId: active_theme_id,
+        activeExternal: active_external ?? false,
+        currentSlotsFilled: current_slots_filled ?? 0,
         recent: recent ?? [],
         warnings,
         warningsDismissed: false,
@@ -195,6 +215,21 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     }
   },
 
+  // 只读注册表与主题清单，失败静默保留旧状态：聚焦很频繁，
+  // 不能因为一次读取失败就弹提示打断用户
+  refreshActive: async () => {
+    try {
+      const state = await getActiveState();
+      set({
+        activeThemeId: state.active_theme_id,
+        activeExternal: state.active_external,
+        currentSlotsFilled: state.current_slots_filled,
+      });
+    } catch (err) {
+      console.warn("[refreshActive]", readableError(err));
+    }
+  },
+
   applyTheme: async (id) => {
     const theme = get().themes.find((t) => t.id === id);
     if (!theme) return;
@@ -204,7 +239,7 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     set((state) => ({ busy: withBusyFlag(state.busy, key, true) }));
     try {
       const outcome = await apiApplyTheme(theme);
-      set({ activeThemeId: id, recent: outcome.recent });
+      set({ activeThemeId: id, activeExternal: false, recent: outcome.recent });
       toast.success(
         `已应用「${theme.name}」`,
         inTauri ? "系统光标已切换" : "开发模式：未真正写入系统",
@@ -227,7 +262,7 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     set((state) => ({ busy: withBusyFlag(state.busy, key, true) }));
     try {
       await apiRestoreDefault();
-      set({ activeThemeId: null });
+      set({ activeThemeId: null, activeExternal: false, currentSlotsFilled: 0 });
       toast.success(
         "已还原系统默认光标",
         inTauri ? undefined : "开发模式：未真正写入系统",
@@ -369,14 +404,15 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
       selection: { ...state.selection, [state.currentPage]: id },
     })),
 
-  // 静态信息，拿到一次就够；失败只留日志不弹全局错误——
-  // 路径没显示出来顶多少个提示，真打开失败时会有专门的错误提示
+  // 静态信息，成功拿到一次就够；失败挂错误态让设置页给出重试出口
+  //（路径没显示出来顶多少个提示，但永远「…」会让人以为页面坏了）
   loadDataDir: async () => {
     if (get().dataDir) return;
     try {
-      set({ dataDir: await apiGetDataDir() });
+      set({ dataDir: await apiGetDataDir(), dataDirError: null });
     } catch (err) {
       console.warn("[loadDataDir]", readableError(err));
+      set({ dataDirError: readableError(err) });
     }
   },
 

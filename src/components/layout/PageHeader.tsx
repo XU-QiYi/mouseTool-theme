@@ -1,6 +1,4 @@
-import { Search } from "lucide-react";
-
-import { Input } from "@/components/ui/input";
+import { SearchField } from "@/components/ui/search-field";
 import { PAGE_META, type PageMeta } from "@/lib/pages";
 import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
 import { useThemeStore } from "@/stores/themeStore";
@@ -11,6 +9,9 @@ import { useThemeStore } from "@/stores/themeStore";
  * 内容全部来自 `lib/pages.ts` 的 `PAGE_META` —— 加页面时不用改这个组件；
  * 例外是设置页：进入后侧栏按分组切换，页头跟着分组走（`settings-sections.ts`），
  * 进哪组看哪页，标题不再固定是「设置」。
+ *
+ * 计数三个态：搜索词非空显示「匹配 X / 共 Y」，空词显示总数，
+ * 读取失败显示「—」——说"0 个主题"是假信息：不是没有，是没读到。
  */
 export function PageHeader() {
   const currentPage = useThemeStore((s) => s.currentPage);
@@ -24,9 +25,19 @@ export function PageHeader() {
   // 显式标注成 PageMeta：字面量收窄后，没写 search 的那一页会让 meta.search 报错
   const meta: PageMeta = PAGE_META[currentPage];
   const sectionMeta = currentPage === "settings" ? SETTINGS_SECTIONS[settingsSection] : null;
-  const count = meta.count?.({ themes, recent });
-  // 读取失败时说"0 个方案"是假信息：不是没有，是没读到
-  const countLabel = loadError ? "—" : count !== undefined ? `${count} ${meta.unit}` : null;
+
+  const count = meta.count?.({ themes, recent, query: searchQuery });
+  const total = meta.count?.({ themes, recent });
+  let countLabel: string | null = null;
+  if (loadError) {
+    countLabel = "—";
+  } else if (count !== undefined) {
+    const unit = meta.unit ?? "";
+    countLabel =
+      searchQuery.trim() !== "" && total !== undefined
+        ? `匹配 ${count} / 共 ${total} ${unit}`
+        : `${count} ${unit}`;
+  }
 
   return (
     <header className="flex shrink-0 items-center justify-between gap-4 border-b px-6 py-4">
@@ -41,19 +52,16 @@ export function PageHeader() {
 
       <div className="flex shrink-0 items-center gap-3">
         {meta.search && (
-          <div className="relative w-52">
-            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.currentTarget.value)}
-              placeholder={meta.search}
-              aria-label={meta.search}
-              className="h-8 pl-7.5 text-xs"
-            />
-          </div>
+          <SearchField
+            value={searchQuery}
+            onChange={setSearchQuery}
+            placeholder={meta.search}
+          />
         )}
         {countLabel && (
-          <span className="text-xs text-muted-foreground tabular-nums">{countLabel}</span>
+          <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
+            {countLabel}
+          </span>
         )}
       </div>
     </header>

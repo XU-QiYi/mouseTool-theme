@@ -7,7 +7,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
-use crate::models::{ApplyOutcome, CursorSlot, CursorTheme, ThemesResult};
+use crate::models::{ActiveState, ApplyOutcome, CursorSlot, CursorTheme, ThemesResult};
 use crate::utils::{
     cursor, history, importer, inf_export, limits, ops, paths, registry, theme_paths, validation,
 };
@@ -47,8 +47,17 @@ fn merge_sources(
 }
 
 /// 路径比较口径：Windows 路径不区分大小写，正反斜杠等价
+///
+/// `\\?\` 是 canonicalize 产生的扩展长度前缀：应用系统方案时写入注册表的是
+/// canonicalize 后的路径，而方案列表读出来的是普通路径（环境变量已展开），
+/// 不剥掉前缀同一套光标会被判成两套——状态卡误报「被系统设置修改」。
 fn normalize_path(path: &str) -> String {
-    path.trim().replace('/', "\\").to_lowercase()
+    let trimmed = path.trim().replace('/', "\\");
+    let stripped = trimmed
+        .strip_prefix(r"\\?\UNC\")
+        .map(|rest| format!(r"\\{rest}"))
+        .unwrap_or_else(|| trimmed.strip_prefix(r"\\?\").unwrap_or(&trimmed).to_string());
+    stripped.to_lowercase()
 }
 
 /// 主题与注册表里当前生效的光标是否为同一套
@@ -103,6 +112,41 @@ fn detect_active_theme(
     Some(chosen.id.clone())
 }
 
+/// 从注册表反推「当前使用」的完整状态
+///
+/// `read_current_slots` 只返回非空槽位，所以它的长度就是非空槽位数。
+/// 注册表读失败时不猜：既不标主题也不判外部改写，把原因带回给调用方。
+struct ActiveInfo {
+    id: Option<String>,
+    filled: usize,
+    external: bool,
+    warning: Option<String>,
+}
+
+fn probe_active(themes: &[CursorTheme]) -> ActiveInfo {
+    match registry::read_current_slots() {
+        Ok(current) => {
+            let filled = current.len();
+            let id = detect_active_theme(themes, &current, &registry::read_scheme_name());
+            // 槽位有值却不属于任何已知主题：系统设置页选样式、经典面板
+            // 手改、或其它光标工具写入了注册表（2026-10-26 真机实验）
+            let external = id.is_none() && filled > 0;
+            ActiveInfo {
+                id,
+                filled,
+                external,
+                warning: None,
+            }
+        }
+        Err(err) => ActiveInfo {
+            id: None,
+            filled: 0,
+            external: false,
+            warning: Some(format!("无法识别当前正在使用的主题：{err}")),
+        },
+    }
+}
+
 /// 获取所有主题：系统注册表方案 + 已导入的用户主题
 ///
 /// 两个来源独立容错：注册表读失败只降级为一条 warning，不整体失败——
@@ -123,15 +167,12 @@ fn all_themes() -> Result<ThemesResult, String> {
         importer::read_user_themes(),
     );
 
-    let active_theme_id = match registry::read_current_slots() {
-        Ok(current) => detect_active_theme(&themes, &current, &registry::read_scheme_name()),
-        Err(err) => {
-            // 识别不出就当作「没有正在使用的主题」：少标一个「使用中」可以接受，
-            // 标错了会让人以为已经应用成功
-            warnings.push(format!("无法识别当前正在使用的主题：{err}"));
-            None
-        }
-    };
+    let active = probe_active(&themes);
+    // 识别不出就当作「没有正在使用的主题」：少标一个「使用中」可以接受，
+    // 标错了会让人以为已经应用成功
+    if let Some(warn) = active.warning {
+        warnings.push(warn);
+    }
 
     // 历史是附属数据：读坏了只提示，不影响主题列表
     let (recent, history_warnings) = history::read_history();
@@ -140,8 +181,38 @@ fn all_themes() -> Result<ThemesResult, String> {
     Ok(ThemesResult {
         themes,
         warnings,
-        active_theme_id,
+        active_theme_id: active.id,
+        current_slots_filled: active.filled,
+        active_external: active.external,
         recent,
+    })
+}
+
+/// 窗口聚焦时轻量重查「当前使用」（决策 24）
+///
+/// 系统设置页随时可能整体改写光标注册表，界面不重查就会带着旧的
+/// 「正在使用」状态骗人。这里只做注册表与主题清单的比对，不重读历史，
+/// 失败直接 `Err`——调用方（聚焦钩子）静默保留旧状态即可。
+#[tauri::command]
+pub async fn get_active_state() -> Result<ActiveState, String> {
+    tauri::async_runtime::spawn_blocking(active_state)
+        .await
+        .map_err(|err| format!("读取当前光标状态任务异常退出（{err}）"))?
+}
+
+fn active_state() -> Result<ActiveState, String> {
+    let (themes, _) = merge_sources(
+        registry::read_system_schemes(),
+        importer::read_user_themes(),
+    );
+    let info = probe_active(&themes);
+    if let Some(err) = info.warning {
+        return Err(err);
+    }
+    Ok(ActiveState {
+        active_theme_id: info.id,
+        current_slots_filled: info.filled,
+        active_external: info.external,
     })
 }
 
@@ -620,6 +691,20 @@ mod tests {
         );
     }
 
+    /// canonicalize 的 `\\?\` 扩展长度前缀不该拆散识别：
+    /// 应用系统方案写进注册表的是 `\\?\C:\Windows\...`，方案列表读出来是普通路径
+    #[test]
+    fn 扩展长度前缀不影响识别() {
+        let theme = theme_with_slots("sys_firefly", "firefly", &[("Arrow", r"C:\Windows\Cursors\荧1.0\arrow.ani")]);
+        let slots = current(&[("Arrow", r"\\?\C:\Windows\Cursors\荧1.0\ARROW.ani")]);
+
+        assert_eq!(
+            detect_active_theme(&[theme], &slots, "firefly").as_deref(),
+            Some("sys_firefly"),
+            "同一文件带不带 \\\\?\\ 前缀应算同一套"
+        );
+    }
+
     #[test]
     fn 槽位集合不同就不算同一套() {
         let theme = theme_with_slots(
@@ -655,6 +740,45 @@ mod tests {
             detect_active_theme(&[theme], &[], "").is_none(),
             "槽位全空 = 系统默认，不该标记任何主题"
         );
+    }
+
+    /// 槽位有值但不属于任何已知主题：要能被判成「被外部改写」而不是「系统默认」
+    ///（2026-10-26 真机实验：系统指针样式页选黑色会把槽位写成 %SystemRoot%\cursors\*_r.cur）
+    #[test]
+    fn 槽位被外部改写时不算系统默认() {
+        let _registry = isolate_registry("probe-external", true);
+        let theme = theme_with_slots("a", "A", &[("Arrow", r"C:\A\arrow.cur")]);
+        // 模拟系统样式页的写入：路径与本应用主题毫无关系
+        let foreign = theme_with_slots("foreign", "外来", &[("Arrow", r"C:\Windows\Cursors\arrow_r.cur")]);
+        registry::write_cursors(&foreign.cursors, "Windows Black").expect("写隔离注册表");
+
+        let info = probe_active(&[theme]);
+        assert!(info.id.is_none(), "外来路径不该匹配到本应用主题");
+        assert_eq!(info.filled, 1);
+        assert!(info.external, "槽位非空且无匹配 = 被外部改写，不能当成系统默认");
+        assert!(info.warning.is_none());
+    }
+
+    #[test]
+    fn probe_active_在注册表读不到时降级为警告() {
+        // 隔离键存在但主键没建：read_current_slots 会失败
+        let _registry = isolate_registry("probe-missing", false);
+        let info = probe_active(&[]);
+        assert!(info.id.is_none());
+        assert!(!info.external, "读不到注册表时不能武断判外部改写");
+        assert!(info.warning.is_some(), "失败原因要带回给调用方");
+    }
+
+    #[test]
+    fn probe_active_系统方案命中不算外部改写() {
+        let _registry = isolate_registry("probe-scheme", true);
+        let scheme = theme_with_slots("sys_firefly", "firefly", &[("Arrow", r"C:\F\a.ani")]);
+        registry::write_cursors(&scheme.cursors, &scheme.name).expect("写隔离注册表");
+
+        let info = probe_active(&[scheme]);
+        assert_eq!(info.id.as_deref(), Some("sys_firefly"));
+        assert_eq!(info.filled, 1);
+        assert!(!info.external, "命中已知主题就是正常使用，不是外部改写");
     }
 
     #[test]

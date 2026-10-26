@@ -1,9 +1,9 @@
 import { useMemo } from "react";
-import type { ReactNode } from "react";
 import { LayoutGrid, SearchX } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SectionLabel } from "@/components/ui/section-label";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { GalleryCard } from "@/components/theme/GalleryCard";
 import { useImportTheme } from "@/hooks/useImportTheme";
@@ -49,7 +49,7 @@ export function GalleryView() {
         <EmptyState
           icon={LayoutGrid}
           title="还没有可用的主题"
-          description="导入一个 .zip 主题包，或在系统设置里保存一套光标方案，方案会出现在这里"
+          description="导入 ZIP 或整个主题文件夹（也可以直接拖进来）；系统里保存过的光标方案会自动出现在这里。"
           action={
             <Button onClick={pick} disabled={picking}>
               {picking ? "选择中…" : "导入主题"}
@@ -65,8 +65,8 @@ export function GalleryView() {
       <div className="flex min-h-0 flex-1 items-center justify-center">
         <EmptyState
           icon={SearchX}
-          title={`没有匹配「${query.trim()}」的方案`}
-          description="换个关键词试试，或者清除搜索看全部方案"
+          title={`没有匹配「${query.trim()}」的主题`}
+          description="换个关键词试试，或者清除搜索看全部主题"
           action={
             <Button variant="outline" onClick={() => setSearchQuery("")}>
               清除搜索
@@ -91,38 +91,21 @@ export function GalleryView() {
   return (
     <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-6 py-5">
       {groups.builtIn.length > 0 && (
-        <Section title="系统方案" count={groups.builtIn.length}>
-          {renderCards(groups.builtIn)}
-        </Section>
+        <section className="mb-7 last:mb-0">
+          <SectionLabel label="系统方案" count={groups.builtIn.length} unit="个" />
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-3">
+            {renderCards(groups.builtIn)}
+          </div>
+        </section>
       )}
       {groups.mine.length > 0 && (
-        <Section title="我的主题" count={groups.mine.length}>
-          {renderCards(groups.mine)}
-        </Section>
+        <section className="mb-7 last:mb-0">
+          <SectionLabel label="我的主题" count={groups.mine.length} unit="个" />
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-3">
+            {renderCards(groups.mine)}
+          </div>
+        </section>
       )}
     </div>
-  );
-}
-
-function Section({
-  title,
-  count,
-  children,
-}: {
-  title: string;
-  count: number;
-  children: ReactNode;
-}) {
-  return (
-    <section className="mb-7 last:mb-0">
-      <div className="mb-2.5 flex items-baseline gap-2">
-        <h2 className="text-xs font-medium">{title}</h2>
-        <span className="text-2xs text-muted-foreground tabular-nums">{count} 个</span>
-        <span aria-hidden className="h-px flex-1 bg-border" />
-      </div>
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-3">
-        {children}
-      </div>
-    </section>
   );
 }

@@ -3,12 +3,14 @@ import type { CSSProperties } from "react";
 import { Archive, Check, MousePointer2, ScanSearch, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { CursorPreviewImage } from "@/components/cursor/CursorPreviewImage";
 import { CursorGrid } from "@/components/theme/CursorGrid";
+import { SlotMeter } from "@/components/theme/SlotMeter";
 import { DeleteThemeDialog } from "@/components/theme/DeleteThemeDialog";
 import { ThemeNameField } from "@/components/theme/ThemeNameField";
 import { useExportTheme } from "@/hooks/useExportTheme";
-import { coverage, coverSlot, slotStats } from "@/lib/slots";
+import { coverSlot, slotStats } from "@/lib/slots";
 import { actionBusyKey, useThemeStore } from "@/stores/themeStore";
 import type { CursorTheme } from "@/types/theme";
 
@@ -19,11 +21,13 @@ interface ThemeInspectorProps {
 }
 
 /**
- * 右侧检查器：选中方案的全部上下文与操作
+ * 右侧检查器：选中主题的全部上下文与操作
  *
  * 图库与「我的主题」共用它 —— 两个页面的「集合视图」完全不同（网格 / 表格），
  * 但「选中之后能做什么」应该一致，所以只在这里写一份。
  * 动作条固定在头部下方，不随槽位列表滚走；宽度由外部分隔条拖动。
+ * 「使用中」是标题区的小徽标，不再占一整条面板——状态跟着名字走，
+ * 主动作位只在真正能应用时才出现。
  */
 export function ThemeInspector({ theme, width }: ThemeInspectorProps) {
   const style: CSSProperties = { width };
@@ -42,9 +46,9 @@ function EmptyInspector({ style }: { style: CSSProperties }) {
         <ScanSearch className="size-5" />
       </div>
       <div className="space-y-1">
-        <p className="text-sm font-medium">还没有选中方案</p>
+        <p className="text-sm font-medium">还没有选中主题</p>
         <p className="text-xs leading-relaxed text-muted-foreground">
-          在中间点一个方案，这里会显示它的槽位预览、覆盖情况和可执行的操作
+          在中间点一个主题，这里会显示它的槽位预览、覆盖情况和可执行的操作
         </p>
       </div>
     </aside>
@@ -86,19 +90,28 @@ function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSPropert
     <aside aria-label="主题详情" style={style} className="flex shrink-0 flex-col">
       {/* key 让换选中项时整块重放淡入：换的是内容，不是弹了个新面板 */}
       <div key={theme.id} className="enter-fade flex min-h-0 flex-1 flex-col">
-        <div className="shrink-0 border-b p-4">
+        {/* 封面加大到 80px 后，头部与滚动区同步收一档内边距：
+            15 槽位在默认 320px 宽下仍要一屏放下（design_check 断言不溢出） */}
+        <div className="shrink-0 border-b p-3">
           <div className="flex items-start gap-3">
-            <span className="preview-surface grid size-12 shrink-0 place-items-center rounded-lg ring-1 ring-border/60">
+            <span className="preview-surface grid size-20 shrink-0 place-items-center rounded-lg ring-1 ring-border/60">
               {cover ? (
-                <CursorPreviewImage slot={cover} size="md" />
+                <CursorPreviewImage slot={cover} size="xl" />
               ) : (
                 <MousePointer2 className="size-5 text-muted-foreground" />
               )}
             </span>
 
             <div className="min-w-0 flex-1">
-              <h2 className="flex min-w-0 items-center">
+              <h2 className="flex min-w-0 items-center gap-1.5">
                 <ThemeNameField theme={theme} nameClassName="text-base font-medium" />
+                {isActive && (
+                  <span className="shrink-0">
+                    <StatusBadge tone="success" dot>
+                      使用中
+                    </StatusBadge>
+                  </span>
+                )}
               </h2>
               <p className="mt-0.5 truncate text-2xs text-muted-foreground">
                 {theme.is_built_in ? "系统方案" : "我的主题"}
@@ -108,17 +121,10 @@ function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSPropert
             </div>
           </div>
 
-          <div className="mt-3 flex items-center gap-1.5">
-            {/* 已在用的方案不该摆一个灰掉的按钮：它是状态，不是"暂时不能点的操作" */}
-            {isActive ? (
-              <div
-                role="status"
-                className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg bg-success/10 text-sm font-medium text-success"
-              >
-                <Check className="size-4" />
-                当前使用中
-              </div>
-            ) : (
+          <div className="mt-2.5 flex items-center gap-1.5">
+            {/* 已在用的主题不摆「应用」按钮：状态徽标已说明一切，
+                灰掉的按钮会让人以为"再点一次能刷新" */}
+            {!isActive && (
               <Button
                 className="flex-1"
                 onClick={() => applyTheme(theme.id)}
@@ -136,6 +142,7 @@ function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSPropert
               title={exporting ? "导出中…" : "导出 ZIP"}
               onClick={() => pickAndExport(theme)}
               disabled={exporting || deleting}
+              className={isActive ? "ml-auto" : undefined}
             >
               <Archive />
             </Button>
@@ -152,19 +159,14 @@ function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSPropert
           </div>
         </div>
 
-        <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-4">
+        <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-4 py-3">
           <div className="flex items-baseline justify-between">
             <h3 className="text-xs font-medium">槽位</h3>
             <span className="text-2xs text-muted-foreground tabular-nums">
               {stats.filled} / {stats.total}
             </span>
           </div>
-          <div className="mt-1.5 h-1 w-full overflow-hidden rounded-4xl bg-muted">
-            <div
-              className="h-full rounded-4xl bg-primary"
-              style={{ width: `${coverage(stats)}%` }}
-            />
-          </div>
+          <SlotMeter filled={stats.filled} total={stats.total} className="mt-1.5" />
           {stats.missing > 0 && (
             <p className="mt-1.5 text-2xs leading-relaxed text-muted-foreground">
               缺 {stats.missing} 个，未覆盖的槽位沿用当前系统光标

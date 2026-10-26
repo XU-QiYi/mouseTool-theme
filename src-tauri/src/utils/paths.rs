@@ -77,6 +77,14 @@ pub fn pending_import_file() -> Result<PathBuf, String> {
     Ok(data_root()?.join("pending_import.json"))
 }
 
+/// 应用内备份目录：`%LOCALAPPDATA%\CursorStudio\backups`
+///
+/// 只放本应用自己生成的备份 zip（「立即备份」落在「设置 → 数据」）；
+/// 「备份历史」只管理这里的内容，导出到任意位置的备份不受它管。
+pub fn backups_dir() -> Result<PathBuf, String> {
+    Ok(data_root()?.join("backups"))
+}
+
 /// 确保目录存在
 pub fn ensure_dir(path: &std::path::Path) -> Result<(), String> {
     std::fs::create_dir_all(path).map_err(|err| format!("创建目录 {} 失败：{err}", path.display()))

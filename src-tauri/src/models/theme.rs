@@ -45,8 +45,33 @@ pub struct ThemesResult {
     /// 由「注册表当前光标路径」与各主题的槽位路径比对得出，而不是界面自己记。
     /// `None` 表示识别不出：既可能是系统默认光标，也可能是用户手工改过设置。
     pub active_theme_id: Option<String>,
+    /// 注册表当前非空槽位数（只统计 15 个标准槽位）
+    ///
+    /// 用于区分 `active_theme_id = None` 的两种成因：0 = 系统默认，
+    /// 大于 0 = 槽位有值但不属于任何已知主题（被系统设置或其它工具改写）。
+    pub current_slots_filled: usize,
+    /// 槽位非空但匹配不到任何主题：光标被系统设置 / 其它工具改写
+    ///
+    /// 2026-10-26 真机实验结论：系统「鼠标指针样式」设置页会整体改写 15 个
+    /// 经典槽位（如选黑色写入 `%SystemRoot%\cursors\*_r.cur`），本应用不重查
+    /// 就会带着旧的「正在使用」状态骗人。前端据此在状态卡上给出警示。
+    pub active_external: bool,
     /// **最近主题**（不是原始事件流）：同一主题只留最新一条，最多 50 个，最新在前
     pub recent: Vec<HistoryEntry>,
+}
+
+/// `get_active_state` 的返回值：窗口聚焦时轻量重查「当前使用」
+///
+/// 只重读注册表与主题清单做比对，不重读历史、不动界面其余状态——
+/// 聚焦很频繁，别把整个 `get_all_themes` 的成本都压上去。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveState {
+    /// 注册表里当前生效的主题 ID；`None` = 系统默认或被外部改写
+    pub active_theme_id: Option<String>,
+    /// 注册表当前非空槽位数（只统计 15 个标准槽位）
+    pub current_slots_filled: usize,
+    /// 槽位非空但匹配不到任何主题（被系统设置 / 其它工具改写）
+    pub active_external: bool,
 }
 
 /// 一条历史事件（每次应用主题产生一条，不去重）

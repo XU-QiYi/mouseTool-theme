@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 import type {
+  ActiveState,
   ApplyOutcome,
   CursorTheme,
   HistoryEntry,
@@ -32,6 +33,22 @@ function stamp(): string {
 /** 浏览器里没有 history.json，用内存数组模拟，方便开发时走通「最近使用」 */
 let devRecent: HistoryEntry[] = [...MOCK_RECENT];
 
+/**
+ * 浏览器里模拟「已导入主题」的内存数组（最新在前）
+ *
+ * mock 的 `importTheme` 落在这里，让批量导入中心跑完后的 `loadThemes()`
+ * 也能读到新主题——真机上这一步是从磁盘读回，语义一致。
+ */
+let devThemes: CursorTheme[] = [];
+
+/**
+ * 浏览器里模拟的「当前使用」状态（决策 24）
+ *
+ * 真机上它由注册表反推；mock 里由 apply / restore 维护，
+ * 让聚焦重查（refreshActive）在开发与自动化验收中不把状态冲掉。
+ */
+const devActive: { id: string | null; external: boolean } = { id: null, external: false };
+
 /** 对应 Rust 命令 `get_all_themes`；数据源独立容错，失败项进 warnings 而非整体报错 */
 export function getAllThemes(): Promise<ThemesResult> {
   if (!inTauri) {
@@ -41,15 +58,37 @@ export function getAllThemes(): Promise<ThemesResult> {
     if (new URLSearchParams(window.location.search).has("mock-fail")) {
       return Promise.reject(new Error("读取光标方案被拒绝（EACCES，模拟）"));
     }
-    // 浏览器里读不到注册表，无法判断哪个主题正在使用
+    // 浏览器里读不到注册表，用 mock 状态回填（槽位数编一个自洽的）
     return Promise.resolve({
-      themes: MOCK_THEMES,
+      themes: [...devThemes, ...MOCK_THEMES],
       warnings: [],
-      active_theme_id: null,
+      active_theme_id: devActive.id,
+      current_slots_filled: devActive.id ? 15 : 0,
+      active_external: devActive.external,
       recent: devRecent,
     });
   }
   return invoke<ThemesResult>("get_all_themes");
+}
+
+/** 对应 Rust 命令 `get_active_state`：聚焦时轻量重查「当前使用」（决策 24） */
+export function getActiveState(): Promise<ActiveState> {
+  if (!inTauri) {
+    // 开发用开关：?mock-external=1 强制「被外部改写」态，方便目验状态卡警示
+    if (new URLSearchParams(window.location.search).has("mock-external")) {
+      return Promise.resolve({
+        active_theme_id: null,
+        current_slots_filled: 13,
+        active_external: true,
+      });
+    }
+    return Promise.resolve({
+      active_theme_id: devActive.id,
+      current_slots_filled: devActive.id ? 15 : 0,
+      active_external: devActive.external,
+    });
+  }
+  return invoke<ActiveState>("get_active_state");
 }
 
 /** 对应 Rust 命令 `get_cursor_preview`；浏览器环境无文件系统，返回 null 走占位图 */
@@ -68,6 +107,8 @@ export function getCursorPreview(filePath: string): Promise<CursorPreview | null
 export function applyTheme(theme: CursorTheme): Promise<ApplyOutcome> {
   if (!inTauri) {
     console.warn("[dev] 非 Tauri 环境，跳过应用到系统");
+    devActive.id = theme.id;
+    devActive.external = false;
     devRecent = [
       {
         theme_id: theme.id,
@@ -86,6 +127,8 @@ export function applyTheme(theme: CursorTheme): Promise<ApplyOutcome> {
 export function restoreDefault(): Promise<void> {
   if (!inTauri) {
     console.warn("[dev] 非 Tauri 环境，跳过恢复默认");
+    devActive.id = null;
+    devActive.external = false;
     return Promise.resolve();
   }
   return invoke<void>("restore_default");
@@ -110,16 +153,19 @@ export async function importTheme(
       total: 1,
       message: "导入完成（开发模式）",
     });
+    const theme: CursorTheme = {
+      id: crypto.randomUUID(),
+      name,
+      description: `导入自 ${fileName}`,
+      created_at: now,
+      updated_at: now,
+      is_built_in: false,
+      cursors: sample.cursors,
+    };
+    // 落进 mock 的「磁盘」：之后的 getAllThemes（重读列表）也能看到它
+    devThemes = [theme, ...devThemes];
     return {
-      theme: {
-        id: crypto.randomUUID(),
-        name,
-        description: `导入自 ${fileName}`,
-        created_at: now,
-        updated_at: now,
-        is_built_in: false,
-        cursors: sample.cursors,
-      },
+      theme,
       warnings: [],
     };
   }

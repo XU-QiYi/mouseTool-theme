@@ -198,12 +198,17 @@ pub fn write_cursors(slots: &[CursorSlot], theme_name: &str) -> Result<(), Strin
 }
 
 /// 恢复系统默认：清空 15 个标准槽位
+///
+/// 顺手清空 Win11 新指针样式的 `Pin` / `Person` 残留（只在值已存在时写）：
+/// 系统「鼠标指针样式」页改样式会把它们写成 `pin_r.cur` 之类（2026-10-26
+/// 真机实验），不清的话「还原默认」之后注册表仍指着那套文件。
+/// 需要 KEY_READ：判断值是否存在得先读，只开 KEY_WRITE 的句柄读不了。
 pub fn clear_cursors() -> Result<(), String> {
     let empty = String::new();
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let key_path = cursors_key();
     let key = hkcu
-        .open_subkey_with_flags(&key_path, KEY_WRITE)
+        .open_subkey_with_flags(&key_path, KEY_READ | KEY_WRITE)
         .map_err(|err| format!("无法打开注册表键 HKCU\\{key_path}：{err}"))?;
 
     for (slot_key, _, _) in SLOT_DEFS.iter() {
@@ -214,6 +219,14 @@ pub fn clear_cursors() -> Result<(), String> {
         .map_err(|err| format!("清空方案名失败：{err}"))?;
     key.set_value("", &empty)
         .map_err(|err| format!("清空默认值失败：{err}"))?;
+
+    for extra in ["Pin", "Person"] {
+        // 值不存在就不创建：Win10 等老系统没有这对键，凭空写空值没意义
+        if key.get_value::<String, _>(extra).is_ok() {
+            key.set_value(extra, &empty)
+                .map_err(|err| format!("清空 {extra} 失败：{err}"))?;
+        }
+    }
 
     Ok(())
 }
@@ -470,6 +483,37 @@ mod tests {
             assert_eq!(read_slot_value(slot_key).unwrap(), "", "{slot_key} 应为空");
         }
         assert_eq!(read_slot_value("SchemeName").unwrap(), "");
+    }
+
+    /// 2026-10-26 真机实验：系统指针样式页会把 Win11 新键 `Pin` / `Person`
+    /// 写成 `pin_r.cur` 之类，还原默认时必须一并清掉，否则注册表残留那套文件
+    #[test]
+    fn 恢复默认会清掉新指针键残留() {
+        let _guard = isolate("clear-pin");
+
+        let key = open_cursors(KEY_WRITE);
+        key.set_value("Pin", &r"%SystemRoot%\cursors\pin_r.cur".to_string())
+            .expect("写 Pin");
+        key.set_value("Person", &r"%SystemRoot%\cursors\person_r.cur".to_string())
+            .expect("写 Person");
+
+        clear_cursors().expect("清空应成功");
+        assert_eq!(read_slot_value("Pin").unwrap(), "", "Pin 残留应被清掉");
+        assert_eq!(read_slot_value("Person").unwrap(), "", "Person 残留应被清掉");
+    }
+
+    /// 老系统没有这对键：不能因为还原默认就凭空创建空值
+    #[test]
+    fn 恢复默认不会凭空创建新指针键() {
+        let _guard = isolate("clear-pin-absent");
+
+        clear_cursors().expect("清空应成功");
+
+        let key = open_cursors(KEY_READ);
+        let pin = key.get_raw_value("Pin");
+        assert!(pin.is_err(), "Pin 原本不存在就不该被创建");
+        let person = key.get_raw_value("Person");
+        assert!(person.is_err(), "Person 原本不存在就不该被创建");
     }
 
     #[test]

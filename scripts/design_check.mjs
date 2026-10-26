@@ -88,7 +88,7 @@ try {
   // 0.5 品牌标记：侧栏顶部用应用图标里的指针轮廓（单色），不是 lucide 通用箭头
   assert(
     "侧栏品牌位用品牌指针",
-    await evaluate(`!!document.querySelector('aside svg[aria-label="鼠标主题工具"]')`),
+    await evaluate(`!!document.querySelector("aside [data-brand-mark]")`),
   );
 
   // 1. 结构断言（逐条查，任何一条出错都能定位）
@@ -457,7 +457,7 @@ try {
     JSON.parse(
       await evaluate(`(() => {
         const cs = getComputedStyle(document.body);
-        const active = [...document.querySelectorAll('[aria-label="应用主题"] [role="radio"]')]
+        const active = [...document.querySelectorAll('[aria-label="界面外观"] [role="radio"]')]
           .find((b) => b.getAttribute("aria-checked") === "true");
         return JSON.stringify({
           mode: active?.textContent.trim() ?? null,
@@ -471,7 +471,7 @@ try {
     );
   const clickMode = async (label) => {
     await evaluate(
-      `[...document.querySelectorAll('[aria-label="应用主题"] [role="radio"]')].find((b) => b.textContent.includes("${label}"))?.click()`,
+      `[...document.querySelectorAll('[aria-label="界面外观"] [role="radio"]')].find((b) => b.textContent.includes("${label}"))?.click()`,
     );
     await sleep(350);
   };

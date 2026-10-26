@@ -166,20 +166,42 @@ try {
   check("完整路径的 zip 放行", verdicts.zip === null, String(verdicts.zip));
   check("浏览器文件名通路仍只收 zip", verdicts.browser === "只支持 .zip 主题包", String(verdicts.browser));
 
-  // 4. 数量校验
+  // 4. 多文件：不再报「一次只能导入一个」，而是进导入中心队列
   await drag("drop", ["a.zip", "b.zip"]);
-  const multiText = await waitToast("一次只能");
-  check("多个文件一次只收一个", multiText.includes("一次只能导入一个主题包"), multiText);
+  const queued = await evaluate(`(() => {
+    const store = window.__importStore?.getState();
+    return JSON.stringify({
+      open: store?.open ?? null,
+      count: store?.jobs.length ?? 0,
+      names: (store?.jobs ?? []).map((job) => job.name).join("/"),
+      running: store?.running ?? null,
+    });
+  })()`);
+  const queueState = JSON.parse(queued);
+  check(
+    "多文件打开导入中心且队列为 2",
+    queueState.open === true && queueState.count === 2 && queueState.names === "a.zip/b.zip",
+    queued,
+  );
+  check("多文件不自动开始（等用户点「开始导入」）", queueState.running === false, String(queueState.running));
+  const queueToast = await firstToast();
+  check("多文件提示已加入队列", queueToast.includes("已加入导入队列"), queueToast);
 
-  // 5. 非文件拖入（文本、网页元素）：静默忽略，不弹错
+  // 5. 非文件拖入（文本、网页元素）：静默忽略，不弹错、不动队列
+  const beforeCount = await evaluate(`window.__importStore.getState().jobs.length`);
   await drag("drop", [], null, false);
   await sleep(500);
   const silentText = await firstToast();
+  const afterCount = await evaluate(`window.__importStore.getState().jobs.length`);
   check(
     "非文件拖入静默忽略",
-    silentText.includes("一次只能导入一个主题包"),
-    `最新一条仍是上一条错误：「${silentText.slice(0, 30)}」`,
+    silentText.includes("已加入导入队列") && afterCount === beforeCount,
+    `最新一条仍是上一条提示，队列 ${beforeCount} -> ${afterCount}`,
   );
+
+  // 收尾：关掉导入中心（未运行可以直接关），别让弹窗挡住后面的截图
+  await evaluate(`window.__importStore?.getState().closeCenter()`);
+  await sleep(300);
 
   await screenshot("dnd_final.png");
   check("运行期无 JS 异常", pageErrors.length === 0, pageErrors.join(" | "));

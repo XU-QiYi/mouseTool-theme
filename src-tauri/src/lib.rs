@@ -2,7 +2,7 @@ pub mod commands;
 pub mod models;
 pub mod utils;
 
-use commands::backup::{export_backup, import_backup};
+use commands::backup::{delete_backup, export_backup, import_backup, list_backups};
 use commands::cursor::get_cursor_preview;
 use commands::data::{get_data_dir, open_data_dir};
 use commands::settings::{
@@ -13,8 +13,8 @@ use commands::system::{
     take_pending_import,
 };
 use commands::theme::{
-    apply_theme, delete_theme, export_theme, get_all_themes, import_theme, rename_theme,
-    restore_default,
+    apply_theme, delete_theme, export_theme, get_active_state, get_all_themes, import_theme,
+    rename_theme, restore_default,
 };
 use utils::settings::{self, CloseBehavior};
 use utils::{integration, tray};
@@ -45,6 +45,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_all_themes,
+            get_active_state,
             get_cursor_preview,
             apply_theme,
             restore_default,
@@ -66,7 +67,9 @@ pub fn run() {
             preview_themes_dir,
             set_themes_dir,
             export_backup,
-            import_backup
+            import_backup,
+            list_backups,
+            delete_backup
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

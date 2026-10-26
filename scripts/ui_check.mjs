@@ -87,9 +87,11 @@ try {
 
   const state = await send("Runtime.evaluate", {
     expression: `(() => {
-      const strip = [...document.querySelectorAll('[role="status"]')].find(e => e.textContent.includes("当前使用中"));
+      // 当前使用态是标题区的 success 状态徽标（决策 2），不再是整条 role="status" 大面板
+      const badge = [...document.querySelectorAll("[data-status-badge]")].some(e => e.textContent.includes("使用中"));
       const using = [...document.querySelectorAll("*")].some(e => e.textContent === "使用中");
-      return JSON.stringify({ 动作区变为使用中状态: !!strip, 卡片有使用中角标: using });
+      const applyGone = ![...document.querySelectorAll("button")].some(b => b.textContent.includes("应用此主题"));
+      return JSON.stringify({ 检查器有使用中徽标: badge, 卡片有使用中角标: using, 使用中不再显示应用按钮: applyGone });
     })()`,
     returnByValue: true,
   });

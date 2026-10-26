@@ -55,8 +55,22 @@ export interface ThemesResult {
    * 不要指望从本地存储恢复它：重启后注册表才是事实来源。
    */
   active_theme_id: string | null;
+  /** 注册表当前非空槽位数（只统计 15 个标准槽位）；0 = 系统默认 */
+  current_slots_filled: number;
+  /** 槽位非空但匹配不到任何主题：被系统设置或其它工具改写（决策 24） */
+  active_external: boolean;
   /** 最近主题（由后端事件流派生，按主题去重），最新在前 */
   recent: HistoryEntry[];
+}
+
+/** 与 Rust 端 `models::ActiveState` 字段一一对应（`get_active_state`） */
+export interface ActiveState {
+  /** 注册表里当前生效的主题 ID；null = 系统默认或被外部改写 */
+  active_theme_id: string | null;
+  /** 注册表当前非空槽位数（只统计 15 个标准槽位） */
+  current_slots_filled: number;
+  /** 槽位非空但匹配不到任何主题（被系统设置 / 其它工具改写） */
+  active_external: boolean;
 }
 
 /** 与 Rust 端 `models::ApplyOutcome` 字段一一对应 */

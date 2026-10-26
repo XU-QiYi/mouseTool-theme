@@ -1,11 +1,12 @@
 import { useEffect } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Monitor, Moon, Sun, TriangleAlert } from "lucide-react";
+import { Monitor, Moon, Sun } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
 import { Toggle } from "@/components/ui/toggle";
 import { SettingCard, SettingsGroup } from "@/components/settings/SettingCard";
+import { SettingsStatusBanner } from "@/components/settings/SettingsStatusBanner";
 import { ThemesDirDialog } from "@/components/settings/ThemesDirDialog";
 import { setThemeMode, useThemeMode, type ThemeMode } from "@/lib/theme-mode";
 import { toast } from "@/lib/toast";
@@ -29,12 +30,14 @@ const CLOSE_BEHAVIORS = [
  *
  * 每张卡片一个可立即生效的决定：外观走 localStorage（首帧落色要同步读），
  * 其余行为项走 settings.json（Rust 也要读，见 `utils/settings.rs` 的分工注释）。
+ * 读取失败不静默：顶部横幅给重试出口，别让开关永远停在「读取中…」。
  */
 export function GeneralSection() {
   const themeMode = useThemeMode();
   const settings = useSettingsStore((s) => s.settings);
   const settingsError = useSettingsStore((s) => s.settingsError);
   const autostart = useSettingsStore((s) => s.autostart);
+  const autostartError = useSettingsStore((s) => s.autostartError);
   const loadSettings = useSettingsStore((s) => s.loadSettings);
   const loadAutostart = useSettingsStore((s) => s.loadAutostart);
   const patchSettings = useSettingsStore((s) => s.patchSettings);
@@ -70,6 +73,17 @@ export function GeneralSection() {
 
   return (
     <div>
+      {settingsError && (
+        <SettingsStatusBanner
+          tone="destructive"
+          title="设置读取失败"
+          retryLabel="重试"
+          onRetry={() => void loadSettings()}
+        >
+          {settingsError}。设置暂时无法修改，重启应用通常可以恢复。
+        </SettingsStatusBanner>
+      )}
+
       {settings && settings.warnings.length > 0 && (
         <div
           role="alert"
@@ -77,9 +91,8 @@ export function GeneralSection() {
           className="mb-4 rounded-lg bg-warning/10 px-3 py-2 ring-1 ring-warning/25"
         >
           <div className="flex items-start gap-2">
-            <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-warning" />
             <div className="min-w-0">
-              <p className="text-xs font-medium">设置文件需要处理</p>
+              <p className="text-xs font-medium text-warning">设置文件需要处理</p>
               <ul className="mt-0.5 space-y-0.5">
                 {settings.warnings.map((warning) => (
                   <li key={warning} className="break-all text-2xs text-muted-foreground">
@@ -94,11 +107,11 @@ export function GeneralSection() {
 
       <SettingsGroup title="外观">
         <SettingCard
-          title="应用主题"
+          title="界面外观"
           description="默认跟随系统；手动选浅色 / 深色后不再跟随，直到选回「跟随系统」"
           action={
             <Segmented
-              label="应用主题"
+              label="界面外观"
               value={themeMode}
               options={THEME_MODES.map((mode) => ({
                 value: mode.value as ThemeMode,
@@ -124,16 +137,29 @@ export function GeneralSection() {
             />
           }
         >
-          <p
-            data-autostart-status
-            className="mt-3 break-all text-2xs text-muted-foreground"
-          >
-            {autostart
-              ? autostart.enabled
-                ? `已开启 · 命令指向 ${autostart.exe_path}`
-                : "未开启"
-              : "读取中…"}
+          <p data-autostart-status className="mt-3 break-all text-2xs text-muted-foreground">
+            {autostart ? (
+              autostart.enabled ? (
+                `已开启 · 命令指向 ${autostart.exe_path}`
+              ) : (
+                "未开启"
+              )
+            ) : autostartError ? (
+              <>读取失败：{autostartError}</>
+            ) : (
+              "读取中…"
+            )}
           </p>
+          {autostartError && !autostart && (
+            <Button
+              size="xs"
+              variant="outline"
+              className="mt-1.5"
+              onClick={() => void loadAutostart()}
+            >
+              重试读取
+            </Button>
+          )}
         </SettingCard>
 
         <SettingCard
@@ -154,13 +180,7 @@ export function GeneralSection() {
               onChange={(value) => void patchSettings({ close_behavior: value })}
             />
           }
-        >
-          {settingsError && (
-            <p className="mt-3 break-all text-2xs text-muted-foreground">
-              设置读取失败：{settingsError}
-            </p>
-          )}
-        </SettingCard>
+        />
       </SettingsGroup>
 
       <SettingsGroup title="存储与更新">

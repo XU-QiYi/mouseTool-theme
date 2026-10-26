@@ -1,107 +1,58 @@
 import { useEffect, useState } from "react";
-import { open, save } from "@tauri-apps/plugin-dialog";
-import { Copy, FolderOpen } from "lucide-react";
+import { Archive, FolderOpen, History } from "lucide-react";
 
-import {
-  AlertDialog,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { SettingCard, SettingsGroup } from "@/components/settings/SettingCard";
-import { useDiagnostics } from "@/hooks/useDiagnostics";
-import { toast, readableError } from "@/lib/toast";
-import { inTauri, type TaskProgress } from "@/services/theme";
-import { useSettingsStore } from "@/stores/settingsStore";
+import { SettingsStatusBanner } from "@/components/settings/SettingsStatusBanner";
+import { BackupProgress } from "@/components/settings/BackupProgress";
+import { BackupHistorySection } from "@/components/settings/BackupHistorySection";
+import { DiagnosticsCard } from "@/components/settings/DiagnosticsDialog";
 import { useThemeStore } from "@/stores/themeStore";
-
-function progressPercent(progress: TaskProgress): number {
-  if (progress.stage === "done") return 100;
-  if (progress.total <= 0) return 0;
-  return Math.min(100, Math.round((progress.current / progress.total) * 100));
-}
+import { useSettingsStore } from "@/stores/settingsStore";
 
 /**
  * 数据：数据目录、备份与诊断（决策 11/12 的维护锚点）
  *
  * 这一页不依赖主题列表——加载失败时它反而更要可用。
+ * 备份分两个视图：主视图是「立即备份 + 入口」，点「备份历史」切到子页
+ * （只管理应用内 `backups\` 目录，见 BackupHistorySection）。
  */
 export function DataSection() {
   const dataDir = useThemeStore((s) => s.dataDir);
+  const dataDirError = useThemeStore((s) => s.dataDirError);
   const loadDataDir = useThemeStore((s) => s.loadDataDir);
   const openDataDir = useThemeStore((s) => s.openDataDir);
   const backupBusy = useSettingsStore((s) => s.backupBusy);
   const backupProgress = useSettingsStore((s) => s.backupProgress);
   const backupNote = useSettingsStore((s) => s.backupNote);
   const exportBackupTo = useSettingsStore((s) => s.exportBackupTo);
-  const restoreBackupFrom = useSettingsStore((s) => s.restoreBackupFrom);
-  // 选好备份文件后先停下确认：恢复会往数据目录里写东西，不能点错文件就直接跑
-  const [pendingRestore, setPendingRestore] = useState<string | null>(null);
 
-  const diagnostics = useDiagnostics();
+  const [view, setView] = useState<"main" | "backups">("main");
 
   useEffect(() => {
     loadDataDir();
   }, [loadDataDir]);
 
-  const copyDiagnostics = async () => {
-    try {
-      await navigator.clipboard.writeText(diagnostics);
-      toast.success("已复制诊断信息", "报障时直接粘贴即可");
-    } catch {
-      // WebView 的剪贴板可能被策略挡住：文本始终可见，手动选中也能用
-      toast.error("复制失败", "请手动选中下方文本复制");
-    }
-  };
-
-  // 导出备份：选落点 → 打包。合并语义不需要二次确认（不动现有数据）
-  const onExportBackup = async () => {
-    if (!inTauri) {
-      toast.info("开发模式无法备份", "文件选择需要桌面环境，请用 npm run tauri dev 启动");
-      return;
-    }
-    try {
-      const dest = await save({
-        defaultPath: "cursorstudio-backup.zip",
-        filters: [{ name: "备份包", extensions: ["zip"] }],
-      });
-      if (typeof dest !== "string") return;
-      await exportBackupTo(dest);
-    } catch (err) {
-      console.error("选择备份位置失败：", err);
-      toast.error("无法选择备份位置", readableError(err));
-    }
-  };
-
-  // 第一步只选文件；真正写入在确认对话框之后
-  const pickRestoreFile = async () => {
-    if (!inTauri) {
-      toast.info("开发模式无法恢复", "文件选择需要桌面环境，请用 npm run tauri dev 启动");
-      return;
-    }
-    try {
-      const selected = await open({
-        multiple: false,
-        directory: false,
-        filters: [{ name: "备份包", extensions: ["zip"] }],
-      });
-      if (typeof selected === "string") setPendingRestore(selected);
-    } catch (err) {
-      console.error("选择备份文件失败：", err);
-      toast.error("无法选择备份文件", readableError(err));
-    }
-  };
-
-  const percent = backupProgress ? progressPercent(backupProgress) : 0;
+  if (view === "backups") {
+    return <BackupHistorySection onBack={() => setView("main")} />;
+  }
 
   return (
     <div>
+      {dataDirError && !dataDir && (
+        <SettingsStatusBanner
+          tone="warning"
+          title="数据目录读取失败"
+          retryLabel="重试"
+          onRetry={() => void loadDataDir()}
+        >
+          {dataDirError}
+        </SettingsStatusBanner>
+      )}
       <SettingsGroup>
         <SettingCard
           title="数据目录"
-          description="存放导入的主题（themes\\）与最近使用记录（history.json）；卸载应用不会删除这里。"
+          description="存放导入的主题（themes\）、应用内备份（backups\）与最近使用记录（history.json）；卸载应用不会删除这里。"
           action={
             <Button size="sm" onClick={openDataDir}>
               <FolderOpen data-icon="inline-start" />
@@ -120,110 +71,37 @@ export function DataSection() {
 
         <SettingCard
           title="数据备份"
-          description="整包导出主题与使用记录；恢复是合并式——本地已有的保留，只补回缺失的"
+          description="「立即备份」保存到数据目录的 backups\，可在「备份历史」里恢复或清理；恢复是合并式——本地已有的保留，只补回缺失的"
           action={
             <div className="flex items-center gap-2">
               <Button
                 size="sm"
-                variant="outline"
-                onClick={() => void onExportBackup()}
+                onClick={() => void exportBackupTo(null)}
                 disabled={backupBusy !== null}
               >
-                {backupBusy === "export" ? "导出中…" : "导出备份"}
+                <Archive data-icon="inline-start" />
+                {backupBusy === "export" ? "备份中…" : "立即备份"}
               </Button>
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => void pickRestoreFile()}
+                onClick={() => setView("backups")}
                 disabled={backupBusy !== null}
               >
-                {backupBusy === "import" ? "恢复中…" : "从备份恢复"}
+                <History data-icon="inline-start" />
+                备份历史
               </Button>
             </div>
           }
         >
-          {backupBusy && backupProgress && (
-            <div data-backup-progress={backupProgress.stage} aria-live="polite" className="mt-3">
-              <div className="flex items-baseline justify-between gap-3 text-xs">
-                <span className="text-muted-foreground">{backupProgress.message}</span>
-                <span className="font-mono text-2xs text-muted-foreground">{percent}%</span>
-              </div>
-              <div
-                role="progressbar"
-                aria-label="备份进度"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={percent}
-                className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-border"
-              >
-                <div className="h-full bg-primary" style={{ width: `${percent}%` }} />
-              </div>
-            </div>
-          )}
+          {backupBusy && backupProgress && <BackupProgress progress={backupProgress} />}
           <p data-backup-status className="mt-3 break-all text-2xs text-muted-foreground">
             {backupNote}
           </p>
         </SettingCard>
 
-        <SettingCard
-          title="诊断信息"
-          description="报障时复制这段文本，省得来回描述环境"
-          action={
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={copyDiagnostics}
-              disabled={!diagnostics}
-            >
-              <Copy data-icon="inline-start" />
-              复制
-            </Button>
-          }
-        >
-          <pre
-            data-diagnostics
-            className="mt-3 font-mono text-2xs break-all whitespace-pre-wrap text-muted-foreground select-text"
-          >
-            {diagnostics || "…"}
-          </pre>
-        </SettingCard>
+        <DiagnosticsCard />
       </SettingsGroup>
-
-      <AlertDialog
-        open={pendingRestore !== null}
-        onOpenChange={(next) => {
-          if (!next) setPendingRestore(null);
-        }}
-      >
-        {pendingRestore && (
-          <AlertDialogContent className="w-[30rem]">
-            <AlertDialogTitle>从备份恢复？</AlertDialogTitle>
-            <AlertDialogDescription>
-              会补回备份里的主题与使用记录；本地已有的同 ID 主题会整套跳过，不会被覆盖。
-            </AlertDialogDescription>
-            <p
-              data-restore-source
-              className="mt-3 break-all font-mono text-2xs text-muted-foreground select-text"
-            >
-              {pendingRestore}
-            </p>
-            <AlertDialogFooter>
-              <Button variant="outline" onClick={() => setPendingRestore(null)}>
-                取消
-              </Button>
-              <Button
-                onClick={() => {
-                  const path = pendingRestore;
-                  setPendingRestore(null);
-                  void restoreBackupFrom(path);
-                }}
-              >
-                开始恢复
-              </Button>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        )}
-      </AlertDialog>
     </div>
   );
 }

@@ -299,6 +299,10 @@ async function mockSetThemesDir(
 export interface ExportBackupSummary {
   themes: number;
   files: number;
+  /** 备份最终落盘的位置（应用内备份 = 数据目录 backups\ 下的路径） */
+  saved_path: string;
+  /** 备份文件体积（字节） */
+  bytes: number;
   warnings: string[];
 }
 
@@ -310,12 +314,33 @@ export interface ImportBackupSummary {
   warnings: string[];
 }
 
-/** 导出全部主题与使用记录为备份 zip；进度来自 `backup-progress` 事件 */
+/** 备份历史的一条记录（`list_backups`），字段与 Rust `BackupEntry` 一一对应 */
+export interface BackupEntry {
+  file_name: string;
+  path: string;
+  /** 文件修改时间，本地时区 `YYYY-MM-DD HH:MM`；读不到为「未知」 */
+  created_at: string;
+  /** 目前固定 "manual" */
+  kind: string;
+  themes: number;
+  files: number;
+  bytes: number;
+  /** "ok" | "corrupt" */
+  status: string;
+  error: string | null;
+}
+
+/**
+ * 导出全部主题与使用记录为备份 zip；进度来自 `backup-progress` 事件
+ *
+ * `destPath = null` 写入应用内备份目录 `backups\`（自动命名，进「备份历史」）；
+ * 传路径则导出到用户自选位置（不受历史管理）。
+ */
 export async function exportBackup(
-  destPath: string,
+  destPath: string | null,
   onProgress?: (progress: TaskProgress) => void,
 ): Promise<ExportBackupSummary> {
-  if (!inTauri) return { themes: 0, files: 0, warnings: [] };
+  if (!inTauri) return mockExportBackup(destPath, onProgress);
 
   let unlisten: (() => void) | undefined;
   if (onProgress) {
@@ -350,4 +375,109 @@ export async function importBackup(
   } finally {
     unlisten?.();
   }
+}
+
+// ---------------------------------------------------------------------------
+// 备份历史（应用内备份目录 backups\）
+// ---------------------------------------------------------------------------
+
+/** 列出应用内备份（按时间倒序）；目录不存在返回空 */
+export function listBackups(): Promise<BackupEntry[]> {
+  if (!inTauri) return Promise.resolve([...mockBackups]);
+  return invoke<BackupEntry[]>("list_backups");
+}
+
+/** 删除一个应用内备份（只按文件名，后端拒绝越出 backups\ 的输入） */
+export function deleteBackup(fileName: string): Promise<void> {
+  if (!inTauri) {
+    mockBackups = mockBackups.filter((entry) => entry.file_name !== fileName);
+    return Promise.resolve();
+  }
+  return invoke<void>("delete_backup", { fileName });
+}
+
+// ---------------------------------------------------------------------------
+// 开发模式备份模拟
+// ---------------------------------------------------------------------------
+
+const MOCK_BACKUPS_DIR = `${MOCK_DATA_ROOT}\\backups`;
+
+/** 浏览器里的示例备份历史：内存数组，删除 / 新增只改内存 */
+let mockBackups: BackupEntry[] = [
+  {
+    file_name: "cursorstudio-backup-20261026-093000.zip",
+    path: `${MOCK_BACKUPS_DIR}\\cursorstudio-backup-20261026-093000.zip`,
+    created_at: "2026-10-26 09:30",
+    kind: "manual",
+    themes: 2,
+    files: 9,
+    bytes: 1_234_567,
+    status: "ok",
+    error: null,
+  },
+  {
+    file_name: "cursorstudio-backup-20261025-184500.zip",
+    path: `${MOCK_BACKUPS_DIR}\\cursorstudio-backup-20261025-184500.zip`,
+    created_at: "2026-10-25 18:45",
+    kind: "manual",
+    themes: 1,
+    files: 5,
+    bytes: 640_112,
+    status: "ok",
+    error: null,
+  },
+];
+
+function mockStamp(offsetMinutes = 0): string {
+  const now = new Date(Date.now() - offsetMinutes * 60_000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+}
+
+async function mockExportBackup(
+  destPath: string | null,
+  onProgress?: (progress: TaskProgress) => void,
+): Promise<ExportBackupSummary> {
+  const userThemes = MOCK_THEMES.filter((theme) => !theme.is_built_in);
+  const files = userThemes.reduce((sum, theme) => sum + theme.cursors.length, 0) + 1;
+  onProgress?.({
+    stage: "write",
+    current: files,
+    total: files,
+    message: `正在打包主题（${userThemes.length}/${userThemes.length}）`,
+  });
+  await delay(120);
+  const file_name = `cursorstudio-backup-${mockStamp()}.zip`;
+  const saved_path =
+    destPath ?? `${MOCK_BACKUPS_DIR}\\${file_name}`;
+  if (destPath === null) {
+    mockBackups = [
+      {
+        file_name,
+        path: saved_path,
+        created_at: new Date().toLocaleString("zh-CN", {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+        kind: "manual",
+        themes: userThemes.length,
+        files,
+        bytes: 1_048_576,
+        status: "ok",
+        error: null,
+      },
+      ...mockBackups,
+    ];
+  }
+  onProgress?.({ stage: "done", current: files, total: files, message: "备份完成（开发模式）" });
+  return {
+    themes: userThemes.length,
+    files,
+    saved_path,
+    bytes: 1_048_576,
+    warnings: [],
+  };
 }

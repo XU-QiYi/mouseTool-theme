@@ -210,6 +210,14 @@
   }
 }
 
+/* 搜索框：藏掉 WebView 原生清除按钮——SearchField 自带的清除按钮
+   才能"清空后焦点留在框里继续输"，两个清除按钮并存只会点错 */
+[data-search-input]::-webkit-search-cancel-button,
+[data-search-input]::-webkit-search-decoration {
+  -webkit-appearance: none;
+  display: none;
+}
+
 /* 键盘焦点：所有可交互元素默认可见，不依赖组件是否用了 Button
    焦点环用不透明 ring —— 半透明（ring/50）在浅底上对比度不足 3:1，形同没有 */
 @utility focus-ring {

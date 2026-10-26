@@ -65,9 +65,8 @@ export function initShortcuts(): () => void {
         }
         break;
       case "KeyF": {
-        const search = document.querySelector<HTMLInputElement>(
-          'input[placeholder^="搜索"]',
-        );
+        // SearchField 带 data-search-input；没有搜索框的页面放行给 WebView 查找
+        const search = document.querySelector<HTMLInputElement>("[data-search-input]");
         if (search) {
           event.preventDefault();
           search.focus();

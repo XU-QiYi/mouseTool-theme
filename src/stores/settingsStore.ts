@@ -47,6 +47,8 @@ interface SettingsStore {
   autostart: AutostartStatus | null;
   /** 读取失败原因；null = 没有失败（与「还没读到」区分开） */
   settingsError: string | null;
+  /** 自启动状态读取失败原因；null = 没有失败。停在「读取中…」比失败更骗人 */
+  autostartError: string | null;
 
   /** 迁移确认框是否打开 */
   themesDirOpen: boolean;
@@ -84,8 +86,8 @@ interface SettingsStore {
   retryThemesDirPlan: () => Promise<void>;
   /** 确认迁移；成功后设置与主题列表一起刷新 */
   confirmThemesDirChange: () => Promise<void>;
-  /** 导出备份到指定路径；状态与提示都由 store 持有，切走再回来仍能看到进度 */
-  exportBackupTo: (destPath: string) => Promise<void>;
+  /** 导出备份（null = 写入应用内 backups\，路径 = 用户自选落点） */
+  exportBackupTo: (destPath: string | null) => Promise<void>;
   /** 从指定备份合并恢复；成功后重读主题列表 */
   restoreBackupFrom: (zipPath: string) => Promise<void>;
 }
@@ -94,6 +96,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   settings: null,
   autostart: null,
   settingsError: null,
+  autostartError: null,
   themesDirOpen: false,
   themesDirTarget: null,
   themesDirPlan: null,
@@ -121,19 +124,27 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 
   loadAutostart: async () => {
     try {
-      set({ autostart: await apiGetAutostart() });
+      set({ autostart: await apiGetAutostart(), autostartError: null });
     } catch (err) {
+      // 保留错误原文：界面据此显示「读取失败 + 重试」，而不是永远「读取中…」
       console.warn("[loadAutostart]", readableError(err));
+      set({ autostartError: readableError(err) });
     }
   },
 
   patchSettings: async (patch) => {
+    // 乐观更新：开关 / 分段控件要先动起来（点了没反应比慢更让人怀疑坏了），
+    // 失败再回滚旧值并重读真实状态，别让界面停在猜出来的值上
+    const previous = get().settings;
+    if (previous) {
+      set({ settings: { ...previous, ...patch } });
+    }
     try {
       set({ settings: await apiUpdateSettings(patch) });
     } catch (err) {
       console.error("更新设置失败：", err);
       toast.error("设置失败", readableError(err));
-      // 操作失败时回读真实状态，别让界面停在猜出来的值上
+      set({ settings: previous });
       await get().loadSettings();
     }
   },
@@ -260,7 +271,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         if (get().backupBusy === "export") set({ backupProgress: progress });
       });
       const warnNote = summary.warnings.length ? `；${summary.warnings.length} 条提示` : "";
-      set({ backupNote: `已导出到 ${destPath}${warnNote}` });
+      // 落点以 Rust 返回的 saved_path 为准：应用内备份的自动命名只有后端知道
+      set({ backupNote: `已导出到 ${summary.saved_path}${warnNote}` });
       if (summary.warnings.length > 0) {
         toast.warning("备份已导出，但有提示", summary.warnings[0]);
       } else {

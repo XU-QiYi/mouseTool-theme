@@ -27,9 +27,36 @@ pub struct ExportBackupSummary {
     pub themes: usize,
     /// 打包的文件数（含 history.json）
     pub files: usize,
+    /// 备份最终落盘的位置（应用内备份 = `backups\` 下的路径）
+    pub saved_path: String,
+    /// 备份文件体积（字节）
+    pub bytes: u64,
     /// 无法改写成相对路径等非致命问题
     pub warnings: Vec<String>,
 }
+
+/// 备份历史的一条记录（`list_backups`）
+#[derive(Debug, Serialize)]
+pub struct BackupEntry {
+    pub file_name: String,
+    pub path: String,
+    /// 文件修改时间，本地时区 `YYYY-MM-DD HH:MM`；读不到为「未知」
+    pub created_at: String,
+    /// 目前固定 "manual"（应用内手动备份）
+    pub kind: String,
+    /// 包内的完整主题数（唯一 `themes/<uuid>/theme.json`）
+    pub themes: usize,
+    /// 包内条目数
+    pub files: usize,
+    pub bytes: u64,
+    /// "ok" | "corrupt"
+    pub status: String,
+    /// corrupt 时的中文原因
+    pub error: Option<String>,
+}
+
+/// 备份历史最多返回的条数：异常目录（上千个 zip）不该拖垮界面
+const MAX_BACKUP_ENTRIES: usize = 200;
 
 /// 恢复结果
 #[derive(Debug, Serialize)]
@@ -304,6 +331,9 @@ fn write_backup_zip(
     Ok(ExportBackupSummary {
         themes,
         files,
+        // 命令层在改名落盘后回填；核心函数不知道（也不该知道）最终路径
+        saved_path: String::new(),
+        bytes: 0,
         warnings,
     })
 }
@@ -620,33 +650,220 @@ fn cleanup(dirs: &[PathBuf]) {
 }
 
 // ---------------------------------------------------------------------------
+// 备份历史
+// ---------------------------------------------------------------------------
+
+/// 应用内备份的落盘名：`cursorstudio-backup-YYYYMMDD-HHmmss.zip`
+///
+/// 同一秒内的第二次备份加 `-2`、`-3`……；名字按时间排序就是倒序历史。
+fn generate_backup_path(dir: &Path) -> Result<PathBuf, String> {
+    paths::ensure_dir(dir)?;
+    let base = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+    for suffix in ["", "-2", "-3", "-4", "-5", "-6", "-7", "-8", "-9"] {
+        let candidate = dir.join(format!("cursorstudio-backup-{base}{suffix}.zip"));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err("同一秒内创建了太多备份，请稍后再试".to_string())
+}
+
+/// 只读 zip 中央目录，统计包内完整主题数（不读条目内容、不解压）
+fn count_themes_in(archive: &mut zip::ZipArchive<fs::File>) -> usize {
+    let mut ids: HashSet<String> = HashSet::new();
+    for index in 0..archive.len() {
+        let Ok(entry) = archive.by_index(index) else {
+            continue;
+        };
+        if entry.is_dir() {
+            continue;
+        }
+        let Ok(Some(parts)) = limits::safe_relative_parts(entry.name(), &limits::BACKUP_LIMITS)
+        else {
+            continue;
+        };
+        if let Some((id, rel)) = theme_entry(&parts) {
+            if rel == Path::new("theme.json") {
+                ids.insert(id.to_string());
+            }
+        }
+    }
+    ids.len()
+}
+
+/// 扫描备份目录（只读）：一级 `.zip`，按修改时间倒序，最多 `MAX_BACKUP_ENTRIES` 条
+fn list_backups_in(dir: &Path) -> Result<Vec<BackupEntry>, String> {
+    if !dir.is_dir() {
+        // 目录不存在 = 还没做过应用内备份，历史为空，不是错误
+        return Ok(Vec::new());
+    }
+    let entries =
+        fs::read_dir(dir).map_err(|err| format!("读备份目录失败（{}：{err}）", dir.display()))?;
+
+    // 先收集 (修改时间, BackupEntry)：时间拿不到的沉底，不能用字符串排
+    //（「未知」的字节序比日期大，字符串倒序会把坏条目顶到最前面）
+    let mut items: Vec<(Option<std::time::SystemTime>, BackupEntry)> = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                console_fallback_warning(&format!("读取备份目录项失败，已跳过（{err}）"));
+                continue;
+            }
+        };
+        // 链接 / 目录联接一律跳过：列表只是展示，也不给删除留入口
+        if limits::is_reparse_entry(&entry) {
+            continue;
+        }
+        let path = entry.path();
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if !file_name.to_ascii_lowercase().ends_with(".zip") {
+            continue;
+        }
+
+        let meta = match fs::metadata(&path) {
+            Ok(meta) if meta.is_file() => meta,
+            Ok(_) => continue,
+            Err(err) => {
+                console_fallback_warning(&format!("读备份文件信息失败，已跳过（{err}）"));
+                continue;
+            }
+        };
+        let modified = meta.modified().ok();
+        let created_at = modified
+            .map(|time| {
+                chrono::DateTime::<chrono::Local>::from(time)
+                    .format("%Y-%m-%d %H:%M")
+                    .to_string()
+            })
+            .unwrap_or_else(|| "未知".to_string());
+        let bytes = meta.len();
+
+        // 打不开 / 解析不了的 zip 保留为条目并标记 corrupt——用户要知道
+        // 有一个坏备份占着空间，而不是它悄悄从历史里消失
+        let (files, themes, status, error) = match fs::File::open(&path)
+            .map_err(|err| format!("打不开备份文件（{err}）"))
+            .and_then(|file| {
+                zip::ZipArchive::new(file).map_err(|err| format!("备份文件不是有效的 zip（{err}）"))
+            }) {
+            Ok(mut archive) => {
+                let files = archive.len();
+                let themes = count_themes_in(&mut archive);
+                (files, themes, "ok".to_string(), None)
+            }
+            Err(err) => (0, 0, "corrupt".to_string(), Some(err)),
+        };
+
+        items.push((
+            modified,
+            BackupEntry {
+                file_name,
+                path: path.to_string_lossy().into_owned(),
+                created_at,
+                kind: "manual".to_string(),
+                themes,
+                files,
+                bytes,
+                status,
+                error,
+            },
+        ));
+    }
+
+    items.sort_by(|a, b| b.0.cmp(&a.0));
+    Ok(items
+        .into_iter()
+        .take(MAX_BACKUP_ENTRIES)
+        .map(|(_, entry)| entry)
+        .collect())
+}
+
+/// 列表阶段的问题只进日志：历史里少一条提示无伤大雅，弹错误反而吓人
+fn console_fallback_warning(message: &str) {
+    eprintln!("[list_backups] {message}");
+}
+
+/// 删除应用内备份：只收文件名，拒绝任何形式的路径穿越
+fn delete_backup_in(file_name: &str) -> Result<(), String> {
+    let name = file_name.trim();
+    if name.is_empty() {
+        return Err("只能删除应用内备份：文件名不能为空".to_string());
+    }
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err("只能删除应用内备份：请传备份文件名，不要带路径".to_string());
+    }
+    if !name.to_ascii_lowercase().ends_with(".zip") {
+        return Err("只能删除应用内备份（.zip 文件）".to_string());
+    }
+
+    let dir = paths::backups_dir()?;
+    let target = dir.join(name);
+    // 拼接后的最终位置必须仍落在备份目录内：文件名字符再怪也逃不出去
+    if !target.starts_with(&dir) {
+        return Err("只能删除应用内备份".to_string());
+    }
+    // 链接 / 目录联接不删：remove_file 跟随链接，可能删掉目录外的真身
+    if limits::is_reparse_path(&target) {
+        return Err("备份文件是链接或目录联接，已拒绝删除".to_string());
+    }
+    if !target.is_file() {
+        return Err("备份文件不存在，可能已被删除".to_string());
+    }
+    fs::remove_file(&target).map_err(|err| format!("删除备份失败（{err}）；文件可能正被占用"))
+}
+
+// ---------------------------------------------------------------------------
 // 命令
 // ---------------------------------------------------------------------------
 
-/// 导出全部主题与使用记录为一个备份 zip
+/// 导出全部主题与记录为一个备份 zip
 ///
-/// 打包在后台线程执行，进度通过 `backup-progress` 事件推给界面；导出期间
-/// 其它重操作（导入 / 恢复 / 迁移）会被互斥锁挡住。
+/// `dest_path = None` 时写入应用内备份目录 `backups\`（自动命名，见
+/// `generate_backup_path`），这类备份会出现在「备份历史」；`Some(path)`
+/// 是用户自选落点的导出，不受历史管理。打包在后台线程执行，进度通过
+/// `backup-progress` 事件推给界面；导出期间其它重操作会被互斥锁挡住。
 #[tauri::command]
 pub async fn export_backup(
     app: AppHandle,
-    dest_path: String,
+    dest_path: Option<String>,
 ) -> Result<ExportBackupSummary, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || -> Result<ExportBackupSummary, String> {
         let _guard = ops::try_begin("导出备份")?;
-        let dest = validation::validate_dest_path(&dest_path, "zip")?;
+        let dest = match dest_path.as_deref() {
+            Some(path) => validation::validate_dest_path(path, "zip")?,
+            None => generate_backup_path(&paths::backups_dir()?)?,
+        };
         let emitter = app.clone();
-        export_to_with_progress(
+        let mut summary = export_to_with_progress(
             &dest,
             &paths::themes_dir()?,
             &paths::history_file()?,
             &mut |progress| {
                 let _ = emitter.emit("backup-progress", progress);
             },
-        )
+        )?;
+        summary.saved_path = dest.to_string_lossy().into_owned();
+        summary.bytes = fs::metadata(&dest).map(|meta| meta.len()).unwrap_or(0);
+        Ok(summary)
     })
     .await
     .map_err(|err| format!("导出任务异常退出（{err}）"))?
+}
+
+/// 列出应用内备份（只读中央目录，不解压），按时间倒序
+#[tauri::command]
+pub async fn list_backups() -> Result<Vec<BackupEntry>, String> {
+    tauri::async_runtime::spawn_blocking(|| list_backups_in(&paths::backups_dir()?))
+        .await
+        .map_err(|err| format!("读取备份历史任务异常退出（{err}）"))?
+}
+
+/// 删除一个应用内备份（只按文件名，不允许越出 `backups\`）
+#[tauri::command]
+pub async fn delete_backup(file_name: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || delete_backup_in(&file_name))
+        .await
+        .map_err(|err| format!("删除备份任务异常退出（{err}）"))?
 }
 
 /// 从备份 zip 合并恢复（补回缺失，不覆盖已有）
@@ -1027,5 +1244,139 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    // -----------------------------------------------------------------------
+    // 备份历史：列表 / 删除（全部走临时目录，不碰真实 backups\）
+    // -----------------------------------------------------------------------
+
+    fn sandbox(name: &str) -> (PathBuf, impl Drop) {
+        let data = std::env::temp_dir().join(format!("cursorstudio-backup-history-{name}"));
+        let _ = fs::remove_dir_all(&data);
+        fs::create_dir_all(&data).expect("建临时数据根");
+        // 数据根指向临时目录：backups_dir() 全程只碰这个沙箱
+        let guard = paths::use_test_roots(data.clone(), data.join("themes"));
+        (data, guard)
+    }
+
+    #[test]
+    fn 备份目录不存在时历史为空() {
+        let (data, _guard) = sandbox("empty");
+        let list = list_backups_in(&data.join("backups")).expect("列表");
+        assert!(list.is_empty(), "目录不存在应返回空列表");
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn 备份历史统计主题与文件数() {
+        let (data, _guard) = sandbox("stats");
+        let themes = data.join("themes");
+        let history_file = data.join("history.json");
+        seed_theme(&themes, "77777777-7777-4777-8777-777777777777", "a");
+        fs::write(
+            &history_file,
+            r#"{"version":2,"events":[]}"#,
+        )
+        .expect("写记录");
+
+        let dest = data.join("backups").join("cursorstudio-backup-test.zip");
+        paths::ensure_dir(dest.parent().unwrap()).expect("建备份目录");
+        let summary = export_to(&dest, &themes, &history_file).expect("导出");
+        let list = list_backups_in(&data.join("backups")).expect("列表");
+        assert_eq!(list.len(), 1, "只有一份备份：{:?}", list);
+        let entry = &list[0];
+        assert_eq!(entry.status, "ok");
+        assert_eq!(entry.kind, "manual");
+        assert_eq!(entry.themes, 1, "一套主题");
+        assert_eq!(entry.files, summary.files, "文件数以中央目录为准");
+        assert!(entry.bytes > 0);
+        assert!(entry.error.is_none());
+
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn 损坏的_zip_保留为_corrupt_条目() {
+        let (data, _guard) = sandbox("corrupt");
+        let backups = data.join("backups");
+        fs::create_dir_all(&backups).expect("建备份目录");
+        // 空文件不是合法 zip：中央目录都读不出来
+        fs::write(backups.join("broken.zip"), b"").expect("写坏备份");
+
+        let list = list_backups_in(&backups).expect("列表");
+        assert_eq!(list.len(), 1, "坏备份也要出现在历史里");
+        let entry = &list[0];
+        assert_eq!(entry.status, "corrupt");
+        assert_eq!(entry.themes, 0);
+        assert_eq!(entry.files, 0);
+        assert!(entry.error.is_some(), "要说明打不开的原因");
+
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn 删除备份拒绝路径穿越与非_zip() {
+        let (data, _guard) = sandbox("reject");
+        let backups = data.join("backups");
+        fs::create_dir_all(&backups).expect("建备份目录");
+
+        for evil in ["../evil.zip", "sub/evil.zip", "sub\\evil.zip", "..\\evil.zip", "evil.txt", ""] {
+            let err = delete_backup_in(evil).expect_err(evil);
+            assert!(err.contains("只能删除应用内备份"), "{evil} 应被拒绝：{err}");
+        }
+        assert!(!data.parent().unwrap().join("evil.zip").exists());
+        assert!(!backups.join("sub").exists(), "不能顺手建目录");
+
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn 删除只影响指定的那份备份() {
+        let (data, _guard) = sandbox("delete-one");
+        let backups = data.join("backups");
+        fs::create_dir_all(&backups).expect("建备份目录");
+        let keep = backups.join("cursorstudio-backup-keep.zip");
+        let drop = backups.join("cursorstudio-backup-drop.zip");
+        fs::write(&keep, b"keep").expect("写备份");
+        fs::write(&drop, b"drop").expect("写备份");
+        // 非 zip 文件在备份目录里也不该被牵连（历史不展示它，更不能删）
+        let note = backups.join("notes.txt");
+        fs::write(&note, b"note").expect("写说明文件");
+
+        delete_backup_in("cursorstudio-backup-drop.zip").expect("删除");
+        assert!(!drop.exists(), "目标备份应被删除");
+        assert!(keep.exists(), "其它备份不能被牵连");
+        assert!(note.exists(), "非备份文件不能被牵连");
+
+        let err = delete_backup_in("cursorstudio-backup-drop.zip").expect_err("再删应报错");
+        assert!(err.contains("不存在"), "要说明文件已经不在：{err}");
+
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn 应用内备份自动命名并落在备份目录() {
+        let (data, _guard) = sandbox("auto-name");
+        let themes = data.join("themes");
+        let history_file = data.join("history.json");
+        seed_theme(&themes, "88888888-8888-4888-8888-888888888888", "a");
+
+        let first = generate_backup_path(&data.join("backups")).expect("第一个名字");
+        assert!(
+            first.to_string_lossy().contains("cursorstudio-backup-"),
+            "命名要有统一前缀：{}",
+            first.display()
+        );
+        assert!(first.extension().map(|ext| ext == "zip").unwrap_or(false));
+        // 目录不存在时自动创建
+        assert!(data.join("backups").is_dir());
+
+        // 同名文件占住后应退到 -2，而不是覆盖
+        fs::write(&first, b"occupied").expect("占住第一个名字");
+        let second = generate_backup_path(&data.join("backups")).expect("第二个名字");
+        assert_ne!(first, second, "同秒冲突必须换名字");
+        assert!(second.to_string_lossy().contains("-2.zip"), "加 -2 后缀：{}", second.display());
+
+        let _ = fs::remove_dir_all(&data);
     }
 }
