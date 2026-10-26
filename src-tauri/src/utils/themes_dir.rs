@@ -795,7 +795,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("cursorstudio-themes-dir-{name}"));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("建临时目录");
-        dir
+        // GitHub 的 Windows runner 上 TEMP 是 8.3 短路径（RUNNER~1），本机是长路径；
+        // 这些用例要对路径字符串作比较，与生产的 canonicalize_target 同口径：
+        // canonicalize 解析真实路径后 strip_verbatim 剥掉 \\?\ 前缀
+        theme_paths::strip_verbatim(&dir.canonicalize().expect("canonicalize 临时目录"))
     }
 
     fn write_theme(root: &Path, id: &str, absolute_paths: bool) -> PathBuf {
