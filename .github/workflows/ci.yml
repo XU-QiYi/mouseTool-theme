@@ -41,6 +41,11 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+      # clippy 警告基线是零：新 lint 引入的警告会在这里直接拦下
+      - name: Clippy deny warnings
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
       # 两条静态检查都不需要起 dev server
       - name: Design audit
         run: node scripts/design_audit.mjs
