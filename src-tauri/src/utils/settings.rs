@@ -57,6 +57,12 @@ pub struct AppSettings {
     pub auto_check_update: bool,
     /// 是否启用应用内快捷键
     pub shortcuts_enabled: bool,
+    /// 跟随系统深浅色自动切换主题（切换逻辑在前端，见 `lib/auto-switch.ts`）
+    pub auto_switch_enabled: bool,
+    /// 系统浅色时使用的主题 ID；`None` = 浅色时不切换
+    pub auto_switch_light_id: Option<String>,
+    /// 系统深色时使用的主题 ID；`None` = 深色时不切换
+    pub auto_switch_dark_id: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -66,6 +72,9 @@ impl Default for AppSettings {
             themes_dir: None,
             auto_check_update: true,
             shortcuts_enabled: true,
+            auto_switch_enabled: false,
+            auto_switch_light_id: None,
+            auto_switch_dark_id: None,
         }
     }
 }
@@ -331,6 +340,9 @@ mod tests {
         let settings = AppSettings {
             close_behavior: CloseBehavior::Tray,
             themes_dir: Some("D:\\Cursors".to_string()),
+            auto_switch_enabled: true,
+            auto_switch_light_id: Some("sys_windows_default".to_string()),
+            auto_switch_dark_id: Some("11111111-1111-4111-8111-111111111111".to_string()),
             ..AppSettings::default()
         };
         write_to(&file, &settings).expect("写入设置");
@@ -339,12 +351,21 @@ mod tests {
         assert_eq!(loaded.close_behavior, CloseBehavior::Tray);
         assert_eq!(loaded.themes_dir.as_deref(), Some("D:\\Cursors"));
         assert!(loaded.shortcuts_enabled);
+        assert!(loaded.auto_switch_enabled);
+        assert_eq!(loaded.auto_switch_light_id.as_deref(), Some("sys_windows_default"));
+        assert_eq!(
+            loaded.auto_switch_dark_id.as_deref(),
+            Some("11111111-1111-4111-8111-111111111111")
+        );
 
         // 旧版本文件只有部分字段：缺的走默认，不整份拒读
         fs::write(&file, r#"{"close_behavior":"tray"}"#).expect("写旧格式");
         let loaded = read_from(&file);
         assert_eq!(loaded.close_behavior, CloseBehavior::Tray);
         assert!(loaded.auto_check_update, "缺字段应补默认 true");
+        assert!(!loaded.auto_switch_enabled, "自动切换默认关闭，不能凭空替用户切换");
+        assert!(loaded.auto_switch_light_id.is_none());
+        assert!(loaded.auto_switch_dark_id.is_none());
         let _ = fs::remove_file(&file);
     }
 

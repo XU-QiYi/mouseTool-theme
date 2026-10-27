@@ -616,6 +616,18 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 
 ---
 
+## 决策 25：跟随系统深浅色自动切换主题
+
+**结论**（2026-10-28，联网调研后立项：PowerToys Light Switch 只切系统主题、原生「自动选择指针颜色」不覆盖自定义 .cur/.ani 方案，深浅色光标在反色背景上看不见是真实痛点）
+
+- **设置**：`settings.json` 新增三个字段 `auto_switch_enabled` / `auto_switch_light_id` / `auto_switch_dark_id`（容器级 `serde(default)`，旧文件免迁移）；`update_settings` 补丁语义延续，主题 ID 参数用**空串表示清空**——serde_json 分不清「没传」和「传了 null」，与补丁语义冲突。UI 在「设置 → 通用 → 外观」：开关 + 两个原生 `<select>`（浅色时用 / 深色时用），不引新组件依赖。
+- **切换逻辑在前端**（`lib/auto-switch.ts`）：系统光标应用本来就由前端 `apply_theme` 链路完成（含历史、busy、toast），后端再造一份只会分叉。触发时机三类：系统深浅色 matchMedia 变化、窗口重新聚焦（后台可能错过 change，回前台补一次）、设置 / 主题列表变更（启动后首次评估也走这条）。
+- **两条退让规则**：手动「还原默认」后**挂起**自动切换，直到系统深浅色再次翻转——否则还原动作会被下一帧评估立刻覆盖回去，用户和功能打架；映射指向的主题被删除时静默跳过不弹 toast，等用户在设置里改选（下拉里显示「主题已删除，请改选」）。
+- **范围边界**：不配对系统方案还原（浅色映射为空 = 浅色时不动当前光标）；不做按时刻的定时切换（那是 PowerToys 的领地，跟随系统深浅色才是本应用的差异化）；应用必须在前台或托盘运行，这与「关闭到托盘」的既有行为天然互补。
+- **验收**：`scripts/auto_switch_check.mjs`（CDP `Emulation.setEmulatedMedia` 模拟深浅色翻转：配对生效 / 往返切换 / 还原挂起 / 翻转恢复接管 / 关开关不动），`settings.rs` 往返与旧文件兼容用例覆盖新字段。
+
+---
+
 ## 附录 A：技术栈定格
 
 **Tauri 2 + React 19 + TypeScript + Vite + Tailwind CSS 4 + shadcn/ui（base-nova / `@base-ui/react`）+ zustand + Rust**。

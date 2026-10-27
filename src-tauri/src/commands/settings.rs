@@ -21,6 +21,10 @@ pub struct SettingsSnapshot {
     pub effective_themes_dir: String,
     pub auto_check_update: bool,
     pub shortcuts_enabled: bool,
+    /// 跟随系统深浅色自动切换主题；映射存主题 ID，`None` = 对应深浅色不切换
+    pub auto_switch_enabled: bool,
+    pub auto_switch_light_id: Option<String>,
+    pub auto_switch_dark_id: Option<String>,
     /// 读取设置时的非致命问题（典型：文件损坏已自动备份）
     pub warnings: Vec<String>,
 }
@@ -41,6 +45,9 @@ fn snapshot(loaded: &settings::SettingsLoad) -> Result<SettingsSnapshot, String>
         effective_themes_dir: paths::themes_dir()?.to_string_lossy().into_owned(),
         auto_check_update: loaded.settings.auto_check_update,
         shortcuts_enabled: loaded.settings.shortcuts_enabled,
+        auto_switch_enabled: loaded.settings.auto_switch_enabled,
+        auto_switch_light_id: loaded.settings.auto_switch_light_id.clone(),
+        auto_switch_dark_id: loaded.settings.auto_switch_dark_id.clone(),
         warnings: loaded.warnings.clone(),
     })
 }
@@ -57,12 +64,18 @@ pub async fn get_settings() -> Result<SettingsSnapshot, String> {
 ///
 /// 关闭行为变更要同步托盘的有无：切到「最小化到托盘」时托盘必须出现，
 /// 切回「直接退出」时立即摘掉，不能等下次重启。
+///
+/// 主题 ID 参数用**空串表示清空**（serde_json 分不清「没传」和「传了 null」，
+/// 与补丁语义冲突；前端把「不切换」编成空串）。
 #[tauri::command]
 pub async fn update_settings(
     app: AppHandle,
     close_behavior: Option<String>,
     auto_check_update: Option<bool>,
     shortcuts_enabled: Option<bool>,
+    auto_switch_enabled: Option<bool>,
+    auto_switch_light_id: Option<String>,
+    auto_switch_dark_id: Option<String>,
 ) -> Result<SettingsSnapshot, String> {
     let updated = tauri::async_runtime::spawn_blocking(move || {
         let mut state = settings::read();
@@ -75,6 +88,15 @@ pub async fn update_settings(
         if let Some(flag) = shortcuts_enabled {
             state.shortcuts_enabled = flag;
         }
+        if let Some(flag) = auto_switch_enabled {
+            state.auto_switch_enabled = flag;
+        }
+        if let Some(raw) = auto_switch_light_id {
+            state.auto_switch_light_id = normalize_theme_id(raw);
+        }
+        if let Some(raw) = auto_switch_dark_id {
+            state.auto_switch_dark_id = normalize_theme_id(raw);
+        }
         settings::write(&state)?;
         snapshot(&settings::load())
     })
@@ -83,6 +105,11 @@ pub async fn update_settings(
 
     tray::sync(&app);
     Ok(updated)
+}
+
+/// 空串 = 用户选了「不切换」；非空按原样存，首尾空白不宽容（ID 本身不含空白）
+fn normalize_theme_id(raw: String) -> Option<String> {
+    if raw.is_empty() { None } else { Some(raw) }
 }
 
 /// 开机自启动状态
