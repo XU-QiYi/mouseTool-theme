@@ -266,6 +266,12 @@ fn normalize_for_compare(path: &Path) -> String {
 
 static CACHE: LazyLock<Mutex<PreviewCache>> = LazyLock::new(|| Mutex::new(PreviewCache::default()));
 
+/// 锁中毒只发生在别的线程持锁时 panic 过；缓存场景取回数据继续跑，
+/// 总比让之后所有预览请求连锁 panic 好（与测试隔离键同一套防中毒取回锁约定）
+fn cache_lock() -> std::sync::MutexGuard<'static, PreviewCache> {
+    CACHE.lock().unwrap_or_else(|err| err.into_inner())
+}
+
 fn cache_key(path: &Path) -> Option<CacheKey> {
     let meta = std::fs::metadata(path).ok()?;
     let size = meta.len();
@@ -289,7 +295,7 @@ pub fn preview_file(path: &str) -> CursorPreview {
         None => return CursorPreview::default(),
     };
 
-    if let Some(hit) = CACHE.lock().unwrap().get(&key) {
+    if let Some(hit) = cache_lock().get(&key) {
         return (*hit).clone();
     }
 
@@ -309,18 +315,18 @@ pub fn preview_file(path: &str) -> CursorPreview {
         .unwrap_or_default();
 
     let shared = Arc::new(result);
-    CACHE.lock().unwrap().insert(key, shared.clone());
+    cache_lock().insert(key, shared.clone());
     (*shared).clone()
 }
 
 /// 让单个文件的预览失效（文件被替换、但大小与秒级修改时间恰好相同时兜底）
 pub fn invalidate_path(path: &Path) {
-    CACHE.lock().unwrap().invalidate_path(path);
+    cache_lock().invalidate_path(path);
 }
 
 /// 让目录下所有预览失效（删除主题后调用，避免缓存继续持有已删文件）
 pub fn invalidate_dir(dir: &Path) {
-    CACHE.lock().unwrap().invalidate_dir(dir);
+    cache_lock().invalidate_dir(dir);
 }
 
 #[cfg(test)]
