@@ -10,9 +10,11 @@ public class Cap3 {
   public delegate bool EnumProc(IntPtr h, IntPtr l);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R r);
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint f);
   [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr p, EnumProc cb, IntPtr l);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr h, [MarshalAs(UnmanagedType.LPWStr)] StringBuilder s, int m);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassNameW(IntPtr h, [MarshalAs(UnmanagedType.LPWStr)] StringBuilder s, int m);
   [DllImport("user32.dll")] public static extern IntPtr PostMessageW(IntPtr h, uint m, IntPtr w, IntPtr l);
   public struct R { public int L, T, Rt, B; }
 }
@@ -27,10 +29,13 @@ function Shot([string]$name) {
   $p.Refresh()
   $h = $p.MainWindowHandle
   if ($h -eq [IntPtr]::Zero) { Write-Host ($name + ': 无窗口'); return }
+  # 置顶后用屏幕拷贝（24bpp）：PrintWindow 对位图/自绘页会丢 alpha，截出黑块
+  [Cap3]::SetWindowPos($h, [IntPtr](-1), 0, 0, 0, 0, 0x0003) | Out-Null
+  Start-Sleep -Milliseconds 250
   $r = New-Object Cap3+R; [Cap3]::GetWindowRect($h, [ref]$r) | Out-Null
-  $bmp = New-Object System.Drawing.Bitmap ($r.Rt - $r.L), ($r.B - $r.T)
+  $bmp = New-Object System.Drawing.Bitmap ($r.Rt - $r.L), ($r.B - $r.T), ([System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
   $g = [System.Drawing.Graphics]::FromImage($bmp)
-  $hdc = $g.GetHdc(); [Cap3]::PrintWindow($h, $hdc, 2) | Out-Null; $g.ReleaseHdc($hdc); $g.Dispose()
+  $g.CopyFromScreen($r.L, $r.T, 0, 0, $bmp.Size); $g.Dispose()
   $path = Join-Path $OutDir $name
   $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose()
   Write-Host ('已存 ' + $path)
@@ -40,7 +45,8 @@ function ClickBtn([string]$match) {
   $script:hit = [IntPtr]::Zero
   $cb = [Cap3+EnumProc]{ param($ch, $l)
     $tx = New-Object System.Text.StringBuilder 128; [Cap3]::GetWindowTextW($ch, $tx, 128) | Out-Null
-    if ($tx.ToString() -like ('*' + $match + '*')) { $script:hit = $ch; return $false }
+    $cn = New-Object System.Text.StringBuilder 32; [Cap3]::GetClassNameW($ch, $cn, 32) | Out-Null
+    if ($cn.ToString() -eq 'Button' -and $tx.ToString() -like ('*' + $match + '*')) { $script:hit = $ch; return $false }
     return $true }
   [Cap3]::EnumChildWindows($p.MainWindowHandle, $cb, [IntPtr]::Zero) | Out-Null
   # 用 PostMessage 异步投递 BM_CLICK：SendMessage 会在 NSIS 同步切页/跑页面循环期间一直阻塞
@@ -53,11 +59,9 @@ ClickBtn '下一步'; Start-Sleep -Seconds 2.5
 Shot 'p2-reinstall.png'
 ClickBtn '下一步'; Start-Sleep -Seconds 2
 Shot 'p3-options.png'
-ClickBtn '下一步'; Start-Sleep -Milliseconds 700
+ClickBtn '安装'; Start-Sleep -Milliseconds 700
 Shot 'p4-instfiles.png'
 Start-Sleep -Seconds 4
-Shot 'p5-instfiles-done.png'
-ClickBtn '下一步'; Start-Sleep -Seconds 1.5
-Shot 'p6-finish.png'
+Shot 'p5-finish.png'
 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
 Write-Host '走查完成'

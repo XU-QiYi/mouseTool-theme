@@ -44,7 +44,7 @@
     "windows": {
       "nsis": {
         "template": "installer/template/installer.nsi",
-        "sidebarImage": "installer/sidebar-1.bmp",
+        "installerIcon": "icons/icon.ico",
         "installMode": "currentUser",
         "languages": ["SimpChinese"]
       },

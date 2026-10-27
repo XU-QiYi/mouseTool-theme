@@ -17,9 +17,11 @@ public class SetupNative {
   public delegate bool EnumChildProc(IntPtr hWnd, IntPtr lParam);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
   [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, EnumChildProc cb, IntPtr l);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr h, [MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder sb, int max);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr h, [MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder sb, int max);
   [DllImport("user32.dll")] public static extern IntPtr SendMessageW(IntPtr h, uint msg, IntPtr w, IntPtr l);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
 }
@@ -40,7 +42,9 @@ try {
     $cb = [SetupNative+EnumChildProc]{ param($child, $l)
       $sb = New-Object System.Text.StringBuilder 256
       [SetupNative]::GetWindowTextW($child, $sb, 256) | Out-Null
-      if ($sb.ToString() -like '*下一步*') { $script:nextBtn = $child; return $false }
+      $cn = New-Object System.Text.StringBuilder 32
+      [SetupNative]::GetClassNameW($child, $cn, 32) | Out-Null
+      if ($cn.ToString() -eq 'Button' -and $sb.ToString() -like '*下一步*') { $script:nextBtn = $child; return $false }
       return $true
     }
     [SetupNative]::EnumChildWindows($h, $cb, [IntPtr]::Zero) | Out-Null
@@ -49,18 +53,17 @@ try {
     Start-Sleep -Milliseconds 1500
   }
 
+  [SetupNative]::SetWindowPos($h, [IntPtr](-1), 0, 0, 0, 0, 0x0003) | Out-Null
+  Start-Sleep -Milliseconds 250
   $r = New-Object SetupNative+RECT
   [SetupNative]::GetWindowRect($h, [ref]$r) | Out-Null
   $w = $r.Right - $r.Left; $ht = $r.Bottom - $r.Top
   if ($w -le 0 -or $ht -le 0) { throw '窗口尺寸异常' }
-  $bmp = New-Object System.Drawing.Bitmap $w, $ht
+  # PrintWindow 对自绘位图页会丢 alpha（截出黑块），这里置顶后拷贝屏幕并用 24bpp
+  $bmp = New-Object System.Drawing.Bitmap $w, $ht, ([System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
   $g = [System.Drawing.Graphics]::FromImage($bmp)
-  $hdc = $g.GetHdc()
-  # PW_RENDERFULLCONTENT(=2)：窗口被遮挡也能渲染出内容
-  $ok = [SetupNative]::PrintWindow($h, $hdc, 2)
-  $g.ReleaseHdc($hdc)
+  $g.CopyFromScreen($r.Left, $r.Top, 0, 0, $bmp.Size)
   $g.Dispose()
-  if (-not $ok) { throw 'PrintWindow 失败' }
   $bmp.Save($OutPng, [System.Drawing.Imaging.ImageFormat]::Png)
   $bmp.Dispose()
   Write-Host "已保存 $OutPng (${w}x${ht})"

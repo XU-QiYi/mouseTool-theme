@@ -42,3 +42,10 @@ dist-ssr
 
 # 图片/资产生成工具的落盘目录（成品另复制到 src-tauri/icons、public）
 output/
+
+# 安装器临时 QA / UI 预览（由脚本生成，不入库）
+.qa-tmp/
+src-tauri/installer/src/ui-preview/
+
+# 安装器自绘位图：由 npm run installer:assets 生成，打包前必须先跑（侧栏把版本号烘进图里，入库会在升版本时留下旧图）
+src-tauri/installer/ui/
