@@ -77,7 +77,7 @@ pub fn fixture_cur() -> Vec<u8> {
     out.push(0); // reserved
     out.extend_from_slice(&0u16.to_le_bytes()); // hotspot x
     out.extend_from_slice(&0u16.to_le_bytes()); // hotspot y
-    out.extend_from_slice(&(image_size as u32).to_le_bytes());
+    out.extend_from_slice(&image_size.to_le_bytes());
     out.extend_from_slice(&22u32.to_le_bytes());
 
     // BITMAPINFOHEADER：高度是双倍（含 AND mask）
@@ -97,7 +97,7 @@ pub fn fixture_cur() -> Vec<u8> {
     for _ in 0..W * H {
         out.extend_from_slice(&[0xE0, 0x60, 0x20, 0xFF]);
     }
-    out.extend(std::iter::repeat(0u8).take(mask as usize));
+    out.extend(std::iter::repeat_n(0u8, mask as usize));
 
     out
 }

@@ -715,7 +715,7 @@ mod tests {
 
         // 子集：少了 Hand，说明系统里还有别的光标，不是这套主题
         let subset = current(&[("Arrow", r"C:\A\arrow.cur")]);
-        assert!(detect_active_theme(&[theme.clone()], &subset, "").is_none());
+        assert!(detect_active_theme(std::slice::from_ref(&theme), &subset, "").is_none());
 
         // 超集：多出 Wait，同上
         let superset = current(&[

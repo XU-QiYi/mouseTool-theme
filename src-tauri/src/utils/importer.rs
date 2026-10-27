@@ -125,7 +125,7 @@ fn collect_cursor_files(
         let is_cursor = path
             .extension()
             .and_then(|ext| ext.to_str())
-            .map(|ext| validation::is_cursor_extension(ext))
+            .map(validation::is_cursor_extension)
             .unwrap_or(false);
         if is_cursor {
             let size = entry
@@ -452,6 +452,7 @@ fn discard_partial(theme_id: &str, err: String) -> String {
 ///
 /// `files_root` 是找 `.inf` 的根；`source` 提供主题名与「导入自」描述；
 /// `label`（压缩包 / 文件夹）只影响报错文案。
+#[allow(clippy::too_many_arguments)] // 8 个参数都是调用链上的既有上下文，硬拆反而失真
 fn persist_theme(
     files: Vec<PathBuf>,
     files_root: &Path,
@@ -1021,8 +1022,7 @@ mod tests {
 
         let deep = format!(
             "{}/arrow.cur",
-            std::iter::repeat("dir")
-                .take(limits::THEME_LIMITS.max_depth + 1)
+            std::iter::repeat_n("dir", limits::THEME_LIMITS.max_depth + 1)
                 .collect::<Vec<_>>()
                 .join("/")
         );

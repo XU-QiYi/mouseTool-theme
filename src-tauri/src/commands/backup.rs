@@ -204,10 +204,9 @@ fn export_to_with_progress(
         .map_err(|err| format!("无法创建文件，它可能正被占用（{err}）"))?;
 
     let summary = write_backup_zip(file, themes_dir, history_file, has_history, progress_fn)
-        .map_err(|err| {
+        .inspect_err(|_| {
             // write_backup_zip 返回时 writer 已释放，Windows 上这时才删得掉
             let _ = fs::remove_file(&tmp);
-            err
         })?;
 
     fs::rename(&tmp, dest).map_err(|err| {
@@ -770,7 +769,7 @@ fn list_backups_in(dir: &Path) -> Result<Vec<BackupEntry>, String> {
         ));
     }
 
-    items.sort_by(|a, b| b.0.cmp(&a.0));
+    items.sort_by_key(|(stamp, _)| std::cmp::Reverse(*stamp));
     Ok(items
         .into_iter()
         .take(MAX_BACKUP_ENTRIES)
@@ -1358,7 +1357,6 @@ mod tests {
     fn 应用内备份自动命名并落在备份目录() {
         let (data, _guard) = sandbox("auto-name");
         let themes = data.join("themes");
-        let history_file = data.join("history.json");
         seed_theme(&themes, "88888888-8888-4888-8888-888888888888", "a");
 
         let first = generate_backup_path(&data.join("backups")).expect("第一个名字");

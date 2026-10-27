@@ -49,3 +49,6 @@ src-tauri/installer/src/ui-preview/
 
 # 安装器自绘位图：由 npm run installer:assets 生成，打包前必须先跑（侧栏把版本号烘进图里，入库会在升版本时留下旧图）
 src-tauri/installer/ui/
+
+# QA 链路脚本的截图输出（每次跑都会重写，入库只会留下没人看的脏 diff）
+docs/screenshots/

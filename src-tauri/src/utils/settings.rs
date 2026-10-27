@@ -328,9 +328,11 @@ mod tests {
     #[test]
     fn 写读往返与旧文件缺字段兼容() {
         let file = temp_file("roundtrip");
-        let mut settings = AppSettings::default();
-        settings.close_behavior = CloseBehavior::Tray;
-        settings.themes_dir = Some("D:\\Cursors".to_string());
+        let settings = AppSettings {
+            close_behavior: CloseBehavior::Tray,
+            themes_dir: Some("D:\\Cursors".to_string()),
+            ..AppSettings::default()
+        };
         write_to(&file, &settings).expect("写入设置");
 
         let loaded = read_from(&file);
