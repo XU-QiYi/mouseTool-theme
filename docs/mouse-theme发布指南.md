@@ -22,7 +22,7 @@
 | 安装包格式 | **NSIS**（`.exe`）为主，MSI 同轮产出备用 | MSI 曾因中文 `productName` 与代码页 1252 冲突构建失败，已用 `wix.language: "zh-CN"` 修复，见 §2.2 坑 ⑧ |
 | 代码签名 | **暂无证书，产物未签名** | 当前状态；用户装机会遇到 SmartScreen 提示，§3.4 有应对话术 |
 | 上传方式 | **GitHub 网页手动拖拽** | 你已选定；`gh` CLI 作为备选写在 §7.2 |
-| 版本号 | **0.1.0**，tag 为 **v0.1.0** | 与 `package.json` / `Cargo.toml` / `tauri.conf.json` 三处现状一致 |
+| 版本号 | 首版 **v0.1.0**，下文示例沿用 | 当前值以 §1.2 的「四处一致」为准（现为 `0.2.0`），示例命令里的 `0.1.0` 按当次版本替换 |
 | 自动更新 | **不做** | 项目未接入 `tauri-plugin-updater`，无需 `.sig` / `latest.json` |
 
 > **关于版本号的讲究**（如果你之前问过这个）：SemVer 的 `主.次.修订` 三段是一句**兼容性承诺**——
@@ -58,15 +58,16 @@ git log --oneline main..origin/main
 - ① 输出为空 → 通过。非空说明有未提交改动，先 `git add` + `git commit`。
 - ③ 输出为空 → 通过。非空说明远端有别人的新提交，先 `git pull --rebase`。
 
-### 1.2 版本号三处一致
+### 1.2 版本号四处一致
 
-本项目版本号写在**三个地方**，必须同步：
+本项目版本号写在**四个地方**，必须同步：
 
 | 文件 | 字段 | 当前值 |
 |---|---|---|
-| `package.json` | `version` | `0.1.0` |
-| `src-tauri/Cargo.toml` | `[package] version` | `0.1.0` |
-| `src-tauri/tauri.conf.json` | `version` | `0.1.0` |
+| `package.json` | `version` | `0.2.0` |
+| `src-tauri/Cargo.toml` | `[package] version` | `0.2.0` |
+| `src-tauri/tauri.conf.json` | `version` | `0.2.0` |
+| `src/lib/app-meta.ts` | `APP_VERSION` | `0.2.0` |
 
 检查命令：
 
@@ -74,12 +75,18 @@ git log --oneline main..origin/main
 node -e "console.log('package.json =', require('./package.json').version)"
 Select-String -Path src-tauri\Cargo.toml -Pattern '^version'
 Select-String -Path src-tauri\tauri.conf.json -Pattern '"version"'
+Select-String -Path src\lib\app-meta.ts -Pattern 'APP_VERSION ='
 ```
 
 > **坑 ①：只改了 `package.json` 忘了改 `Cargo.toml`。**
 > Tauri 的打包器读的是 `tauri.conf.json` 的 `version`，Rust crate 用的是 `Cargo.toml` 的。
 > 只改一处 → 安装包文件名叫 `0.1.1` 但内部 crate 还是 `0.1.0`，用户反馈"版本号不对"时极难排查。
-> **三处一起改，改完重新 `cargo check` 让 Cargo.lock 同步。**
+> **四处一起改，改完重新 `cargo check` 让 Cargo.lock 同步。**
+
+> **坑 ②：`app-meta.ts` 是浏览器开发模式的兜底版本，不在三处配置文件里，最容易漏。**
+> 正式跑 Tauri 时界面版本号来自 `getVersion()`，所以漏改不影响已打包用户；
+> 但浏览器验收、检查更新失败退回的比较基准都读它——2026-10-29 发现升 0.2.0 时漏改了它，
+> 开发模式里应用自报 `v0.1.0`、检查更新误判「发现新版本」。上表因此从三处扩成四处。
 
 ### 1.3 Tauri 版本一致性（**最容易踩，且会让构建直接失败**）
 
