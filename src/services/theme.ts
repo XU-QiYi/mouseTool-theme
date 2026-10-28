@@ -10,6 +10,7 @@ import type {
   HistoryEntry,
   ImportReport,
   RestoreOutcome,
+  SaveCurrentOutcome,
   ThemesResult,
   TrashEntry,
   TrashListing,
@@ -59,7 +60,21 @@ let devThemes: CursorTheme[] = [];
  * 真机上它由注册表反推；mock 里由 apply / restore 维护，
  * 让聚焦重查（refreshActive）在开发与自动化验收中不把状态冲掉。
  */
-const devActive: { id: string | null; external: boolean } = { id: null, external: false };
+const devActive: { id: string | null; external: boolean } = {
+  id: null,
+  // 开发用开关：?mock-external=1 从「被外部改写」态起步，方便目验与验收；
+  // 应用 / 还原 / 保存当前光标后会被收编为普通状态。
+  external: new URLSearchParams(window.location.search).has("mock-external"),
+};
+
+/** 浏览器里的当前光标三态：外部改写优先，其次使用中，最后系统默认 */
+function devCurrentState() {
+  return {
+    active_theme_id: devActive.external ? null : devActive.id,
+    current_slots_filled: devActive.external ? 13 : devActive.id ? 15 : 0,
+    active_external: devActive.external,
+  };
+}
 
 /**
  * 浏览器里被「删除」的 mock 主题 ID
@@ -129,9 +144,7 @@ export function getAllThemes(): Promise<ThemesResult> {
         ...MOCK_THEMES.filter((theme) => !devHiddenThemeIds.has(theme.id)),
       ],
       warnings: [],
-      active_theme_id: devActive.id,
-      current_slots_filled: devActive.id ? 15 : 0,
-      active_external: devActive.external,
+      ...devCurrentState(),
       recent: devRecent,
     });
   }
@@ -141,19 +154,7 @@ export function getAllThemes(): Promise<ThemesResult> {
 /** 对应 Rust 命令 `get_active_state`：聚焦时轻量重查「当前使用」（决策 24） */
 export function getActiveState(): Promise<ActiveState> {
   if (!inTauri) {
-    // 开发用开关：?mock-external=1 强制「被外部改写」态，方便目验状态卡警示
-    if (new URLSearchParams(window.location.search).has("mock-external")) {
-      return Promise.resolve({
-        active_theme_id: null,
-        current_slots_filled: 13,
-        active_external: true,
-      });
-    }
-    return Promise.resolve({
-      active_theme_id: devActive.id,
-      current_slots_filled: devActive.id ? 15 : 0,
-      active_external: devActive.external,
-    });
+    return Promise.resolve(devCurrentState());
   }
   return invoke<ActiveState>("get_active_state");
 }
@@ -199,6 +200,52 @@ export function restoreDefault(): Promise<void> {
     return Promise.resolve();
   }
   return invoke<void>("restore_default");
+}
+
+/**
+ * 对应 Rust 命令 `save_current_theme`：把外部改写态的光标收编为我的主题
+ *
+ * 浏览器里没有注册表，用一份完整示例主题模拟；保存后当前主题切换为它。
+ */
+export function saveCurrentTheme(): Promise<SaveCurrentOutcome> {
+  if (!inTauri) {
+    if (!devActive.external) {
+      return Promise.reject(new Error("当前光标已经是已知主题或系统默认，无需再保存"));
+    }
+    console.warn("[dev] 浏览器环境：当前光标保存为内存主题");
+    const now = stamp();
+    const source = MOCK_THEMES[0];
+    const theme: CursorTheme = {
+      ...source,
+      id: crypto.randomUUID(),
+      name: `当前光标 ${now}`,
+      is_built_in: false,
+      created_at: now,
+      updated_at: now,
+      cursors: source.cursors.map((slot) => ({ ...slot })),
+    };
+    devThemes = [theme, ...devThemes];
+    devActive.id = theme.id;
+    devActive.external = false;
+    devRecent = [
+      {
+        theme_id: theme.id,
+        name: theme.name,
+        is_built_in: false,
+        applied_at: now,
+      },
+      ...devRecent,
+    ].slice(0, 50);
+    return Promise.resolve({
+      theme,
+      warnings: [],
+      file_count: theme.cursors.length,
+      applied: true,
+      recent: devRecent,
+      warning: null,
+    });
+  }
+  return invoke<SaveCurrentOutcome>("save_current_theme");
 }
 
 /** 对应 Rust 命令 `import_theme`：导入 .zip 包或整个文件夹（决策 16），返回新主题与跳过项 */
