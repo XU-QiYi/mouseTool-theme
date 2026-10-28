@@ -316,8 +316,7 @@ pub async fn delete_theme(theme_id: String) -> Result<trash::DeleteOutcome, Stri
 }
 
 fn delete(theme_id: &str) -> Result<trash::DeleteOutcome, String> {
-    let id = Uuid::parse_str(theme_id).map_err(|_| "非法的主题 ID".to_string())?;
-    if id.to_string() != theme_id {
+    if !validation::is_canonical_uuid(theme_id) {
         return Err("非法的主题 ID".to_string());
     }
     let dir = paths::theme_dir(theme_id)?;
@@ -370,8 +369,7 @@ pub async fn rename_theme(theme_id: String, new_name: String) -> Result<CursorTh
 }
 
 fn rename(theme_id: &str, new_name: &str) -> Result<CursorTheme, String> {
-    let id = Uuid::parse_str(theme_id).map_err(|_| "非法的主题 ID".to_string())?;
-    if id.to_string() != theme_id {
+    if !validation::is_canonical_uuid(theme_id) {
         return Err("非法的主题 ID".to_string());
     }
     let name = validation::validate_theme_name(new_name)?;

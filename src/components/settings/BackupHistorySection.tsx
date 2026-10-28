@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { BackupProgress } from "@/components/settings/BackupProgress";
 import { SettingsStatusBanner } from "@/components/settings/SettingsStatusBanner";
+import { SummaryBlock } from "@/components/settings/SummaryBlock";
 import { readableError, toast } from "@/lib/toast";
 import { formatBytes } from "@/lib/utils";
 import { appliedAtMachine } from "@/lib/themes";
@@ -411,17 +412,6 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
           </AlertDialogContent>
         )}
       </AlertDialog>
-    </div>
-  );
-}
-
-function SummaryBlock({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl bg-card p-3 ring-1 ring-foreground/10">
-      <p className="text-2xs text-muted-foreground">{label}</p>
-      <p className="mt-1 truncate text-sm font-medium tabular-nums" title={value}>
-        {value}
-      </p>
     </div>
   );
 }

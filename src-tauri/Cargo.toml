@@ -31,6 +31,10 @@ uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
 tauri-plugin-dialog = "2"
 
+[dev-dependencies]
+# 测试临时目录：Drop 即清理，见决策 27（锁文件已有该版本，不新增供应链）
+tempfile = "3"
+
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.56", features = [
     "Win32_UI_WindowsAndMessaging",

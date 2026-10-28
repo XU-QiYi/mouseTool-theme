@@ -27,9 +27,6 @@ import {
 } from "@/services/system";
 import type { CursorTheme, HistoryEntry, TrashEntry } from "@/types/theme";
 
-/** 三个页面的语义（互不重叠，各自有一套视图与任务）： */
-export type { Page };
-
 /**
  * 每页各记一份选中项：切页回来还是原来的上下文，又不会把别的页的选择带过来
  *

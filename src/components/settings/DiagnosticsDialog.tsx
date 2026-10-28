@@ -205,7 +205,7 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
         },
       },
     ];
-  }, [themes, loadError, warnings, activeThemeId, dataDir, dataDirError, settings, settingsError, autostart, autostartError, onOpenChange]);
+  }, [themes, loadError, warnings, activeThemeId, activeExternal, currentSlotsFilled, dataDir, dataDirError, settings, settingsError, autostart, autostartError, onOpenChange]);
 
   const overall = checks.reduce<Severity>(
     (worst, check) =>

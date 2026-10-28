@@ -347,9 +347,8 @@ fn theme_entry(parts: &[String]) -> Option<(&str, PathBuf)> {
         return None;
     }
     let id = parts[1].as_str();
-    let parsed = Uuid::parse_str(id).ok()?;
     // 目录名必须是小写规范 UUID，和读盘端「id == 目录名」的判定保持同一口径
-    if parsed.to_string() != id {
+    if !validation::is_canonical_uuid(id) {
         return None;
     }
     let rel: PathBuf = parts[2..].iter().collect();

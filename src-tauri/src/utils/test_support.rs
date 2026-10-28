@@ -1,59 +1,44 @@
 //! 测试专用：临时目录、路径隔离与光标 fixture
 //!
-//! 项目不允许新增依赖（硬约束 9），所以这里手写一个 Drop 即清理的 TempDir；
-//! 光标 fixture 由代码生成，测试不再依赖 `C:\Windows\Cursors` 里是否存在某个文件。
+//! 临时目录用 dev 依赖 `tempfile`（决策 27）：Drop 即清理，不必自己维护唯一命名
+//! 与删除逻辑；光标 fixture 由代码生成，测试不依赖 `C:\Windows\Cursors` 里是否
+//! 存在某个文件。
 
 #![cfg(test)]
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::utils::paths;
 
-static COUNTER: AtomicU64 = AtomicU64::new(0);
-
 /// 一个用例独占的临时目录，离开作用域自动删除
 pub struct TempDir {
-    path: PathBuf,
+    inner: tempfile::TempDir,
 }
 
 impl TempDir {
     pub fn new(label: &str) -> Self {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let unique = format!(
-            "cursorstudio-test-{label}-{}-{stamp}-{}",
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::Relaxed)
-        );
-        let path = std::env::temp_dir().join(unique);
-        fs::create_dir_all(&path).expect("创建测试临时目录");
-        Self { path }
+        let inner = tempfile::Builder::new()
+            .prefix(&format!("cursorstudio-test-{label}-"))
+            .tempdir()
+            .expect("创建测试临时目录");
+        Self { inner }
     }
 
     pub fn path(&self) -> &Path {
-        &self.path
+        self.inner.path()
     }
 
     pub fn join(&self, name: &str) -> PathBuf {
-        self.path.join(name)
+        self.inner.path().join(name)
     }
 
     /// 把全局数据目录与主题目录重定向到这个临时目录
     pub fn isolate_paths(&self) -> paths::TestRootsGuard {
-        let data = self.path.join("data");
+        let data = self.path().join("data");
         let themes = data.join("themes");
         fs::create_dir_all(&themes).expect("建测试主题目录");
         paths::use_test_roots(data, themes)
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
     }
 }
 

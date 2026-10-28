@@ -346,7 +346,7 @@ fn import_source_as(
     import_zip_as(path, theme_id, progress_fn)
 }
 
-/// 兼容旧名：zip 导入入口（「导出 → 再导入」闭环测试等在用）
+/// 兼容旧名：zip 导入入口（示例 `import_demo` 与「导出 → 再导入」闭环测试在用）
 pub fn import_zip(zip_path: &str) -> Result<CursorTheme, String> {
     import_source_as(zip_path, &Uuid::new_v4().to_string(), &mut |_| {}).map(|report| report.theme)
 }

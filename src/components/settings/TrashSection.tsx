@@ -12,6 +12,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { SettingsStatusBanner } from "@/components/settings/SettingsStatusBanner";
+import { SummaryBlock } from "@/components/settings/SummaryBlock";
 import { readableError, toast } from "@/lib/toast";
 import { formatBytes } from "@/lib/utils";
 import { appliedAtMachine } from "@/lib/themes";
@@ -175,7 +176,7 @@ export function TrashSection({ onBack }: TrashSectionProps) {
         <SummaryBlock label="最近删除" value={newest ? newest.deleted_at : "还没有记录"} />
         <SummaryBlock
           label="保留数量"
-          value={`${entries?.length ?? 0} / ${listing?.max_entries ?? 20}`}
+          value={`${entries?.length ?? 0} / ${listing ? listing.max_entries : "—"}`}
         />
         <SummaryBlock label="总占用" value={formatBytes(totalBytes)} />
       </div>
@@ -303,8 +304,9 @@ export function TrashSection({ onBack }: TrashSectionProps) {
       )}
 
       <p className="mt-3 text-2xs leading-relaxed text-muted-foreground">
-        回收站只保留本应用删除的主题，不占主题列表与备份；超过 {(listing?.max_entries ?? 20)} 套或{" "}
-        {formatBytes(listing?.max_bytes ?? 512 * 1024 * 1024)} 时自动清理最早的条目。
+        {listing
+          ? `回收站只保留本应用删除的主题，不占主题列表与备份；超过 ${listing.max_entries} 套或 ${formatBytes(listing.max_bytes)} 时自动清理最早的条目。`
+          : "回收站只保留本应用删除的主题，不占主题列表与备份；超过上限时自动清理最早的条目。"}
       </p>
 
       <AlertDialog
@@ -367,17 +369,6 @@ export function TrashSection({ onBack }: TrashSectionProps) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
-  );
-}
-
-function SummaryBlock({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl bg-card p-3 ring-1 ring-foreground/10">
-      <p className="text-2xs text-muted-foreground">{label}</p>
-      <p className="mt-1 truncate text-sm font-medium tabular-nums" title={value}>
-        {value}
-      </p>
     </div>
   );
 }

@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::models::CursorTheme;
-use crate::utils::{cursor, limits, paths};
+use crate::utils::{cursor, limits, paths, validation};
 
 /// 条目快照文件名；以点开头，不与主题里的光标文件撞名
 const META_FILE: &str = ".trash.json";
@@ -112,11 +112,11 @@ fn mtime_string(dir: &Path) -> String {
 }
 
 fn canonical_id(raw: &str) -> Result<String, String> {
-    let id = Uuid::parse_str(raw).map_err(|_| "非法的回收站条目 ID".to_string())?;
-    if id.to_string() != raw {
-        return Err("非法的回收站条目 ID".to_string());
+    if validation::is_canonical_uuid(raw) {
+        Ok(raw.to_string())
+    } else {
+        Err("非法的回收站条目 ID".to_string())
     }
-    Ok(id.to_string())
 }
 
 fn is_canonical_id(raw: &str) -> bool {
@@ -124,11 +124,11 @@ fn is_canonical_id(raw: &str) -> bool {
 }
 
 fn canonical_theme_id(raw: &str) -> Result<String, String> {
-    let id = Uuid::parse_str(raw).map_err(|_| "回收站记录里的主题 ID 不合法".to_string())?;
-    if id.to_string() != raw {
-        return Err("回收站记录里的主题 ID 不合法".to_string());
+    if validation::is_canonical_uuid(raw) {
+        Ok(raw.to_string())
+    } else {
+        Err("回收站记录里的主题 ID 不合法".to_string())
     }
-    Ok(id.to_string())
 }
 
 // ---------------------------------------------------------------------------
