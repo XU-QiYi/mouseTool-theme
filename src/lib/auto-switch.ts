@@ -35,8 +35,13 @@ function prefersDark(): boolean {
   return window.matchMedia(DARK_QUERY).matches;
 }
 
-/** 当前系统深浅色该用的主题 ID；没开开关或该深浅色没配映射则返回 null */
-function targetThemeId(): string | null {
+/**
+ * 当前系统深浅色该用的主题 ID；没开开关或该深浅色没配映射则返回 null
+ *
+ * 光标守护也读它：守护要恢复的是「此刻应该用的那套主题」，
+ * 自动切换开启时这个答案由深浅色配对决定，而不是历史里碰巧最后一条。
+ */
+export function autoSwitchTargetId(): string | null {
   const settings = useSettingsStore.getState().settings;
   if (!settings?.auto_switch_enabled) return null;
   return prefersDark() ? settings.auto_switch_dark_id : settings.auto_switch_light_id;
@@ -47,7 +52,7 @@ function maybeSwitch(): void {
   // 只有系统深浅色真的翻转（onSystemSchemeChange）才解除
   if (!state.armed || state.applying || state.suspended) return;
 
-  const target = targetThemeId();
+  const target = autoSwitchTargetId();
   if (!target || target === state.lastAppliedId) return;
 
   const themeState = useThemeStore.getState();

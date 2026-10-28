@@ -8,12 +8,14 @@ import { Toggle } from "@/components/ui/toggle";
 import { SettingCard, SettingsGroup } from "@/components/settings/SettingCard";
 import { SettingsStatusBanner } from "@/components/settings/SettingsStatusBanner";
 import { ThemesDirDialog } from "@/components/settings/ThemesDirDialog";
+import { autoSwitchTargetId } from "@/lib/auto-switch";
+import { resolveGuardTarget, restoreNow } from "@/lib/cursor-guard";
 import { setThemeMode, useThemeMode, type ThemeMode } from "@/lib/theme-mode";
 import { toast } from "@/lib/toast";
 import { inTauri } from "@/services/theme";
 import type { CloseBehavior } from "@/services/settings";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { useThemeStore } from "@/stores/themeStore";
+import { actionBusyKey, useThemeStore } from "@/stores/themeStore";
 
 const THEME_MODES = [
   { value: "system", label: "跟随系统", icon: Monitor },
@@ -85,11 +87,57 @@ export function GeneralSection() {
   const toggleAutostart = useSettingsStore((s) => s.toggleAutostart);
   const openThemesDirDialog = useSettingsStore((s) => s.openThemesDirDialog);
   const themesDirBusy = useSettingsStore((s) => s.themesDirBusy);
+  const recent = useThemeStore((s) => s.recent);
+  const themes = useThemeStore((s) => s.themes);
+  const activeThemeId = useThemeStore((s) => s.activeThemeId);
+  const themesLoading = useThemeStore((s) => s.loading);
+  const themesLoadError = useThemeStore((s) => s.loadError);
+  const busy = useThemeStore((s) => s.busy);
 
   useEffect(() => {
     loadSettings();
     loadAutostart();
   }, [loadSettings, loadAutostart]);
+
+  // 守护目标与状态行：自动切换开启时目标是「当前深浅色的配对」，
+  // 否则是最近一次应用的方案；配对主题被删时明确提示改选，不拿历史顶替
+  const autoTarget = settings?.auto_switch_enabled ? autoSwitchTargetId() : null;
+  const guardTarget = resolveGuardTarget(settings, themes, recent, autoTarget);
+  const lastUsed = recent[0] ?? null;
+  const guardMappingMissing = Boolean(
+    settings?.auto_switch_enabled &&
+      autoTarget &&
+      !themes.some((theme) => theme.id === autoTarget),
+  );
+  const guardApplying = guardTarget
+    ? Boolean(busy[actionBusyKey("apply", guardTarget.id)])
+    : false;
+  const guardStatus = themesLoadError
+    ? "主题列表读取失败，暂时无法判断可恢复目标"
+    : themesLoading
+      ? "正在读取主题…"
+      : guardMappingMissing
+        ? "当前深浅色配对的主题已被删除，请在上方改选"
+        : guardTarget
+          ? `可恢复「${guardTarget.name}」${activeThemeId === guardTarget.id ? "（当前正在使用）" : ""}`
+          : lastUsed
+            ? `上次使用「${lastUsed.name}」，但它已不在主题库`
+            : "还没有使用记录，先应用一次主题";
+  const guardTitle = themesLoadError || themesLoading
+    ? "主题列表还没就绪"
+    : !guardTarget
+      ? "没有可恢复的主题"
+      : activeThemeId === guardTarget.id
+        ? "当前正在使用这个主题"
+        : guardApplying
+          ? "正在恢复…"
+          : "把主题库里应该用的那套主题重新应用一次";
+  const guardDisabled =
+    themesLoading ||
+    Boolean(themesLoadError) ||
+    !guardTarget ||
+    activeThemeId === guardTarget.id ||
+    guardApplying;
 
   // 选文件夹 → 先预检再让用户确认（迁移会动全部主题文件，不能选完就开搬）
   const pickThemesDir = async () => {
@@ -189,6 +237,41 @@ export function GeneralSection() {
               onChange={(id) => void patchSettings({ auto_switch_dark_id: id })}
               disabled={!settings}
             />
+          </div>
+        </SettingCard>
+
+        <SettingCard
+          title="光标守护"
+          description="启动时或检测到光标被系统设置改写后，自动恢复上次使用的主题；只恢复主题库里仍在的方案，需要应用正在运行（可配合开机自启动），自动切换开启时优先用当前深浅色的配对主题"
+          action={
+            <Toggle
+              label="光标守护"
+              checked={settings?.cursor_guard_enabled ?? false}
+              onCheckedChange={(checked) =>
+                void patchSettings({ cursor_guard_enabled: checked })
+              }
+              disabled={!settings}
+            />
+          }
+        >
+          <div className="mt-3 flex items-center justify-between gap-3">
+            <p
+              data-guard-status
+              title={guardStatus}
+              className="min-w-0 truncate text-2xs text-muted-foreground"
+            >
+              {guardStatus}
+            </p>
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={restoreNow}
+              disabled={guardDisabled}
+              aria-busy={guardApplying}
+              title={guardTitle}
+            >
+              {guardApplying ? "恢复中…" : "立即恢复"}
+            </Button>
           </div>
         </SettingCard>
       </SettingsGroup>

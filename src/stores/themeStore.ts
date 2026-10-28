@@ -122,9 +122,18 @@ interface ThemeStore {
   zipMenuError: boolean;
 
   loadThemes: () => Promise<void>;
-  /** 窗口聚焦时轻量重查「当前使用」：注册表可能已被系统设置改写（决策 24） */
-  refreshActive: () => Promise<void>;
-  applyTheme: (id: string) => Promise<void>;
+  /**
+   * 窗口聚焦时轻量重查「当前使用」：注册表可能已被系统设置改写（决策 24）
+   *
+   * 返回是否读到了真实状态：光标守护要靠它区分「系统默认」与「注册表读失败」，
+   * 后者不能当成默认去抢着应用主题。
+   */
+  refreshActive: () => Promise<boolean>;
+  /**
+   * 应用主题；`silent` 用于光标守护——自动动作由守护自己解释原因，
+   * 不再叠加一条「已应用」的常规成功提示（失败提示照常显示）。
+   */
+  applyTheme: (id: string, options?: { silent?: boolean }) => Promise<void>;
   restoreDefault: () => Promise<void>;
   importTheme: (sourcePath: string) => Promise<void>;
   /** 返回是否真的删掉了；确认对话框据此决定关不关 */
@@ -225,12 +234,14 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
         activeExternal: state.active_external,
         currentSlotsFilled: state.current_slots_filled,
       });
+      return true;
     } catch (err) {
       console.warn("[refreshActive]", readableError(err));
+      return false;
     }
   },
 
-  applyTheme: async (id) => {
+  applyTheme: async (id, options) => {
     const theme = get().themes.find((t) => t.id === id);
     if (!theme) return;
 
@@ -240,10 +251,12 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     try {
       const outcome = await apiApplyTheme(theme);
       set({ activeThemeId: id, activeExternal: false, recent: outcome.recent });
-      toast.success(
-        `已应用「${theme.name}」`,
-        inTauri ? "系统光标已切换" : "开发模式：未真正写入系统",
-      );
+      if (!options?.silent) {
+        toast.success(
+          `已应用「${theme.name}」`,
+          inTauri ? "系统光标已切换" : "开发模式：未真正写入系统",
+        );
+      }
       // 光标已经切了，这只是附属信息没记上：不能反过来报「应用失败」
       if (outcome.warning) {
         toast.warning("光标已切换，但没记入最近使用", outcome.warning);

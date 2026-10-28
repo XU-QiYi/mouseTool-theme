@@ -18,6 +18,7 @@ import { useDragDropImport } from "@/hooks/useDragDropImport";
 import { useInspectorWidth } from "@/hooks/useInspectorWidth";
 import { PAGE_META, type Page, type PageMeta } from "@/lib/pages";
 import { initAutoSwitch } from "@/lib/auto-switch";
+import { initCursorGuard } from "@/lib/cursor-guard";
 import { initShortcuts } from "@/lib/shortcuts";
 import { toast } from "@/lib/toast";
 import { checkForUpdates } from "@/lib/update-check";
@@ -65,6 +66,10 @@ function App() {
   // 跟随系统深浅色自动切换主题（「设置 → 通用」可配）：系统翻转 / 窗口聚焦 /
   // 设置与主题列表变更三类时机评估一次；还原默认会挂起，见 lib/auto-switch.ts
   useEffect(() => initAutoSwitch(), []);
+
+  // 光标守护（「设置 → 通用」可配，默认关闭）：启动检查 + 聚焦发现外部改写后
+  // 自动恢复上次使用的主题；不轮询，见 lib/cursor-guard.ts
+  useEffect(() => initCursorGuard(), []);
 
   // 启动时自动检查更新（「设置 → 通用」可关）：只在发现新版本时提示，
   // 检查失败静默——启动不是报错的场合。每次启动最多查一次

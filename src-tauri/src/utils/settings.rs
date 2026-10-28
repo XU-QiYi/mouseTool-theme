@@ -63,6 +63,9 @@ pub struct AppSettings {
     pub auto_switch_light_id: Option<String>,
     /// 系统深色时使用的主题 ID；`None` = 深色时不切换
     pub auto_switch_dark_id: Option<String>,
+    /// 光标守护：启动或检测到外部改写时自动恢复上次使用的主题（逻辑在前端，
+    /// 见 `lib/cursor-guard.ts`；这里只存偏好）
+    pub cursor_guard_enabled: bool,
 }
 
 impl Default for AppSettings {
@@ -75,6 +78,7 @@ impl Default for AppSettings {
             auto_switch_enabled: false,
             auto_switch_light_id: None,
             auto_switch_dark_id: None,
+            cursor_guard_enabled: false,
         }
     }
 }
@@ -343,6 +347,7 @@ mod tests {
             auto_switch_enabled: true,
             auto_switch_light_id: Some("sys_windows_default".to_string()),
             auto_switch_dark_id: Some("11111111-1111-4111-8111-111111111111".to_string()),
+            cursor_guard_enabled: true,
             ..AppSettings::default()
         };
         write_to(&file, &settings).expect("写入设置");
@@ -357,6 +362,7 @@ mod tests {
             loaded.auto_switch_dark_id.as_deref(),
             Some("11111111-1111-4111-8111-111111111111")
         );
+        assert!(loaded.cursor_guard_enabled);
 
         // 旧版本文件只有部分字段：缺的走默认，不整份拒读
         fs::write(&file, r#"{"close_behavior":"tray"}"#).expect("写旧格式");
@@ -366,6 +372,27 @@ mod tests {
         assert!(!loaded.auto_switch_enabled, "自动切换默认关闭，不能凭空替用户切换");
         assert!(loaded.auto_switch_light_id.is_none());
         assert!(loaded.auto_switch_dark_id.is_none());
+        assert!(
+            !loaded.cursor_guard_enabled,
+            "光标守护默认关闭，不能凭空替用户抢回光标"
+        );
+        let _ = fs::remove_file(&file);
+    }
+
+    #[test]
+    fn 光标守护默认关闭且写读往返() {
+        let file = temp_file("cursor-guard");
+        assert!(
+            !AppSettings::default().cursor_guard_enabled,
+            "默认必须是关：不能凭空替用户抢回光标"
+        );
+
+        let settings = AppSettings {
+            cursor_guard_enabled: true,
+            ..AppSettings::default()
+        };
+        write_to(&file, &settings).expect("写入设置");
+        assert!(read_from(&file).cursor_guard_enabled, "开启状态必须落盘可读");
         let _ = fs::remove_file(&file);
     }
 
