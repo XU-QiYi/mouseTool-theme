@@ -74,7 +74,7 @@ mouseTool-theme/
 │           ├── trash.rs            ← 主题回收站：移入 / 列出 / 恢复 / 彻底删除 / 限额（决策 26）
 │           ├── capture.rs          ← 把外部改写态的当前光标复制为我的主题（决策 28）
 │           ├── autostart.rs        ← HKCU Run 键（开机自启动）
-│           ├── tray.rs             ← 托盘图标（关闭到托盘时才存在）
+│           ├── tray.rs             ← 托盘图标与最近主题快速切换菜单（关闭到托盘时才存在，决策 30）
 │           └── integration.rs      ← 单实例互斥、--import 转交、.zip 右键菜单
 ├── scripts/                        ← 无头浏览器验收脚本（设计/动效/交互）
 ├── .github/workflows/ci.yml        ← CI：build / cargo test / design_audit / doc_ref_check（决策 21）
@@ -294,3 +294,4 @@ App.tsx
 | 2026-10-28 | 决策 26：主题回收站——删除改为软删除，整目录移入 `trash\<条目 UUID>\` + `.trash.json` 快照；新增 `list_trash` / `restore_from_trash` / `delete_from_trash` / `empty_trash`（命令契约 26 → 30），`delete_theme` 返回 `DeleteOutcome` 并纳入 `ops` 锁；上限 20 套 / 512 MB 自动清理最早条目；跨盘复制 + 校验回退；「设置 → 数据」新增回收站子页（不新增导航），损坏条目可见不可恢复 |
 | 2026-10-28 | 决策 28：保存并接管当前光标——新增 `save_current_theme`（命令契约 30 → 31）与 `utils/capture.rs`；外部改写态下把当前注册表光标复制为我的主题（单文件 20MB / 总量 50MB、同源去重），抄全时自动应用并记历史，有槽位缺失时只保存不自动应用；当前已是已知主题时拒绝重复；侧栏当前使用卡增加「保存并应用」入口 |
 | 2026-10-28 | 决策 29：光标守护——`settings.json` 新增 `cursor_guard_enabled`（默认 false），前端新增 `lib/cursor-guard.ts`（启动 / 外部改写 / 开启开关三类时机，目标优先自动切换配对、否则最近主题），`applyTheme` 增加 `silent` 选项、`refreshActive` 返回读取是否成功；「设置 → 通用 → 外观」新增守护卡与「立即恢复」；命令数保持 31（本功能未新增命令），验收 `scripts/guard_check.mjs` |
+| 2026-10-28 | 决策 30：托盘快速切换——`tray.rs` 右键菜单新增最近使用主题（≤8，当前主题勾选）与「还原默认光标」，应用 / 还原复用 `apply` / `restore` 同链路（`apply_by_id` 点击时复核，过期条目自愈）；`tray::refresh` 在应用 / 还原 / 保存当前光标 / 删除 / 改名 / 回收站 / 备份恢复等命令完成后重建菜单（命令新增的 `AppHandle` 参数为 Tauri 注入，IPC 契约与前端不变）；命令数保持 31，纯函数与隔离单测覆盖 |

@@ -12,7 +12,7 @@ use crate::models::{
 };
 use crate::utils::{
     capture, history, importer, inf_export, limits, ops, paths, registry, theme_paths, trash,
-    validation,
+    tray, validation,
 };
 
 /// `export_theme` 的返回值：跳过项要说清是哪个槽位，否则用户不知道少了什么
@@ -119,11 +119,11 @@ fn detect_active_theme(
 ///
 /// `read_current_slots` 只返回非空槽位，所以它的长度就是非空槽位数。
 /// 注册表读失败时不猜：既不标主题也不判外部改写，把原因带回给调用方。
-struct ActiveInfo {
-    id: Option<String>,
-    filled: usize,
-    external: bool,
-    warning: Option<String>,
+pub(crate) struct ActiveInfo {
+    pub id: Option<String>,
+    pub filled: usize,
+    pub external: bool,
+    pub warning: Option<String>,
 }
 
 fn probe_active(themes: &[CursorTheme]) -> ActiveInfo {
@@ -164,7 +164,36 @@ pub async fn get_all_themes() -> Result<ThemesResult, String> {
         .map_err(|err| format!("读取主题列表任务异常退出（{err}）"))?
 }
 
-fn all_themes() -> Result<ThemesResult, String> {
+/// 聚合完成的主题快照：清单 + 反推的使用状态 + 派生的最近主题
+///
+/// 界面命令与托盘菜单（决策 30）要的是同一份事实，抽出来共用，
+/// 两边对「当前是谁、最近用过什么」的答案才不会漂移。
+pub(crate) struct ThemesSnapshot {
+    pub themes: Vec<CursorTheme>,
+    pub warnings: Vec<String>,
+    pub active: ActiveInfo,
+    pub recent: Vec<HistoryEntry>,
+}
+
+impl ThemesSnapshot {
+    /// 无数据的空快照：托盘初建时先用它拼出「打开 / 退出」菜单，
+    /// 主题区随后由 `tray::refresh` 异步补齐，不在启动路径里做 I/O
+    pub(crate) fn empty() -> Self {
+        Self {
+            themes: Vec::new(),
+            warnings: Vec::new(),
+            active: ActiveInfo {
+                id: None,
+                filled: 0,
+                external: false,
+                warning: None,
+            },
+            recent: Vec::new(),
+        }
+    }
+}
+
+pub(crate) fn collect_snapshot() -> ThemesSnapshot {
     let (themes, mut warnings) = merge_sources(
         registry::read_system_schemes(),
         importer::read_user_themes(),
@@ -173,7 +202,7 @@ fn all_themes() -> Result<ThemesResult, String> {
     let active = probe_active(&themes);
     // 识别不出就当作「没有正在使用的主题」：少标一个「使用中」可以接受，
     // 标错了会让人以为已经应用成功
-    if let Some(warn) = active.warning {
+    if let Some(warn) = active.warning.clone() {
         warnings.push(warn);
     }
 
@@ -181,13 +210,23 @@ fn all_themes() -> Result<ThemesResult, String> {
     let (recent, history_warnings) = history::read_history();
     warnings.extend(history_warnings);
 
-    Ok(ThemesResult {
+    ThemesSnapshot {
         themes,
         warnings,
-        active_theme_id: active.id,
-        current_slots_filled: active.filled,
-        active_external: active.external,
+        active,
         recent,
+    }
+}
+
+fn all_themes() -> Result<ThemesResult, String> {
+    let snapshot = collect_snapshot();
+    Ok(ThemesResult {
+        themes: snapshot.themes,
+        warnings: snapshot.warnings,
+        active_theme_id: snapshot.active.id,
+        current_slots_filled: snapshot.active.filled,
+        active_external: snapshot.active.external,
+        recent: snapshot.recent,
     })
 }
 
@@ -265,10 +304,13 @@ fn checked_slots(theme: &CursorTheme) -> Result<Vec<CursorSlot>, String> {
 /// 顺带记一条「最近使用」。历史是附属信息：写失败不影响「已应用」这个事实，
 /// 但要把原因回传，由界面说明「光标切了，只是没记上」，不能静默吞掉。
 #[tauri::command]
-pub async fn apply_theme(theme: CursorTheme) -> Result<ApplyOutcome, String> {
-    tauri::async_runtime::spawn_blocking(move || apply(&theme))
+pub async fn apply_theme(app: AppHandle, theme: CursorTheme) -> Result<ApplyOutcome, String> {
+    let outcome = tauri::async_runtime::spawn_blocking(move || apply(&theme))
         .await
-        .map_err(|err| format!("应用主题任务异常退出（{err}）"))?
+        .map_err(|err| format!("应用主题任务异常退出（{err}）"))?;
+    // 菜单里的「最近使用」与勾选状态随应用结果变化（决策 30）
+    tray::refresh(&app);
+    outcome
 }
 
 fn apply(theme: &CursorTheme) -> Result<ApplyOutcome, String> {
@@ -289,6 +331,22 @@ fn apply(theme: &CursorTheme) -> Result<ApplyOutcome, String> {
             })
         }
     }
+}
+
+/// 托盘快速切换（决策 30）：按 ID 从最新清单里取主题并应用
+///
+/// 菜单是重建时拍下的快照，点下去主题可能已被删除或迁移：找不到时返回
+/// `Ok(false)`，托盘会重查菜单把过期条目摘掉，而不是报错吓人。校验完全
+/// 复用 `apply`（槽位白名单、UUID 与目录一致性、光标文件落点），托盘点击
+/// 与界面按钮不会走出两条安全口径。
+pub(crate) fn apply_by_id(theme_id: &str) -> Result<bool, String> {
+    let snapshot = collect_snapshot();
+    let Some(theme) = snapshot.themes.iter().find(|theme| theme.id == theme_id) else {
+        return Ok(false);
+    };
+    let theme = theme.clone();
+    apply(&theme)?;
+    Ok(true)
 }
 
 /// `save_current_theme` 的返回值
@@ -313,13 +371,16 @@ pub struct SaveCurrentOutcome {
 /// 只保存不应用——自动应用会把那些没抄到的非空槽位写成空字符串，反而改变
 /// 用户当前的光标设置。
 #[tauri::command]
-pub async fn save_current_theme() -> Result<SaveCurrentOutcome, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+pub async fn save_current_theme(app: AppHandle) -> Result<SaveCurrentOutcome, String> {
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
         let _guard = ops::try_begin("保存当前光标")?;
         save_current()
     })
     .await
-    .map_err(|err| format!("保存当前光标任务异常退出（{err}）"))?
+    .map_err(|err| format!("保存当前光标任务异常退出（{err}）"))?;
+    // 抄全即接管：注册表变了，托盘勾选跟着变（决策 30）
+    tray::refresh(&app);
+    outcome
 }
 
 fn save_current() -> Result<SaveCurrentOutcome, String> {
@@ -385,13 +446,16 @@ fn save_current() -> Result<SaveCurrentOutcome, String> {
 
 /// 恢复系统默认光标
 #[tauri::command]
-pub async fn restore_default() -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(restore)
+pub async fn restore_default(app: AppHandle) -> Result<(), String> {
+    let result = tauri::async_runtime::spawn_blocking(restore)
         .await
-        .map_err(|err| format!("恢复默认光标任务异常退出（{err}）"))?
+        .map_err(|err| format!("恢复默认光标任务异常退出（{err}）"))?;
+    // 还原结果决定托盘「还原默认光标」的勾选（决策 30）
+    tray::refresh(&app);
+    result
 }
 
-fn restore() -> Result<(), String> {
+pub(crate) fn restore() -> Result<(), String> {
     registry::clear_cursors()?;
     registry::refresh_cursors()
 }
@@ -401,13 +465,16 @@ fn restore() -> Result<(), String> {
 /// 只接受 UUID。theme_id 来自前端，必须校验格式——否则传入 `../` 之类的值
 /// 会让 `theme_dir` 拼到数据目录之外，误删用户其它文件。
 #[tauri::command]
-pub async fn delete_theme(theme_id: String) -> Result<trash::DeleteOutcome, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn delete_theme(app: AppHandle, theme_id: String) -> Result<trash::DeleteOutcome, String> {
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
         let _guard = ops::try_begin("删除主题")?;
         delete(&theme_id)
     })
     .await
-    .map_err(|err| format!("删除主题任务异常退出（{err}）"))?
+    .map_err(|err| format!("删除主题任务异常退出（{err}）"))?;
+    // 主题没了，托盘菜单里的对应条目也该跟着消失（决策 30）
+    tray::refresh(&app);
+    outcome
 }
 
 fn delete(theme_id: &str) -> Result<trash::DeleteOutcome, String> {
@@ -457,10 +524,17 @@ fn delete(theme_id: &str) -> Result<trash::DeleteOutcome, String> {
 /// 只改 theme.json 里的显示名，目录名仍是 UUID（改目录会影响正在使用的
 /// 光标路径）。`updated_at` 保持导入时间不变——界面上它承担的是「导入于」。
 #[tauri::command]
-pub async fn rename_theme(theme_id: String, new_name: String) -> Result<CursorTheme, String> {
-    tauri::async_runtime::spawn_blocking(move || rename(&theme_id, &new_name))
+pub async fn rename_theme(
+    app: AppHandle,
+    theme_id: String,
+    new_name: String,
+) -> Result<CursorTheme, String> {
+    let renamed = tauri::async_runtime::spawn_blocking(move || rename(&theme_id, &new_name))
         .await
-        .map_err(|err| format!("改名任务异常退出（{err}）"))?
+        .map_err(|err| format!("改名任务异常退出（{err}）"))?;
+    // 菜单标签取主题的当前名字，改名后托盘不能还叫旧名（决策 30）
+    tray::refresh(&app);
+    renamed
 }
 
 fn rename(theme_id: &str, new_name: &str) -> Result<CursorTheme, String> {
@@ -1336,5 +1410,81 @@ mod tests {
         let err = export_to(&mine, &zip.to_string_lossy()).unwrap_err();
         assert!(err.contains("该主题目录"), "导出也必须拒绝，实际：{err}");
         assert!(!zip.exists(), "失败时不能留下压缩包");
+    }
+
+    /// 托盘快速切换（决策 30）：按 ID 应用必须与界面按钮走同一条链路
+    #[test]
+    fn 托盘按_id_应用主题并记录最近使用() {
+        let root = TempDir::new("tray-apply");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("tray-apply", true);
+
+        let (theme, _dir) = seed_exportable_theme("托盘切换", &[("Arrow", "arrow.cur", fixture_cur())]);
+
+        let applied = apply_by_id(&theme.id).expect("应应用成功");
+        assert!(applied);
+
+        let current = registry::read_current_slots().expect("读回注册表");
+        assert!(
+            theme_matches_current(&theme, &current),
+            "注册表应切到该主题"
+        );
+        let history_path = paths::history_file().expect("解析历史文件");
+        let events = history::read_events_from(&history_path).events;
+        assert_eq!(
+            events.first().map(|entry| entry.theme_id.as_str()),
+            Some(theme.id.as_str()),
+            "托盘应用与界面应用一样要记入最近使用"
+        );
+    }
+
+    /// 菜单是重建时的快照：主题被删后再点，不能报错也不能动注册表
+    #[test]
+    fn 托盘按_id_应用已删除的主题时静默跳过() {
+        let root = TempDir::new("tray-apply-gone");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("tray-gone", false);
+
+        let applied = apply_by_id(&Uuid::new_v4().to_string()).expect("找不到不算错误");
+        assert!(!applied);
+        assert!(
+            registry::read_current_slots().is_err(),
+            "隔离键没有槽位：未应用时注册表不应被写入"
+        );
+    }
+
+    /// 托盘点击不能绕过主题目录校验：与应用命令共用同一套安全口径
+    ///
+    /// 光标文件被挪走后 theme.json 仍指向它：清单里还能出现这个主题
+    /// （读取端只清坏槽位），但 `apply` 的存在性校验必须把它拦下。
+    #[test]
+    fn 托盘按_id_应用时仍走主题目录校验() {
+        let root = TempDir::new("tray-apply-cross");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("tray-cross", true);
+
+        let (theme, dir) = seed_exportable_theme("文件被挪走", &[("Arrow", "arrow.cur", fixture_cur())]);
+        fs::remove_file(dir.join("cursors").join("arrow.cur")).expect("删掉光标文件");
+
+        let err = apply_by_id(&theme.id).unwrap_err();
+        assert!(err.contains("不存在") || err.contains("读不到"), "实际：{err}");
+    }
+
+    /// 托盘「还原默认」与还原命令同链路：清槽位后注册表应回到空
+    #[test]
+    fn 托盘还原默认清空注册表槽位() {
+        let root = TempDir::new("tray-restore");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("tray-restore", true);
+
+        let (theme, _dir) = seed_exportable_theme("应用后还原", &[("Arrow", "arrow.cur", fixture_cur())]);
+        registry::write_cursors(&theme.cursors, &theme.name).expect("先占上槽位");
+        assert!(!registry::read_current_slots().expect("读回注册表").is_empty());
+
+        restore().expect("还原默认");
+        assert!(
+            registry::read_current_slots().expect("读回注册表").is_empty(),
+            "还原后不应残留槽位"
+        );
     }
 }
