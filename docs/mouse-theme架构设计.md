@@ -137,7 +137,7 @@ App.tsx
 
 ---
 
-## 5. 命令契约（当前共 31 个）
+## 5. 命令契约（当前共 32 个）
 
 | Command | 入参（前端写法） | 返回 | 失败场景 |
 |---|---|---|---|
@@ -159,14 +159,15 @@ App.tsx
 | `set_zip_menu` | `register`（布尔） | `void` | 注册表写失败（试点功能，决策 12） |
 | `take_pending_import` | — | `String \| null` | **不失败**（无待导入 / 文件损坏都返回 null，领取即删除） |
 | `get_settings` | — | `SettingsSnapshot` | 数据根不可用；设置文件缺失 / 损坏退回默认值——损坏文件先自动改名备份（`.corrupt-<时间>.bak`），并随 `warnings` 返回提示 |
-| `update_settings` | `closeBehavior?`, `autoCheckUpdate?`, `shortcutsEnabled?`, `autoSwitchEnabled?`, `autoSwitchLightId?`, `autoSwitchDarkId?`, `cursorGuardEnabled?`（只传要改的） | `SettingsSnapshot` | 不认识的关闭行为值、写盘失败；关闭行为变更会同步托盘有无；主题 ID 用空串表示清空 |
+| `update_settings` | `closeBehavior?`, `autoCheckUpdate?`, `shortcutsEnabled?`, `autoSwitchEnabled?`, `autoSwitchLightId?`, `autoSwitchDarkId?`, `cursorGuardEnabled?`, `autoBackupEnabled?`, `autoBackupKeep?`, `scheduleSwitchEnabled?`, `scheduleStart?`, `scheduleEnd?`, `scheduleInId?`, `scheduleOutId?`（只传要改的） | `SettingsSnapshot` | 不认识的关闭行为值、保留份数不在 1–100、时间不是合法 `HH:MM`、写盘失败；关闭行为变更会同步托盘有无；主题 ID 用空串表示清空 |
 | `get_autostart` | — | `AutostartStatus` | **不失败**（读不到就当未注册）；开启时 `exe_path` 返回注册表里实际登记的程序路径 |
 | `set_autostart` | `enable`（布尔） | `AutostartStatus` | Run 键写/删失败；状态以注册表回读为准 |
 | `preview_themes_dir` | `path?`（字符串 \| null） | `ThemesDirPlan` | 目标不是绝对路径 / UNC / 经过重解析点 / 数据目录内部（默认除外）/ 祖先 / 互相嵌套 / 非空目录；只校验统计，**不搬文件** |
 | `set_themes_dir` | `path`（字符串 \| null） | `ThemesDirChangeResult` | 预检失败；复制 / 校验 / 切换 / 重绑注册表 / 写设置任一步失败都会回滚（源目录与设置保持原样），执行中通过 `themes-dir-progress` 事件报阶段 |
 | `export_backup` | `destPath?`（字符串 | null） | `ExportBackupSummary`（含 `saved_path` / `bytes`） | `destPath = null` 时写入数据目录 `backups` 自动命名（`cursorstudio-backup-YYYYMMDD-HHmmss.zip`，同秒加 `-2`/`-3`；目录不存在先建）；传路径 = 导出到任意位置（不受备份历史管理）。其余失败场景：目标路径校验失败、没有可备份内容、写 zip 失败（临时包删除、原目标保留）；`theme.json` 改写成相对路径，无法改写的进 `warnings`；执行期发 `backup-progress` |
-| `list_backups` | — | `Vec<BackupEntry>`（时间倒序，上限 200） | 目录不存在返回空；只扫 `backups` 一级 `.zip`、跳过链接 / 目录联接；只读 zip 中央目录统计主题 / 文件数，打不开的保留为 `status="corrupt"` 条目并附中文原因（计数为 0） |
+| `list_backups` | — | `Vec<BackupEntry>`（时间倒序，上限 200） | 目录不存在返回空；只扫 `backups` 一级 `.zip`、跳过链接 / 目录联接；`kind` 按文件名前缀判定（`cursorstudio-backup-auto-` = `"auto"`，决策 32）；只读 zip 中央目录统计主题 / 文件数，打不开的保留为 `status="corrupt"` 条目并附中文原因（计数为 0） |
 | `delete_backup` | `fileName`（只收文件名） | `void` | 空名、含 `/` `` `..`、非 `.zip`、拼接后越出 `backups`、链接 / 目录联接、文件不存在——一律中文错误拒绝；删除前二次确认在前端 |
+| `run_auto_backup` | `keep`（保留份数） | `AutoBackupSummary`（`created` / `skipped` / `file_name` / `pruned`） | 当天已有自动备份则跳过并顺带清理过期（`created=false`）；空库返回「还没有可备份的内容」；与手动备份共用 `ops` 锁，冲突立即失败（决策 32）；不发 `backup-progress` |
 | `import_backup` | `zipPath` | `ImportBackupSummary` | 不是有效 zip、超限额（1GiB 总量 / 64MB 单文件 / 4096 条目 / 10 层）、条目名不合法、写盘失败（清掉本次新建主题目录）；恢复后按新根重写相对路径，失败项进 `warnings`；执行期发 `backup-progress` |
 | `list_trash` | — | `TrashListing`（`entries` + `max_entries` / `max_bytes`） | 目录不存在返回空；只扫 `trash` 一级 UUID 目录、跳过链接 / 目录联接；快照或 `theme.json` 无法恢复标 `status="damaged"` 并附中文原因（保留可见、可清理） |
 | `restore_from_trash` | `entryId` | `RestoreOutcome` | 非规范 UUID、快照与目录不一致、快照损坏、`theme.json` 损坏 / ID 不符 / 自称系统方案 / 没有槽位、目标已有同 ID 主题；条目保持原样，执行期取 `ops` 锁 |
@@ -175,7 +176,7 @@ App.tsx
 
 **为什么 `apply_theme` / `export_theme` 收整个 `CursorTheme` 而不是 ID**：系统方案只存在于注册表，没有磁盘目录，但同样有光标文件路径；只传 ID 就到不了它们的文件。
 
-**执行模型**（决策 19）：所有 I/O 命令都是 `async` + `spawn_blocking`，主线程不碰文件（`get_data_dir` 只算路径、不读盘，保持同步）；导入 / 备份 / 迁移分别发 `import-progress` / `backup-progress` / `themes-dir-progress`，载荷是 `TaskProgress { stage, current, total, message }`。导入、备份导出 / 恢复、迁移、删除主题 / 恢复 / 彻底删除 / 清空回收站（决策 26）与保存当前光标（决策 28）共用 `ops::try_begin` 的 `try_lock`，冲突立即返回中文错误，不排队。
+**执行模型**（决策 19）：所有 I/O 命令都是 `async` + `spawn_blocking`，主线程不碰文件（`get_data_dir` 只算路径、不读盘，保持同步）；导入 / 备份 / 迁移分别发 `import-progress` / `backup-progress` / `themes-dir-progress`（自动备份不发事件，避免顶掉手动备份的进度展示，决策 32），载荷是 `TaskProgress { stage, current, total, message }`。导入、备份导出 / 恢复、自动备份、迁移、删除主题 / 恢复 / 彻底删除 / 清空回收站（决策 26）与保存当前光标（决策 28）共用 `ops::try_begin` 的 `try_lock`，冲突立即返回中文错误，不排队。
 
 **输入边界**（决策 18）：命令入口先过 `validation`——`apply_theme` / `export_theme` 校验 15 槽位白名单与主题 ID 目录一致，预览路径卡 8MB 且必须在主题目录或系统光标目录内，`dest_path` 要求父目录存在且后缀正确，备份来源要求 `.zip` 文件。解压 / 文件夹扫描统一走 `limits`，超限清理临时产物。
 
@@ -201,10 +202,10 @@ App.tsx
 | `ApplyOutcome` | `recent`、`warning` | 主操作成功就不回滚；`recent` 为派生视图 |
 | `CursorPreview` | `is_animated`、`image`、`frames`、`rate_ms`、`hotspot` | base64 不含 `data:` 前缀 |
 | `HistoryEntry` | `theme_id`、`name`、`is_built_in`、`applied_at` | 一条**使用事件**（名称是快照）；磁盘事件流上限 200 条，界面 `recent` 去重后最多 50 |
-| `SettingsSnapshot` | `close_behavior`、`themes_dir`、`effective_themes_dir`、`auto_check_update`、`shortcuts_enabled`、`auto_switch_enabled`、`auto_switch_light_id`、`auto_switch_dark_id`、`cursor_guard_enabled`、`warnings` | `warnings` 为读取时的非致命问题（典型：设置文件损坏已备份）；`cursor_guard_enabled` 默认 false（决策 29） |
+| `SettingsSnapshot` | `close_behavior`、`themes_dir`、`effective_themes_dir`、`auto_check_update`、`shortcuts_enabled`、`auto_switch_enabled`、`auto_switch_light_id`、`auto_switch_dark_id`、`cursor_guard_enabled`、`auto_backup_enabled`、`auto_backup_keep`、`schedule_switch_enabled`、`schedule_start`、`schedule_end`、`schedule_in_id`、`schedule_out_id`、`warnings` | `warnings` 为读取时的非致命问题（典型：设置文件损坏已备份）；`cursor_guard_enabled` 默认 false（决策 29）；`auto_backup_*` 默认关 / 10（决策 32）；`schedule_*` 默认关 / 09:00–18:00（决策 33） |
 | `AutostartStatus` | `enabled`、`exe_path` | `exe_path` 是注册表实际登记的程序路径，未开启时为空串 |
 | `ExportSummary` | `file_count`、`skipped` | 跳过原因给界面提示 |
-| `ExportBackupSummary` / `ImportBackupSummary` | 主题/文件/记录计数、`warnings` | 备份恢复是合并语义；路径改写等非致命问题进 `warnings` |
+| `ExportBackupSummary` / `ImportBackupSummary` / `AutoBackupSummary` | 主题/文件/记录计数、`warnings`；`created`、`skipped`、`file_name`、`pruned` | 备份恢复是合并语义；路径改写等非致命问题进 `warnings`；`AutoBackupSummary` 是自动备份的结果（决策 32） |
 | `ThemesDirPlan` | `source`、`target`、`is_default`、`theme_count`、`file_count`、`total_bytes`、`warnings` | 迁移确认框的数据源，只读不搬 |
 | `ThemesDirChangeResult` | `settings`、`report` | `report` 含 `rebound_slots` 与 `warnings` |
 | `ThemesDirProgress` | `phase`、`current`、`total`、`message` | `phase` 固定为 copy / verify / switch / registry / settings / cleanup / done |
