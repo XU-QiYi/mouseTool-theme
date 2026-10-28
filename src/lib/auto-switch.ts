@@ -1,5 +1,6 @@
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useThemeStore } from "@/stores/themeStore";
+import { scheduleOwnsNow } from "@/lib/schedule-switch";
 
 const DARK_QUERY = "(prefers-color-scheme: dark)";
 
@@ -51,6 +52,11 @@ function maybeSwitch(): void {
   // suspended = 用户刚还原了默认：焦点 / 设置重读都不能抢回来，
   // 只有系统深浅色真的翻转（onSystemSchemeChange）才解除
   if (!state.armed || state.applying || state.suspended) return;
+
+  // 定时切换正拥有当前时段（决策 33）：期间内的主题交给它，深浅色让位，
+  // 否则两个自动机制会在同一分钟里互相覆盖
+  const settings = useSettingsStore.getState().settings;
+  if (settings && scheduleOwnsNow(settings)) return;
 
   const target = autoSwitchTargetId();
   if (!target || target === state.lastAppliedId) return;

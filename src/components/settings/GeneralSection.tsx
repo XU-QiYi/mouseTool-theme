@@ -10,6 +10,7 @@ import { SettingsStatusBanner } from "@/components/settings/SettingsStatusBanner
 import { ThemesDirDialog } from "@/components/settings/ThemesDirDialog";
 import { autoSwitchTargetId } from "@/lib/auto-switch";
 import { resolveGuardTarget, restoreNow } from "@/lib/cursor-guard";
+import { isScheduleInWindow } from "@/lib/schedule-switch";
 import { setThemeMode, useThemeMode, type ThemeMode } from "@/lib/theme-mode";
 import { toast } from "@/lib/toast";
 import { inTauri } from "@/services/theme";
@@ -238,6 +239,69 @@ export function GeneralSection() {
               disabled={!settings}
             />
           </div>
+        </SettingCard>
+
+        <SettingCard
+          title="定时切换主题"
+          description="在设定的时间段内自动应用「期间内主题」，时间段外应用「期间外主题」；开始晚于结束视为跨零点（如 22:00–06:00）。手动「还原默认」会暂停切换，到下一个时间点恢复"
+          action={
+            <Toggle
+              label="定时切换主题"
+              checked={settings?.schedule_switch_enabled ?? false}
+              onCheckedChange={(checked) => void patchSettings({ schedule_switch_enabled: checked })}
+              disabled={!settings}
+            />
+          }
+        >
+          {settings && (
+            <div className="mt-3 grid gap-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-2xs text-muted-foreground">时间段</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="time"
+                    aria-label="时间段开始"
+                    data-schedule-start
+                    className="h-8 rounded-lg border border-input bg-transparent px-2 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                    value={settings.schedule_start}
+                    onChange={(event) => {
+                      if (event.target.value) {
+                        void patchSettings({ schedule_start: event.target.value });
+                      }
+                    }}
+                  />
+                  <span className="text-2xs text-muted-foreground">至</span>
+                  <input
+                    type="time"
+                    aria-label="时间段结束"
+                    data-schedule-end
+                    className="h-8 rounded-lg border border-input bg-transparent px-2 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                    value={settings.schedule_end}
+                    onChange={(event) => {
+                      if (event.target.value) {
+                        void patchSettings({ schedule_end: event.target.value });
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+              <ThemeMappingSelect
+                label="期间内主题"
+                value={settings.schedule_in_id ?? ""}
+                onChange={(id) => void patchSettings({ schedule_in_id: id })}
+              />
+              <ThemeMappingSelect
+                label="期间外主题"
+                value={settings.schedule_out_id ?? ""}
+                onChange={(id) => void patchSettings({ schedule_out_id: id })}
+              />
+              <p data-schedule-window className="text-2xs text-muted-foreground">
+                {isScheduleInWindow(settings)
+                  ? "当前处于时间段内，使用「期间内主题」"
+                  : "当前处于时间段外，使用「期间外主题」"}
+              </p>
+            </div>
+          )}
         </SettingCard>
 
         <SettingCard

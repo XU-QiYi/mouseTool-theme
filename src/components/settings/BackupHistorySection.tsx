@@ -290,7 +290,8 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
                     {corrupt ? "—" : formatBytes(entry.bytes)}
                   </td>
                   <td className="px-2 py-2.5">
-                    <span data-backup-status={entry.status}>
+                    <span data-backup-status={entry.status} className="flex flex-wrap items-center gap-1">
+                      {entry.kind === "auto" && <StatusBadge tone="neutral">自动</StatusBadge>}
                       {corrupt ? (
                         <StatusBadge tone="warning" dot>
                           已损坏

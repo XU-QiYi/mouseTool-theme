@@ -66,6 +66,22 @@ pub struct AppSettings {
     /// 光标守护：启动或检测到外部改写时自动恢复上次使用的主题（逻辑在前端，
     /// 见 `lib/cursor-guard.ts`；这里只存偏好）
     pub cursor_guard_enabled: bool,
+    /// 自动备份：每天第一份备份落进「备份历史」（触发逻辑在前端，见
+    /// `lib/auto-backup.ts`；当日去重与过期清理在 `commands/backup.rs`）
+    pub auto_backup_enabled: bool,
+    /// 自动备份保留份数：超出就删最旧的自动备份，手动备份不受影响
+    pub auto_backup_keep: u32,
+    /// 定时切换主题：时间段内 / 外应用配对主题（逻辑在前端，见
+    /// `lib/schedule-switch.ts`；这里只存偏好）
+    pub schedule_switch_enabled: bool,
+    /// 时间段起点，24 小时制 `HH:MM`
+    pub schedule_start: String,
+    /// 时间段终点，24 小时制 `HH:MM`；小于起点视为跨零点区间
+    pub schedule_end: String,
+    /// 时间段内使用的主题 ID；`None` = 期间内不切换
+    pub schedule_in_id: Option<String>,
+    /// 时间段外使用的主题 ID；`None` = 期间外不切换
+    pub schedule_out_id: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -79,8 +95,32 @@ impl Default for AppSettings {
             auto_switch_light_id: None,
             auto_switch_dark_id: None,
             cursor_guard_enabled: false,
+            auto_backup_enabled: false,
+            auto_backup_keep: 10,
+            schedule_switch_enabled: false,
+            schedule_start: "09:00".to_string(),
+            schedule_end: "18:00".to_string(),
+            schedule_in_id: None,
+            schedule_out_id: None,
         }
     }
+}
+
+/// 校验 `HH:MM`（24 小时制）：定时切换的时间段两端都要能落到一天之内
+pub fn validate_hhmm(raw: &str) -> Result<(), String> {
+    let invalid = || format!("时间要写成 24 小时制的 HH:MM（收到「{raw}」）");
+    let bytes = raw.as_bytes();
+    if bytes.len() != 5 || bytes[2] != b':' {
+        return Err(invalid());
+    }
+    let (hour, minute) = raw.split_at(2);
+    let minute = &minute[1..];
+    let hour: u32 = hour.parse().map_err(|_| invalid())?;
+    let minute: u32 = minute.parse().map_err(|_| invalid())?;
+    if hour > 23 || minute > 59 {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 pub fn settings_file() -> Result<PathBuf, String> {
@@ -394,6 +434,85 @@ mod tests {
         write_to(&file, &settings).expect("写入设置");
         assert!(read_from(&file).cursor_guard_enabled, "开启状态必须落盘可读");
         let _ = fs::remove_file(&file);
+    }
+
+    #[test]
+    fn 自动备份默认关闭且保留份数写读往返() {
+        let file = temp_file("auto-backup");
+        assert!(
+            !AppSettings::default().auto_backup_enabled,
+            "默认必须是关：不能在用户不知情时天天写备份文件"
+        );
+        assert_eq!(AppSettings::default().auto_backup_keep, 10);
+
+        let settings = AppSettings {
+            auto_backup_enabled: true,
+            auto_backup_keep: 20,
+            ..AppSettings::default()
+        };
+        write_to(&file, &settings).expect("写入设置");
+        let loaded = read_from(&file);
+        assert!(loaded.auto_backup_enabled);
+        assert_eq!(loaded.auto_backup_keep, 20);
+
+        // 旧版本文件没有这两个字段：走默认，不整份拒读
+        fs::write(&file, r#"{"close_behavior":"tray"}"#).expect("写旧格式");
+        let loaded = read_from(&file);
+        assert!(!loaded.auto_backup_enabled, "缺字段应补默认 false");
+        assert_eq!(loaded.auto_backup_keep, 10, "缺字段应补默认 10");
+        let _ = fs::remove_file(&file);
+    }
+
+    #[test]
+    fn 定时切换默认关闭且时间段与映射写读往返() {
+        let file = temp_file("schedule");
+        assert!(
+            !AppSettings::default().schedule_switch_enabled,
+            "默认必须是关：不能凭空替用户换主题"
+        );
+        assert_eq!(AppSettings::default().schedule_start, "09:00");
+        assert_eq!(AppSettings::default().schedule_end, "18:00");
+
+        let settings = AppSettings {
+            schedule_switch_enabled: true,
+            schedule_start: "22:00".to_string(),
+            schedule_end: "06:00".to_string(),
+            schedule_in_id: Some("11111111-1111-4111-8111-111111111111".to_string()),
+            schedule_out_id: Some("sys_windows_default".to_string()),
+            ..AppSettings::default()
+        };
+        write_to(&file, &settings).expect("写入设置");
+        let loaded = read_from(&file);
+        assert!(loaded.schedule_switch_enabled);
+        assert_eq!(loaded.schedule_start, "22:00");
+        assert_eq!(loaded.schedule_end, "06:00");
+        assert_eq!(
+            loaded.schedule_in_id.as_deref(),
+            Some("11111111-1111-4111-8111-111111111111")
+        );
+        assert_eq!(loaded.schedule_out_id.as_deref(), Some("sys_windows_default"));
+
+        // 旧版本文件缺字段：时间补默认，不整份拒读
+        fs::write(&file, r#"{"close_behavior":"exit"}"#).expect("写旧格式");
+        let loaded = read_from(&file);
+        assert!(!loaded.schedule_switch_enabled);
+        assert_eq!(loaded.schedule_start, "09:00");
+        assert_eq!(loaded.schedule_end, "18:00");
+        assert!(loaded.schedule_in_id.is_none());
+        let _ = fs::remove_file(&file);
+    }
+
+    #[test]
+    fn 时间校验只认合法的时分() {
+        assert!(validate_hhmm("00:00").is_ok());
+        assert!(validate_hhmm("23:59").is_ok());
+        assert!(validate_hhmm("09:05").is_ok());
+        assert!(validate_hhmm("24:00").is_err(), "小时越界要拒绝");
+        assert!(validate_hhmm("09:60").is_err(), "分钟越界要拒绝");
+        assert!(validate_hhmm("9:00").is_err(), "位数不足要拒绝");
+        assert!(validate_hhmm("0900").is_err(), "缺冒号要拒绝");
+        assert!(validate_hhmm("ab:cd").is_err(), "非数字要拒绝");
+        assert!(validate_hhmm("").is_err());
     }
 
     #[test]

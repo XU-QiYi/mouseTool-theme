@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Archive, FolderOpen, History, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Toggle } from "@/components/ui/toggle";
 import { SettingCard, SettingsGroup } from "@/components/settings/SettingCard";
 import { SettingsStatusBanner } from "@/components/settings/SettingsStatusBanner";
 import { BackupProgress } from "@/components/settings/BackupProgress";
@@ -27,6 +28,8 @@ export function DataSection() {
   const backupProgress = useSettingsStore((s) => s.backupProgress);
   const backupNote = useSettingsStore((s) => s.backupNote);
   const exportBackupTo = useSettingsStore((s) => s.exportBackupTo);
+  const settings = useSettingsStore((s) => s.settings);
+  const patchSettings = useSettingsStore((s) => s.patchSettings);
 
   const [view, setView] = useState<"main" | "backups" | "trash">("main");
 
@@ -103,6 +106,39 @@ export function DataSection() {
           <p data-backup-status className="mt-3 break-all text-2xs text-muted-foreground">
             {backupNote}
           </p>
+        </SettingCard>
+
+        <SettingCard
+          title="自动备份"
+          description="每天第一份备份落进「备份历史」，超过保留份数时自动清理最旧的自动备份；手动备份不受影响"
+          action={
+            <Toggle
+              label="自动备份"
+              checked={settings?.auto_backup_enabled ?? false}
+              onCheckedChange={(checked) => void patchSettings({ auto_backup_enabled: checked })}
+              disabled={!settings}
+            />
+          }
+        >
+          <div className="mt-3 grid gap-2">
+            <label className="flex items-center justify-between gap-2">
+              <span className="text-2xs text-muted-foreground">保留份数</span>
+              <select
+                aria-label="自动备份保留份数"
+                data-auto-backup-keep
+                className="h-8 max-w-56 rounded-lg border border-input bg-transparent px-2 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                value={settings?.auto_backup_keep ?? 10}
+                disabled={!settings?.auto_backup_enabled}
+                onChange={(event) =>
+                  void patchSettings({ auto_backup_keep: Number(event.target.value) })
+                }
+              >
+                <option value={5}>5 份</option>
+                <option value={10}>10 份</option>
+                <option value={20}>20 份</option>
+              </select>
+            </label>
+          </div>
         </SettingCard>
 
         <SettingCard

@@ -42,7 +42,7 @@ pub struct BackupEntry {
     pub path: String,
     /// 文件修改时间，本地时区 `YYYY-MM-DD HH:MM`；读不到为「未知」
     pub created_at: String,
-    /// 目前固定 "manual"（应用内手动备份）
+    /// "manual"（应用内手动备份）| "auto"（每天一份的自动备份，决策 32）
     pub kind: String,
     /// 包内的完整主题数（唯一 `themes/<uuid>/theme.json`）
     pub themes: usize,
@@ -57,6 +57,11 @@ pub struct BackupEntry {
 
 /// 备份历史最多返回的条数：异常目录（上千个 zip）不该拖垮界面
 const MAX_BACKUP_ENTRIES: usize = 200;
+
+/// 应用内手动备份的文件名前缀
+const MANUAL_BACKUP_PREFIX: &str = "cursorstudio-backup-";
+/// 自动备份的文件名前缀（决策 32）：`cursorstudio-backup-auto-YYYYMMDD-HHmmss.zip`
+const AUTO_BACKUP_PREFIX: &str = "cursorstudio-backup-auto-";
 
 /// 恢复结果
 #[derive(Debug, Serialize)]
@@ -651,19 +656,173 @@ fn cleanup(dirs: &[PathBuf]) {
 // 备份历史
 // ---------------------------------------------------------------------------
 
-/// 应用内备份的落盘名：`cursorstudio-backup-YYYYMMDD-HHmmss.zip`
+/// 应用内备份的落盘名：手动 `cursorstudio-backup-YYYYMMDD-HHmmss.zip`，
+/// 自动备份前缀是 `cursorstudio-backup-auto-`（见 `run_auto_backup`）
 ///
 /// 同一秒内的第二次备份加 `-2`、`-3`……；名字按时间排序就是倒序历史。
-fn generate_backup_path(dir: &Path) -> Result<PathBuf, String> {
+fn generate_backup_path(dir: &Path, prefix: &str) -> Result<PathBuf, String> {
     paths::ensure_dir(dir)?;
     let base = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     for suffix in ["", "-2", "-3", "-4", "-5", "-6", "-7", "-8", "-9"] {
-        let candidate = dir.join(format!("cursorstudio-backup-{base}{suffix}.zip"));
+        let candidate = dir.join(format!("{prefix}{base}{suffix}.zip"));
         if !candidate.exists() {
             return Ok(candidate);
         }
     }
     Err("同一秒内创建了太多备份，请稍后再试".to_string())
+}
+
+/// 从自动备份文件名里取出完整时间戳段（`YYYYMMDD-HHMMSS`，字典序即时间序）；
+/// 不是自动备份或名字不规整返回 None
+fn auto_backup_stamp(file_name: &str) -> Option<&str> {
+    let rest = file_name.strip_prefix(AUTO_BACKUP_PREFIX)?;
+    let stamp = rest.get(0..15)?;
+    let well_formed = stamp.as_bytes()[8] == b'-'
+        && stamp
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| index == 8 || byte.is_ascii_digit());
+    if well_formed { Some(stamp) } else { None }
+}
+
+/// 从自动备份文件名里取出日期段（`YYYYMMDD`）；不是自动备份或名字不规整返回 None
+fn auto_backup_date(file_name: &str) -> Option<&str> {
+    auto_backup_stamp(file_name).map(|stamp| &stamp[..8])
+}
+
+/// 今天是否已经有自动备份（按文件名里的日期段判断，不依赖修改时间）
+fn has_auto_backup_today(dir: &Path) -> Result<bool, String> {
+    if !dir.is_dir() {
+        return Ok(false);
+    }
+    let today = chrono::Local::now().format("%Y%m%d").to_string();
+    let entries =
+        fs::read_dir(dir).map_err(|err| format!("读备份目录失败（{}：{err}）", dir.display()))?;
+    for entry in entries.flatten() {
+        if limits::is_reparse_entry(&entry) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.to_ascii_lowercase().ends_with(".zip") {
+            continue;
+        }
+        if auto_backup_date(&name) == Some(today.as_str()) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// 清理过期的自动备份：只动 `auto` 前缀条目
+///
+/// 年龄以**文件名里的时间戳**为准（mtime 在文件被整体拷贝、系统时钟回调时
+/// 不可信，会把新备份误判成最旧的删掉），认不出时间戳的当最旧先删；同名
+/// 时间戳按修改时间兜底。手动备份是用户亲手做的，一份都不碰；单个文件
+/// 删除失败不中断（下次还会再清）。
+fn prune_auto_backups(dir: &Path, keep: u32) -> usize {
+    if !dir.is_dir() {
+        return 0;
+    }
+    let keep = keep.max(1) as usize;
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut autos: Vec<(String, Option<std::time::SystemTime>, PathBuf)> = entries
+        .flatten()
+        .filter(|entry| !limits::is_reparse_entry(entry))
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(AUTO_BACKUP_PREFIX))
+        })
+        .filter_map(|path| {
+            let name = path.file_name()?.to_string_lossy().into_owned();
+            let stamp = auto_backup_stamp(&name).unwrap_or("").to_string();
+            let modified = fs::metadata(&path).and_then(|meta| meta.modified()).ok();
+            Some((stamp, modified, path))
+        })
+        .collect();
+    if autos.len() <= keep {
+        return 0;
+    }
+    autos.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+    let surplus = autos.len() - keep;
+    autos
+        .into_iter()
+        .take(surplus)
+        .filter(|(_, _, path)| fs::remove_file(path).is_ok())
+        .count()
+}
+
+/// 自动备份结果：今天是否新建、跳过原因、本次清理掉的过期份数
+#[derive(Debug, Serialize)]
+pub struct AutoBackupSummary {
+    /// 本次是否真的创建了备份
+    pub created: bool,
+    /// 今天已有自动备份而跳过
+    pub skipped: bool,
+    /// 本次创建时的落盘文件名（跳过时为 None）
+    pub file_name: Option<String>,
+    /// 本次顺带清理掉的过期自动备份数
+    pub pruned: usize,
+}
+
+/// 自动备份的核心（显式路径版，测试全程用临时目录）
+fn run_auto_backup_in(
+    backups_dir: &Path,
+    themes_dir: &Path,
+    history_file: &Path,
+    keep: u32,
+) -> Result<AutoBackupSummary, String> {
+    if has_auto_backup_today(backups_dir)? {
+        // 当日已有自动备份：不再重打，但顺手清一次过期条目——
+        // 用户刚把保留份数调小时能立刻生效，不必等明天
+        let pruned = prune_auto_backups(backups_dir, keep);
+        return Ok(AutoBackupSummary {
+            created: false,
+            skipped: true,
+            file_name: None,
+            pruned,
+        });
+    }
+
+    let dest = generate_backup_path(backups_dir, AUTO_BACKUP_PREFIX)?;
+    // 半成品临时包由 export 内部清理；失败留给前端决定要不要提醒
+    export_to_with_progress(&dest, themes_dir, history_file, &mut |_| {})?;
+    let pruned = prune_auto_backups(backups_dir, keep);
+    Ok(AutoBackupSummary {
+        created: true,
+        skipped: false,
+        file_name: Some(
+            dest.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        ),
+        pruned,
+    })
+}
+
+/// 每天一份的自动备份（决策 32）
+///
+/// 前端在启动与窗口聚焦时调用（见 `lib/auto-backup.ts`），命令层负责当日去重
+/// 与过期清理。不发 `backup-progress`：自动备份不该顶掉手动备份的进度展示；
+/// 与手动备份共用同一把重操作锁，同时触发时自动的一方立即失败、由前端静默忽略。
+#[tauri::command]
+pub async fn run_auto_backup(keep: u32) -> Result<AutoBackupSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = ops::try_begin("自动备份")?;
+        run_auto_backup_in(
+            &paths::backups_dir()?,
+            &paths::themes_dir()?,
+            &paths::history_file()?,
+            keep.clamp(1, 100),
+        )
+    })
+    .await
+    .map_err(|err| format!("自动备份任务异常退出（{err}）"))?
 }
 
 /// 只读 zip 中央目录，统计包内完整主题数（不读条目内容、不解压）
@@ -755,10 +914,14 @@ fn list_backups_in(dir: &Path) -> Result<Vec<BackupEntry>, String> {
         items.push((
             modified,
             BackupEntry {
+                kind: if file_name.starts_with(AUTO_BACKUP_PREFIX) {
+                    "auto".to_string()
+                } else {
+                    "manual".to_string()
+                },
                 file_name,
                 path: path.to_string_lossy().into_owned(),
                 created_at,
-                kind: "manual".to_string(),
                 themes,
                 files,
                 bytes,
@@ -829,7 +992,7 @@ pub async fn export_backup(
         let _guard = ops::try_begin("导出备份")?;
         let dest = match dest_path.as_deref() {
             Some(path) => validation::validate_dest_path(path, "zip")?,
-            None => generate_backup_path(&paths::backups_dir()?)?,
+            None => generate_backup_path(&paths::backups_dir()?, MANUAL_BACKUP_PREFIX)?,
         };
         let emitter = app.clone();
         let mut summary = export_to_with_progress(
@@ -1361,7 +1524,7 @@ mod tests {
         let themes = data.join("themes");
         seed_theme(&themes, "88888888-8888-4888-8888-888888888888", "a");
 
-        let first = generate_backup_path(&data.join("backups")).expect("第一个名字");
+        let first = generate_backup_path(&data.join("backups"), MANUAL_BACKUP_PREFIX).expect("第一个名字");
         assert!(
             first.to_string_lossy().contains("cursorstudio-backup-"),
             "命名要有统一前缀：{}",
@@ -1373,9 +1536,140 @@ mod tests {
 
         // 同名文件占住后应退到 -2，而不是覆盖
         fs::write(&first, b"occupied").expect("占住第一个名字");
-        let second = generate_backup_path(&data.join("backups")).expect("第二个名字");
+        let second = generate_backup_path(&data.join("backups"), MANUAL_BACKUP_PREFIX).expect("第二个名字");
         assert_ne!(first, second, "同秒冲突必须换名字");
         assert!(second.to_string_lossy().contains("-2.zip"), "加 -2 后缀：{}", second.display());
+
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    // -----------------------------------------------------------------------
+    // 自动备份（决策 32）：当日去重 / 过期清理 / kind 判定
+    // -----------------------------------------------------------------------
+
+    fn seed_auto_backup(backups: &Path, date: &str, marker: &str) {
+        fs::write(
+            backups.join(format!("{AUTO_BACKUP_PREFIX}{date}-000000.zip")),
+            marker,
+        )
+        .expect("写自动备份占位文件");
+    }
+
+    fn count_auto_backups(backups: &Path) -> usize {
+        fs::read_dir(backups)
+            .expect("读备份目录")
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(AUTO_BACKUP_PREFIX)
+            })
+            .count()
+    }
+
+    #[test]
+    fn 自动备份当日只打一份且跳过时顺带清理() {
+        let (data, _guard) = sandbox("auto-dedupe");
+        let themes = data.join("themes");
+        seed_theme(&themes, "99999999-9999-4999-8999-999999999999", "a");
+        let backups = data.join("backups");
+
+        let first = run_auto_backup_in(&backups, &themes, &data.join("history.json"), 10)
+            .expect("第一次自动备份");
+        assert!(first.created);
+        assert!(!first.skipped);
+        assert!(
+            first
+                .file_name
+                .as_deref()
+                .is_some_and(|name| name.starts_with(AUTO_BACKUP_PREFIX)),
+            "自动备份文件名要带 auto 前缀：{:?}",
+            first.file_name
+        );
+        assert_eq!(count_auto_backups(&backups), 1);
+
+        // 同日再触发：不再重打（打 zip 有成本，也没必要一天很多份）
+        let second = run_auto_backup_in(&backups, &themes, &data.join("history.json"), 10)
+            .expect("第二次自动备份");
+        assert!(!second.created);
+        assert!(second.skipped, "当日去重");
+        assert_eq!(count_auto_backups(&backups), 1, "去重不应新增文件");
+
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn 自动备份清理过期只动_auto_条目() {
+        let (data, _guard) = sandbox("auto-prune");
+        let themes = data.join("themes");
+        seed_theme(&themes, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "a");
+        fs::write(data.join("history.json"), r#"{"version":2,"events":[]}"#).expect("写记录");
+        let backups = data.join("backups");
+        fs::create_dir_all(&backups).expect("建备份目录");
+
+        // 三份过期的自动备份 + 一份手动备份
+        for date in ["20200101", "20200102", "20200103"] {
+            seed_auto_backup(&backups, date, "old");
+        }
+        let manual = backups.join("cursorstudio-backup-20200101-000000.zip");
+        fs::write(&manual, b"manual").expect("写手动备份");
+
+        let summary =
+            run_auto_backup_in(&backups, &themes, &data.join("history.json"), 2).expect("自动备份");
+        assert!(summary.created);
+        // 4 份自动备份（3 旧 + 本次新建）只留最新 2 份；手动备份不动。
+        // 年龄按文件名时间戳算：占位文件哪怕写入更晚（mtime 更新）也不能把
+        // 当天真备份挤进"最旧"里——这正是清理排序必须看文件名的原因
+        assert_eq!(summary.pruned, 2, "要清到保留份数：{}", summary.pruned);
+        assert_eq!(count_auto_backups(&backups), 2);
+        assert!(manual.exists(), "手动备份绝不能被牵连");
+        let today = chrono::Local::now().format("%Y%m%d").to_string();
+        let survivors: Vec<String> = fs::read_dir(&backups)
+            .expect("读备份目录")
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(AUTO_BACKUP_PREFIX)
+            })
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            survivors.iter().any(|name| auto_backup_date(name) == Some(today.as_str())),
+            "当天备份必须幸存：{:?}",
+            survivors
+        );
+        assert!(
+            survivors
+                .iter()
+                .all(|name| name.contains("20200103") || auto_backup_date(name) == Some(today.as_str())),
+            "被删的必须是文件名最旧的（20200101/02），留下的是 20200103 + 当天：{:?}",
+            survivors
+        );
+
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn 备份历史区分自动与手动条目() {
+        let (data, _guard) = sandbox("auto-kind");
+        let backups = data.join("backups");
+        fs::create_dir_all(&backups).expect("建备份目录");
+        seed_auto_backup(&backups, "20200101", "auto");
+        fs::write(backups.join("cursorstudio-backup-manual.zip"), b"manual").expect("写手动备份");
+
+        let list = list_backups_in(&backups).expect("列表");
+        assert_eq!(list.len(), 2);
+        for entry in &list {
+            let expected = if entry.file_name.starts_with(AUTO_BACKUP_PREFIX) {
+                "auto"
+            } else {
+                "manual"
+            };
+            assert_eq!(entry.kind, expected, "kind 要按文件名前缀判定：{}", entry.file_name);
+        }
 
         let _ = fs::remove_dir_all(&data);
     }

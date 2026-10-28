@@ -30,6 +30,20 @@ export interface SettingsSnapshot {
   auto_switch_dark_id: string | null;
   /** 光标守护：启动或检测到外部改写时自动恢复上次使用的主题（逻辑在 `lib/cursor-guard.ts`） */
   cursor_guard_enabled: boolean;
+  /** 自动备份：每天第一份备份落进「备份历史」（逻辑在 `lib/auto-backup.ts`，决策 32） */
+  auto_backup_enabled: boolean;
+  /** 自动备份保留份数（1–100） */
+  auto_backup_keep: number;
+  /** 定时切换主题：时间段内 / 外应用配对主题（逻辑在 `lib/schedule-switch.ts`，决策 33） */
+  schedule_switch_enabled: boolean;
+  /** 时间段起点，24 小时制 `HH:MM` */
+  schedule_start: string;
+  /** 时间段终点，24 小时制 `HH:MM`；小于起点视为跨零点区间 */
+  schedule_end: string;
+  /** 时间段内使用的主题 ID；null = 期间内不切换 */
+  schedule_in_id: string | null;
+  /** 时间段外使用的主题 ID；null = 期间外不切换 */
+  schedule_out_id: string | null;
   /** 读取设置时的非致命问题（典型：文件损坏已自动备份） */
   warnings: string[];
 }
@@ -54,6 +68,14 @@ export interface SettingsPatch {
   auto_switch_light_id?: string;
   auto_switch_dark_id?: string;
   cursor_guard_enabled?: boolean;
+  auto_backup_enabled?: boolean;
+  auto_backup_keep?: number;
+  schedule_switch_enabled?: boolean;
+  schedule_start?: string;
+  schedule_end?: string;
+  /** 同主题 ID 映射：清空用空串（后端 normalize_theme_id） */
+  schedule_in_id?: string;
+  schedule_out_id?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -73,6 +95,13 @@ const MOCK_DEFAULT: SettingsSnapshot = {
   auto_switch_light_id: null,
   auto_switch_dark_id: null,
   cursor_guard_enabled: false,
+  auto_backup_enabled: false,
+  auto_backup_keep: 10,
+  schedule_switch_enabled: false,
+  schedule_start: "09:00",
+  schedule_end: "18:00",
+  schedule_in_id: null,
+  schedule_out_id: null,
   warnings: [],
 };
 
@@ -114,7 +143,17 @@ export function getSettings(): Promise<SettingsSnapshot> {
 
 export function updateSettings(patch: SettingsPatch): Promise<SettingsSnapshot> {
   if (!inTauri) {
-    return Promise.resolve(mockSave({ ...mockSettings(), ...patch }));
+    // 对齐后端语义：主题 ID 补丁的空串 = 清空（Rust 侧 normalize_theme_id）
+    const merged = { ...mockSettings(), ...patch };
+    return Promise.resolve(
+      mockSave({
+        ...merged,
+        auto_switch_light_id: merged.auto_switch_light_id || null,
+        auto_switch_dark_id: merged.auto_switch_dark_id || null,
+        schedule_in_id: merged.schedule_in_id || null,
+        schedule_out_id: merged.schedule_out_id || null,
+      }),
+    );
   }
   return invoke<SettingsSnapshot>("update_settings", {
     closeBehavior: patch.close_behavior,
@@ -124,6 +163,13 @@ export function updateSettings(patch: SettingsPatch): Promise<SettingsSnapshot> 
     autoSwitchLightId: patch.auto_switch_light_id,
     autoSwitchDarkId: patch.auto_switch_dark_id,
     cursorGuardEnabled: patch.cursor_guard_enabled,
+    autoBackupEnabled: patch.auto_backup_enabled,
+    autoBackupKeep: patch.auto_backup_keep,
+    scheduleSwitchEnabled: patch.schedule_switch_enabled,
+    scheduleStart: patch.schedule_start,
+    scheduleEnd: patch.schedule_end,
+    scheduleInId: patch.schedule_in_id,
+    scheduleOutId: patch.schedule_out_id,
   });
 }
 
@@ -344,7 +390,7 @@ export interface BackupEntry {
   path: string;
   /** 文件修改时间，本地时区 `YYYY-MM-DD HH:MM`；读不到为「未知」 */
   created_at: string;
-  /** 目前固定 "manual" */
+  /** "manual"（手动）| "auto"（自动备份，决策 32） */
   kind: string;
   themes: number;
   files: number;
@@ -418,6 +464,28 @@ export function deleteBackup(fileName: string): Promise<void> {
     return Promise.resolve();
   }
   return invoke<void>("delete_backup", { fileName });
+}
+
+/** 自动备份的结果，字段与 Rust `AutoBackupSummary` 一一对应 */
+export interface AutoBackupOutcome {
+  /** 本次是否真的创建了备份 */
+  created: boolean;
+  /** 今天已有自动备份而跳过 */
+  skipped: boolean;
+  /** 本次创建时的落盘文件名（跳过时为 null） */
+  file_name: string | null;
+  /** 本次顺带清理掉的过期自动备份数 */
+  pruned: number;
+}
+
+/**
+ * 自动备份（决策 32）：命令层负责当日去重与过期清理，前端只管在合适的时机
+ * 调用（启动后、窗口聚焦节流后、开关打开时，见 `lib/auto-backup.ts`）。
+ * 不发 `backup-progress`：自动备份不顶掉手动备份的进度展示。
+ */
+export function runAutoBackup(keep: number): Promise<AutoBackupOutcome> {
+  if (!inTauri) return mockRunAutoBackup(keep);
+  return invoke<AutoBackupOutcome>("run_auto_backup", { keep });
 }
 
 // ---------------------------------------------------------------------------
@@ -504,4 +572,108 @@ async function mockExportBackup(
     bytes: 1_048_576,
     warnings: [],
   };
+}
+
+// ---------------------------------------------------------------------------
+// 开发模式自动备份模拟（决策 32）
+// ---------------------------------------------------------------------------
+
+const AUTO_BACKUP_PREFIX_MOCK = "cursorstudio-backup-auto-";
+
+/** 从自动备份文件名里取出日期段（`YYYYMMDD`）；非自动备份返回 null */
+function mockAutoBackupDate(fileName: string): string | null {
+  if (!fileName.startsWith(AUTO_BACKUP_PREFIX_MOCK)) return null;
+  return fileName.slice(AUTO_BACKUP_PREFIX_MOCK.length, AUTO_BACKUP_PREFIX_MOCK.length + 8);
+}
+
+function mockDayStamp(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`;
+}
+
+/** 验收脚本用：`?mock-backup-old=N` 预置 N 份过去若干天的自动备份（只播种一次） */
+let mockAutoOldSeeded = false;
+
+function seedMockAutoBackups(): void {
+  if (mockAutoOldSeeded) return;
+  mockAutoOldSeeded = true;
+  const count = Number(new URLSearchParams(window.location.search).get("mock-backup-old") ?? "0");
+  if (!Number.isInteger(count) || count <= 0) return;
+  const userThemes = MOCK_THEMES.filter((theme) => !theme.is_built_in);
+  const files = userThemes.reduce((sum, theme) => sum + theme.cursors.length, 0) + 1;
+  for (let index = 0; index < count; index += 1) {
+    const day = new Date(Date.now() - (index + 1) * 86_400_000);
+    const date = mockDayStamp(day);
+    const file_name = `${AUTO_BACKUP_PREFIX_MOCK}${date}-080000.zip`;
+    mockBackups = [
+      {
+        file_name,
+        path: `${MOCK_BACKUPS_DIR}\\${file_name}`,
+        created_at: new Date(day.getTime() + 8 * 3_600_000).toLocaleString("zh-CN", {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+        kind: "auto",
+        themes: userThemes.length,
+        files,
+        bytes: 512_000,
+        status: "ok",
+        error: null,
+      },
+      ...mockBackups,
+    ];
+  }
+}
+
+async function mockRunAutoBackup(keep: number): Promise<AutoBackupOutcome> {
+  await delay(80);
+  seedMockAutoBackups();
+
+  const today = mockDayStamp(new Date());
+  const hasToday = mockBackups.some((entry) => mockAutoBackupDate(entry.file_name) === today);
+  let created: string | null = null;
+  if (!hasToday) {
+    const file_name = `cursorstudio-backup-auto-${mockStamp()}.zip`;
+    const userThemes = MOCK_THEMES.filter((theme) => !theme.is_built_in);
+    const files = userThemes.reduce((sum, theme) => sum + theme.cursors.length, 0) + 1;
+    created = file_name;
+    mockBackups = [
+      {
+        file_name,
+        path: `${MOCK_BACKUPS_DIR}\\${file_name}`,
+        created_at: new Date().toLocaleString("zh-CN", {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+        kind: "auto",
+        themes: userThemes.length,
+        files,
+        bytes: 1_048_576,
+        status: "ok",
+        error: null,
+      },
+      ...mockBackups,
+    ];
+  }
+
+  // 清理过期：与 Rust prune 同一口径——按文件名时间戳新到旧排序（字典序即
+  // 时间序），保 keep 份；不做会像 mtime 一样被"写入更晚的旧日期文件"骗过
+  const keepCount = Math.max(1, Math.min(100, Math.trunc(keep) || 10));
+  const autos = mockBackups
+    .filter((entry) => mockAutoBackupDate(entry.file_name) !== null)
+    .sort((left, right) => right.file_name.localeCompare(left.file_name));
+  let pruned = 0;
+  if (autos.length > keepCount) {
+    const doomed = new Set(autos.slice(keepCount).map((entry) => entry.file_name));
+    mockBackups = mockBackups.filter((entry) => !doomed.has(entry.file_name));
+    pruned = doomed.size;
+  }
+
+  return { created: created !== null, skipped: created === null, file_name: created, pruned };
 }
