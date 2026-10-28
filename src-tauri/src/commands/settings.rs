@@ -25,6 +25,8 @@ pub struct SettingsSnapshot {
     pub auto_switch_enabled: bool,
     pub auto_switch_light_id: Option<String>,
     pub auto_switch_dark_id: Option<String>,
+    /// 光标守护：启动或检测到外部改写时自动恢复上次使用的主题
+    pub cursor_guard_enabled: bool,
     /// 读取设置时的非致命问题（典型：文件损坏已自动备份）
     pub warnings: Vec<String>,
 }
@@ -48,6 +50,7 @@ fn snapshot(loaded: &settings::SettingsLoad) -> Result<SettingsSnapshot, String>
         auto_switch_enabled: loaded.settings.auto_switch_enabled,
         auto_switch_light_id: loaded.settings.auto_switch_light_id.clone(),
         auto_switch_dark_id: loaded.settings.auto_switch_dark_id.clone(),
+        cursor_guard_enabled: loaded.settings.cursor_guard_enabled,
         warnings: loaded.warnings.clone(),
     })
 }
@@ -67,6 +70,9 @@ pub async fn get_settings() -> Result<SettingsSnapshot, String> {
 ///
 /// 主题 ID 参数用**空串表示清空**（serde_json 分不清「没传」和「传了 null」，
 /// 与补丁语义冲突；前端把「不切换」编成空串）。
+// Tauri 命令的补丁字段必须是一个个可选的顶层参数；收成结构体会改掉 IPC 形状，
+// 让「只传要改的字段」在 JS 侧变形。字段随设置项增长，保持扁平
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn update_settings(
     app: AppHandle,
@@ -76,6 +82,7 @@ pub async fn update_settings(
     auto_switch_enabled: Option<bool>,
     auto_switch_light_id: Option<String>,
     auto_switch_dark_id: Option<String>,
+    cursor_guard_enabled: Option<bool>,
 ) -> Result<SettingsSnapshot, String> {
     let updated = tauri::async_runtime::spawn_blocking(move || {
         let mut state = settings::read();
@@ -96,6 +103,9 @@ pub async fn update_settings(
         }
         if let Some(raw) = auto_switch_dark_id {
             state.auto_switch_dark_id = normalize_theme_id(raw);
+        }
+        if let Some(flag) = cursor_guard_enabled {
+            state.cursor_guard_enabled = flag;
         }
         settings::write(&state)?;
         snapshot(&settings::load())

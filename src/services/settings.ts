@@ -28,6 +28,8 @@ export interface SettingsSnapshot {
   auto_switch_light_id: string | null;
   /** 系统深色时使用的主题 ID；null = 深色时不切换 */
   auto_switch_dark_id: string | null;
+  /** 光标守护：启动或检测到外部改写时自动恢复上次使用的主题（逻辑在 `lib/cursor-guard.ts`） */
+  cursor_guard_enabled: boolean;
   /** 读取设置时的非致命问题（典型：文件损坏已自动备份） */
   warnings: string[];
 }
@@ -51,6 +53,7 @@ export interface SettingsPatch {
    */
   auto_switch_light_id?: string;
   auto_switch_dark_id?: string;
+  cursor_guard_enabled?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +72,7 @@ const MOCK_DEFAULT: SettingsSnapshot = {
   auto_switch_enabled: false,
   auto_switch_light_id: null,
   auto_switch_dark_id: null,
+  cursor_guard_enabled: false,
   warnings: [],
 };
 
@@ -119,6 +123,7 @@ export function updateSettings(patch: SettingsPatch): Promise<SettingsSnapshot> 
     autoSwitchEnabled: patch.auto_switch_enabled,
     autoSwitchLightId: patch.auto_switch_light_id,
     autoSwitchDarkId: patch.auto_switch_dark_id,
+    cursorGuardEnabled: patch.cursor_guard_enabled,
   });
 }
 
