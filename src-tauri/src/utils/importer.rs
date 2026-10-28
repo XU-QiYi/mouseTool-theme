@@ -470,8 +470,27 @@ fn persist_theme(
         });
     }
 
-    // 槽位来源两条（决策 15）：先按 .inf 说明书映射，剩余槽位退回文件名推断；
-    // 说明书指了名但包里没有那个文件时，该槽位也退回推断，不因此缺槽位
+    let picked = pick_slots(&files, files_root, budget, warnings)?;
+    let total = picked.len();
+    let slots = copy_slots(picked, theme_id, progress_fn)?;
+    let theme = build_theme(theme_id, source, slots);
+
+    // 磁盘只存相对主题目录的路径；返回给调用方的仍是绝对路径（预览/应用直接用）
+    theme_paths::write_theme_json(&paths::theme_dir(theme_id)?, &theme)?;
+
+    progress_fn(progress::TaskProgress::new("done", total, total, "导入完成"));
+    Ok(theme)
+}
+
+/// 选出要落盘的槽位：先按 `.inf` 说明书映射，剩余槽位退回文件名推断
+///
+/// 说明书指了名但包里没有那个文件时，该槽位也退回推断，不因此缺槽位（决策 15）。
+fn pick_slots(
+    files: &[PathBuf],
+    files_root: &Path,
+    budget: &mut limits::ScanBudget<'_>,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<(&'static str, PathBuf)>, String> {
     let mut seen: HashSet<&'static str> = HashSet::new();
     let mut picked: Vec<(&'static str, PathBuf)> = Vec::new();
 
@@ -492,7 +511,7 @@ fn persist_theme(
         }
     }
 
-    for file in &files {
+    for file in files {
         let stem = file
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
@@ -520,6 +539,15 @@ fn persist_theme(
             .unwrap_or(usize::MAX)
     });
 
+    Ok(picked)
+}
+
+/// 把选中的光标文件复制进主题目录；与 zip 解压共用单文件上限
+fn copy_slots(
+    picked: Vec<(&'static str, PathBuf)>,
+    theme_id: &str,
+    progress_fn: &mut dyn FnMut(progress::TaskProgress),
+) -> Result<Vec<CursorSlot>, String> {
     let cursors_dir = paths::theme_dir(theme_id)?.join("cursors");
     paths::ensure_dir(&cursors_dir)?;
 
@@ -536,7 +564,7 @@ fn persist_theme(
         }
         let dest = cursors_dir.join(format!("{}.{ext}", slot_key.to_lowercase()));
 
-        // 与 zip 解压共用单文件上限；分块复制，超过上限立即中止
+        // 分块复制，超过上限立即中止
         let mut input =
             File::open(&src).map_err(|err| format!("打开光标文件失败（{err}）"))?;
         let mut output = File::create(&dest).map_err(|err| format!("复制光标文件失败：{err}"))?;
@@ -566,8 +594,11 @@ fn persist_theme(
             format!("正在保存光标（{}/{}）", index + 1, total),
         ));
     }
+    Ok(slots)
+}
 
-    // 文件夹名整体当主题名（「我的主题.v2」不吃掉 .v2）；zip 去掉 .zip 后缀
+/// 组装主题对象：文件夹名整体当主题名（「我的主题.v2」不吃掉 .v2），zip 去掉 .zip 后缀
+fn build_theme(theme_id: &str, source: &Path, slots: Vec<CursorSlot>) -> CursorTheme {
     let theme_name = if source.is_dir() {
         source.file_name()
     } else {
@@ -577,7 +608,7 @@ fn persist_theme(
     .unwrap_or_else(|| "未命名主题".to_string());
 
     let now = now_string();
-    let theme = CursorTheme {
+    CursorTheme {
         id: theme_id.to_string(),
         name: theme_name,
         description: format!("导入自 {}", source.file_name().unwrap_or_default().to_string_lossy()),
@@ -585,13 +616,7 @@ fn persist_theme(
         updated_at: now,
         is_built_in: false,
         cursors: slots,
-    };
-
-    // 磁盘只存相对主题目录的路径；返回给调用方的仍是绝对路径（预览/应用直接用）
-    theme_paths::write_theme_json(&paths::theme_dir(theme_id)?, &theme)?;
-
-    progress_fn(progress::TaskProgress::new("done", total, total, "导入完成"));
-    Ok(theme)
+    }
 }
 
 /// 读取全部已导入的用户主题
