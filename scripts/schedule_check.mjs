@@ -169,6 +169,36 @@ try {
   );
   assert("自动应用有明确提示", toastText.includes("已应用"), toastText.slice(0, 60));
 
+  // --- 2.5 启动竞态回归：settings 先就绪而主题列表还空时，首次评估不得被吞 ---
+  // 真机上 settings（单文件）几乎总是先于 themes（目录扫描）就绪。曾有缺陷：
+  // 空列表下 applyTheme 静默 no-op 却照常把 lastAppliedId 记上，列表就绪后的
+  // 评估被去重挡住，「启动后的首次评估」永远不生效。修复后：空列表退避不记账，
+  // 列表到位时的订阅回调会补上这次应用。
+  const savedThemes = await evaluate(`JSON.stringify(__themeStore.getState().themes)`);
+  await evaluate(`__themeStore.setState({ themes: [] })`);
+  await patch(`__settingsStore.getState().patchSettings({ schedule_in_id: "sys_firefly" })`);
+  await sleep(400);
+  const idleWhileEmpty = await evaluate(`__themeStore.getState().activeThemeId`);
+  assert(
+    "列表未就绪时不抢跑也不记账",
+    idleWhileEmpty === NEON,
+    String(idleWhileEmpty),
+  );
+  await evaluate(
+    `__themeStore.setState({ themes: JSON.parse(${JSON.stringify(savedThemes)}) })`,
+  );
+  const appliedAfterList = await waitFor(
+    `__themeStore.getState().activeThemeId === "sys_firefly"`,
+  );
+  assert(
+    "列表就绪后补上首次应用",
+    appliedAfterList,
+    String(await evaluate(`__themeStore.getState().activeThemeId`)),
+  );
+  await patch(`__settingsStore.getState().patchSettings({ schedule_in_id: "${NEON}" })`);
+  // 等这次应用落定，别把在途的 apply 带进第 4 步的还原默认
+  await waitFor(`__themeStore.getState().activeThemeId === "${NEON}"`);
+
   // --- 3. 期间内主题设空串 = 清空（与深浅色映射同一语义） ---
   await patch(`__settingsStore.getState().patchSettings({ schedule_in_id: "" })`);
   const cleared = await evaluate(

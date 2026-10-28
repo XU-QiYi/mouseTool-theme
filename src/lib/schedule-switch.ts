@@ -85,11 +85,18 @@ function maybeSwitch(): void {
   if (!target || target === state.lastAppliedId) return;
 
   const themeState = useThemeStore.getState();
+  if (themeState.themes.length === 0) {
+    // 启动竞态：settings 常先于主题列表就绪（单文件 vs 目录扫描）。
+    // 空列表下 applyTheme 会静默 no-op，这里若照常走到 finally 把 lastAppliedId
+    // 记上，列表就绪后的评估会被去重挡住，「启动后的首次评估」就永远不生效；
+    // 所以直接退避什么都不记——列表到位时的订阅回调会再触发一次评估。
+    return;
+  }
   if (themeState.activeThemeId === target) {
     state.lastAppliedId = target;
     return;
   }
-  if (themeState.themes.length > 0 && !themeState.themes.some((theme) => theme.id === target)) {
+  if (!themeState.themes.some((theme) => theme.id === target)) {
     // 映射指向的主题已被删除：等用户改选，不打扰
     state.lastAppliedId = null;
     return;

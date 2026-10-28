@@ -175,6 +175,41 @@ try {
   const activeAfterDisable = await evaluate(`__themeStore.getState().activeThemeId`);
   assert("关闭开关后翻转不再切", activeAfterDisable === "sys_firefly", String(activeAfterDisable));
 
+  // --- 8.5 启动竞态回归：settings 先就绪而主题列表还空时，首次评估不得被吞 ---
+  // 真机上 settings（单文件）几乎总是先于 themes（目录扫描）就绪。曾有缺陷：
+  // 空列表下 applyTheme 静默 no-op 却照常把 lastAppliedId 记上，列表就绪后的
+  // 评估被去重挡住，「启动后的首次评估」永远不生效。修复后：空列表退避不记账，
+  // 列表到位时的订阅回调会补上这次应用。
+  const savedThemes = await evaluate(`JSON.stringify(__themeStore.getState().themes)`);
+  await evaluate(`__themeStore.setState({ themes: [] })`);
+  await evaluate(
+    `__settingsStore.getState().patchSettings({ auto_switch_enabled: true })`,
+    true,
+  );
+  await sleep(400);
+  const idleWhileEmpty = await evaluate(`__themeStore.getState().activeThemeId`);
+  assert(
+    "列表未就绪时不抢跑也不记账",
+    idleWhileEmpty === "sys_firefly",
+    String(idleWhileEmpty),
+  );
+  await evaluate(
+    `__themeStore.setState({ themes: JSON.parse(${JSON.stringify(savedThemes)}) })`,
+  );
+  let appliedAfterList = false;
+  for (let i = 0; i < 40; i++) {
+    if (await evaluate(`__themeStore.getState().activeThemeId === "sys_windows_default"`)) {
+      appliedAfterList = true;
+      break;
+    }
+    await sleep(100);
+  }
+  assert(
+    "列表就绪后补上首次应用",
+    appliedAfterList,
+    String(await evaluate(`__themeStore.getState().activeThemeId`)),
+  );
+
   // --- 9. 运行期无 JS 异常 ---
   assert("运行期无 JS 异常", pageErrors.length === 0, `errors=${pageErrors.length}`);
 
