@@ -27,6 +27,20 @@ pub struct SettingsSnapshot {
     pub auto_switch_dark_id: Option<String>,
     /// 光标守护：启动或检测到外部改写时自动恢复上次使用的主题
     pub cursor_guard_enabled: bool,
+    /// 自动备份：每天第一份备份落进「备份历史」（决策 32）
+    pub auto_backup_enabled: bool,
+    /// 自动备份保留份数（1–100）
+    pub auto_backup_keep: u32,
+    /// 定时切换主题：时间段内 / 外应用配对主题（决策 33）
+    pub schedule_switch_enabled: bool,
+    /// 时间段起点，24 小时制 `HH:MM`
+    pub schedule_start: String,
+    /// 时间段终点，24 小时制 `HH:MM`
+    pub schedule_end: String,
+    /// 时间段内使用的主题 ID；`None` = 期间内不切换
+    pub schedule_in_id: Option<String>,
+    /// 时间段外使用的主题 ID；`None` = 期间外不切换
+    pub schedule_out_id: Option<String>,
     /// 读取设置时的非致命问题（典型：文件损坏已自动备份）
     pub warnings: Vec<String>,
 }
@@ -51,6 +65,13 @@ fn snapshot(loaded: &settings::SettingsLoad) -> Result<SettingsSnapshot, String>
         auto_switch_light_id: loaded.settings.auto_switch_light_id.clone(),
         auto_switch_dark_id: loaded.settings.auto_switch_dark_id.clone(),
         cursor_guard_enabled: loaded.settings.cursor_guard_enabled,
+        auto_backup_enabled: loaded.settings.auto_backup_enabled,
+        auto_backup_keep: loaded.settings.auto_backup_keep,
+        schedule_switch_enabled: loaded.settings.schedule_switch_enabled,
+        schedule_start: loaded.settings.schedule_start.clone(),
+        schedule_end: loaded.settings.schedule_end.clone(),
+        schedule_in_id: loaded.settings.schedule_in_id.clone(),
+        schedule_out_id: loaded.settings.schedule_out_id.clone(),
         warnings: loaded.warnings.clone(),
     })
 }
@@ -83,6 +104,13 @@ pub async fn update_settings(
     auto_switch_light_id: Option<String>,
     auto_switch_dark_id: Option<String>,
     cursor_guard_enabled: Option<bool>,
+    auto_backup_enabled: Option<bool>,
+    auto_backup_keep: Option<u32>,
+    schedule_switch_enabled: Option<bool>,
+    schedule_start: Option<String>,
+    schedule_end: Option<String>,
+    schedule_in_id: Option<String>,
+    schedule_out_id: Option<String>,
 ) -> Result<SettingsSnapshot, String> {
     let updated = tauri::async_runtime::spawn_blocking(move || {
         let mut state = settings::read();
@@ -107,6 +135,29 @@ pub async fn update_settings(
         if let Some(flag) = cursor_guard_enabled {
             state.cursor_guard_enabled = flag;
         }
+        if let Some(flag) = auto_backup_enabled {
+            state.auto_backup_enabled = flag;
+        }
+        if let Some(keep) = auto_backup_keep {
+            state.auto_backup_keep = validate_auto_backup_keep(keep)?;
+        }
+        if let Some(flag) = schedule_switch_enabled {
+            state.schedule_switch_enabled = flag;
+        }
+        if let Some(raw) = schedule_start {
+            settings::validate_hhmm(&raw)?;
+            state.schedule_start = raw;
+        }
+        if let Some(raw) = schedule_end {
+            settings::validate_hhmm(&raw)?;
+            state.schedule_end = raw;
+        }
+        if let Some(raw) = schedule_in_id {
+            state.schedule_in_id = normalize_theme_id(raw);
+        }
+        if let Some(raw) = schedule_out_id {
+            state.schedule_out_id = normalize_theme_id(raw);
+        }
         settings::write(&state)?;
         snapshot(&settings::load())
     })
@@ -115,6 +166,15 @@ pub async fn update_settings(
 
     tray::sync(&app);
     Ok(updated)
+}
+
+/// 自动备份保留份数：1–100 份；前端下拉只给 5/10/20，这里是最后一道校验
+fn validate_auto_backup_keep(keep: u32) -> Result<u32, String> {
+    if (1..=100).contains(&keep) {
+        Ok(keep)
+    } else {
+        Err(format!("自动备份保留份数应在 1–100 之间（收到 {keep}）"))
+    }
 }
 
 /// 空串 = 用户选了「不切换」；非空按原样存，首尾空白不宽容（ID 本身不含空白）
@@ -186,4 +246,24 @@ pub async fn set_themes_dir(
         settings: snapshot(&settings::load())?,
         report,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 自动备份保留份数只认_1_100() {
+        assert_eq!(validate_auto_backup_keep(1).unwrap(), 1);
+        assert_eq!(validate_auto_backup_keep(10).unwrap(), 10);
+        assert_eq!(validate_auto_backup_keep(100).unwrap(), 100);
+        assert!(validate_auto_backup_keep(0).is_err());
+        assert!(validate_auto_backup_keep(101).is_err());
+    }
+
+    #[test]
+    fn 定时切换时间段的补丁要先过格式校验() {
+        assert_eq!(settings::validate_hhmm("08:30"), Ok(()));
+        assert!(settings::validate_hhmm("8:30").is_err());
+    }
 }

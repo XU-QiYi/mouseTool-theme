@@ -18,7 +18,9 @@ import { useDragDropImport } from "@/hooks/useDragDropImport";
 import { useInspectorWidth } from "@/hooks/useInspectorWidth";
 import { PAGE_META, type Page, type PageMeta } from "@/lib/pages";
 import { initAutoSwitch } from "@/lib/auto-switch";
+import { initAutoBackup } from "@/lib/auto-backup";
 import { initCursorGuard } from "@/lib/cursor-guard";
+import { initScheduleSwitch } from "@/lib/schedule-switch";
 import { initShortcuts } from "@/lib/shortcuts";
 import { toast } from "@/lib/toast";
 import { checkForUpdates } from "@/lib/update-check";
@@ -67,9 +69,17 @@ function App() {
   // 设置与主题列表变更三类时机评估一次；还原默认会挂起，见 lib/auto-switch.ts
   useEffect(() => initAutoSwitch(), []);
 
+  // 定时切换主题（「设置 → 通用」可配，默认关闭）：时间段内外应用配对主题，
+  // 边界用 setTimeout 到点评估、不轮询；见 lib/schedule-switch.ts（决策 33）
+  useEffect(() => initScheduleSwitch(), []);
+
   // 光标守护（「设置 → 通用」可配，默认关闭）：启动检查 + 聚焦发现外部改写后
   // 自动恢复上次使用的主题；不轮询，见 lib/cursor-guard.ts
   useEffect(() => initCursorGuard(), []);
+
+  // 自动备份（「设置 → 数据」可配，默认关闭）：启动就绪后、窗口聚焦节流后
+  // 各触发一次，当日去重与过期清理在命令层；见 lib/auto-backup.ts（决策 32）
+  useEffect(() => initAutoBackup(), []);
 
   // 启动时自动检查更新（「设置 → 通用」可关）：只在发现新版本时提示，
   // 检查失败静默——启动不是报错的场合。每次启动最多查一次
