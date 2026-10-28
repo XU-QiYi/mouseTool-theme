@@ -18,7 +18,7 @@ use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use crate::models::CursorTheme;
-use crate::utils::{history, limits, ops, paths, progress, theme_paths, validation};
+use crate::utils::{history, limits, ops, paths, progress, theme_paths, tray, validation};
 
 /// 导出结果
 #[derive(Debug, Serialize)]
@@ -871,10 +871,10 @@ pub async fn delete_backup(file_name: String) -> Result<(), String> {
 /// 本次新建的主题目录。
 #[tauri::command]
 pub async fn import_backup(app: AppHandle, zip_path: String) -> Result<ImportBackupSummary, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    let emitter = app.clone();
+    let summary = tauri::async_runtime::spawn_blocking(move || {
         let _guard = ops::try_begin("恢复备份")?;
         let source = validation::validate_source_file(&zip_path, "zip", "备份文件")?;
-        let emitter = app.clone();
         import_from_with_progress(
             &source,
             &paths::themes_dir()?,
@@ -885,7 +885,10 @@ pub async fn import_backup(app: AppHandle, zip_path: String) -> Result<ImportBac
         )
     })
     .await
-    .map_err(|err| format!("恢复任务异常退出（{err}）"))?
+    .map_err(|err| format!("恢复任务异常退出（{err}）"))?;
+    // 备份补回的主题带着原 ID：托盘菜单里可能因此多出可用条目（决策 30）
+    tray::refresh(&app);
+    summary
 }
 
 #[cfg(test)]
