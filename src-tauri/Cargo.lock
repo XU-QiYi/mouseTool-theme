@@ -2477,6 +2477,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "tempfile",
  "uuid",
  "windows 0.56.0",
  "winreg",

@@ -44,8 +44,8 @@ export function DeleteThemeDialog({ theme, open, onOpenChange }: DeleteThemeDial
         <AlertDialogContent data-delete-dialog={deleting ? "deleting" : "confirm"}>
           <AlertDialogTitle>删除「{theme.name}」？</AlertDialogTitle>
           <AlertDialogDescription>
-            会连同 {theme.cursors.length} 个光标文件一起删除，无法撤销。
-            系统当前光标不受影响，但之后无法再切换回这个主题。
+            会连同 {theme.cursors.length} 个光标文件一起移入回收站，可在「设置 → 数据 →
+            回收站」恢复。系统当前光标不受影响，但之后无法再切换回这个主题。
           </AlertDialogDescription>
           <AlertDialogFooter>
             <Button variant="outline" onClick={() => close(false)} disabled={deleting}>

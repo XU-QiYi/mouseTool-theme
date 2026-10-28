@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { Archive, FolderOpen, History } from "lucide-react";
+import { Archive, FolderOpen, History, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { SettingCard, SettingsGroup } from "@/components/settings/SettingCard";
 import { SettingsStatusBanner } from "@/components/settings/SettingsStatusBanner";
 import { BackupProgress } from "@/components/settings/BackupProgress";
 import { BackupHistorySection } from "@/components/settings/BackupHistorySection";
+import { TrashSection } from "@/components/settings/TrashSection";
 import { DiagnosticsCard } from "@/components/settings/DiagnosticsDialog";
 import { useThemeStore } from "@/stores/themeStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -27,7 +28,7 @@ export function DataSection() {
   const backupNote = useSettingsStore((s) => s.backupNote);
   const exportBackupTo = useSettingsStore((s) => s.exportBackupTo);
 
-  const [view, setView] = useState<"main" | "backups">("main");
+  const [view, setView] = useState<"main" | "backups" | "trash">("main");
 
   useEffect(() => {
     loadDataDir();
@@ -35,6 +36,10 @@ export function DataSection() {
 
   if (view === "backups") {
     return <BackupHistorySection onBack={() => setView("main")} />;
+  }
+
+  if (view === "trash") {
+    return <TrashSection onBack={() => setView("main")} />;
   }
 
   return (
@@ -52,7 +57,7 @@ export function DataSection() {
       <SettingsGroup>
         <SettingCard
           title="数据目录"
-          description="存放导入的主题（themes\）、应用内备份（backups\）与最近使用记录（history.json）；卸载应用不会删除这里。"
+          description="存放导入的主题（themes\）、删除后暂存的回收站（trash\）、应用内备份（backups\）与最近使用记录（history.json）；卸载应用不会删除这里。"
           action={
             <Button size="sm" onClick={openDataDir}>
               <FolderOpen data-icon="inline-start" />
@@ -99,6 +104,17 @@ export function DataSection() {
             {backupNote}
           </p>
         </SettingCard>
+
+        <SettingCard
+          title="回收站"
+          description="删除的主题会先移入数据目录的 trash\，可随时恢复或彻底删除；超过上限时自动清理最早的条目，并在删除结果里说明"
+          action={
+            <Button size="sm" variant="outline" onClick={() => setView("trash")}>
+              <Trash2 data-icon="inline-start" />
+              打开回收站
+            </Button>
+          }
+        />
 
         <DiagnosticsCard />
       </SettingsGroup>

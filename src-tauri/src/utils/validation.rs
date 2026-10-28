@@ -159,6 +159,16 @@ pub fn path_within_theme_dir(path: &Path, theme_dir: &Path) -> bool {
     theme_paths::relative_to(path, theme_dir).is_some()
 }
 
+/// 是否是可拼进路径的规范 UUID：`to_string()` 必须与原文完全一致（小写、带连字符）
+///
+/// 大写或无连字符的形态 `parse_str` 也认，但和磁盘目录名对不上；`../` 之类更
+/// 不能放进 `theme_dir` 的字符串拼接。
+pub fn is_canonical_uuid(raw: &str) -> bool {
+    Uuid::parse_str(raw)
+        .map(|id| id.to_string() == raw)
+        .unwrap_or(false)
+}
+
 /// 用户主题的 id 必须等于目录名，且 theme.json 里的 id 也要一致
 ///
 /// 系统方案只存在于注册表，没有目录，直接放行（但 id 必须带 `sys_` 前缀）。
@@ -170,8 +180,10 @@ pub fn ensure_theme_id_matches_dir(theme: &CursorTheme) -> Result<PathBuf, Strin
         return Ok(PathBuf::new());
     }
 
-    let id = Uuid::parse_str(&theme.id).map_err(|_| "非法的主题 ID".to_string())?;
-    if id.to_string() != theme.id {
+    if Uuid::parse_str(&theme.id).is_err() {
+        return Err("非法的主题 ID".to_string());
+    }
+    if !is_canonical_uuid(&theme.id) {
         return Err("主题 ID 必须是规范的小写 UUID".to_string());
     }
 

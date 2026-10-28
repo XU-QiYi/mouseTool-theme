@@ -64,7 +64,7 @@ pub fn parse_cur(bytes: &[u8]) -> Option<(DynamicImage, (u32, u32))> {
         // 尺寸字段为 0 表示 256px（8bit 溢出约定）
         let real_w = if w == 0 { 256 } else { w };
         let real_h = if h == 0 { 256 } else { h };
-        if best.map_or(true, |(bw, bh, ..)| real_w * real_h > bw * bh) {
+        if best.is_none_or(|(bw, bh, ..)| real_w * real_h > bw * bh) {
             best = Some((real_w, real_h, hx, hy, offset, size, e));
         }
     }
@@ -119,31 +119,24 @@ pub fn parse_ani(bytes: &[u8]) -> Option<CursorPreview> {
         let data = &bytes[data_start..data_end];
 
         match id {
-            b"anih" => {
-                // anih 结构：cbSize(4) nFrames(4) nSteps(4) iWidth(4) iHeight(4) iStepRate(4) ...
-                if data.len() >= 24 {
-                    step_rate = Some(u32::from_le_bytes(data[20..24].try_into().ok()?));
-                }
+            // anih 结构：cbSize(4) nFrames(4) nSteps(4) iWidth(4) iHeight(4) iStepRate(4) ...
+            b"anih" if data.len() >= 24 => {
+                step_rate = Some(u32::from_le_bytes(data[20..24].try_into().ok()?));
             }
-            b"rate" => {
-                if data.len() >= 4 {
-                    rate_first = Some(u32::from_le_bytes(data[0..4].try_into().ok()?));
-                }
+            b"rate" if data.len() >= 4 => {
+                rate_first = Some(u32::from_le_bytes(data[0..4].try_into().ok()?));
             }
-            b"LIST" => {
-                // LIST 块 data 前 4 字节是列表类型，帧列表为 "fram"
-                if data.len() >= 8 && &data[0..4] == b"fram" {
-                    let mut sub = 4usize;
-                    while sub + 8 <= data.len() {
-                        let ssize = u32::from_le_bytes(
-                            data[sub + 4..sub + 8].try_into().ok()?,
-                        ) as usize;
-                        let sdata = &data[sub + 8..(sub + 8 + ssize).min(data.len())];
-                        if &data[sub..sub + 4] == b"icon" {
-                            icons.push(sdata);
-                        }
-                        sub = sub + 8 + ssize + (ssize & 1);
+            // LIST 块 data 前 4 字节是列表类型，帧列表为 "fram"
+            b"LIST" if data.len() >= 8 && &data[0..4] == b"fram" => {
+                let mut sub = 4usize;
+                while sub + 8 <= data.len() {
+                    let ssize =
+                        u32::from_le_bytes(data[sub + 4..sub + 8].try_into().ok()?) as usize;
+                    let sdata = &data[sub + 8..(sub + 8 + ssize).min(data.len())];
+                    if &data[sub..sub + 4] == b"icon" {
+                        icons.push(sdata);
                     }
+                    sub = sub + 8 + ssize + (ssize & 1);
                 }
             }
             _ => {}
@@ -273,6 +266,12 @@ fn normalize_for_compare(path: &Path) -> String {
 
 static CACHE: LazyLock<Mutex<PreviewCache>> = LazyLock::new(|| Mutex::new(PreviewCache::default()));
 
+/// 锁中毒只发生在别的线程持锁时 panic 过；缓存场景取回数据继续跑，
+/// 总比让之后所有预览请求连锁 panic 好（与测试隔离键同一套防中毒取回锁约定）
+fn cache_lock() -> std::sync::MutexGuard<'static, PreviewCache> {
+    CACHE.lock().unwrap_or_else(|err| err.into_inner())
+}
+
 fn cache_key(path: &Path) -> Option<CacheKey> {
     let meta = std::fs::metadata(path).ok()?;
     let size = meta.len();
@@ -296,7 +295,7 @@ pub fn preview_file(path: &str) -> CursorPreview {
         None => return CursorPreview::default(),
     };
 
-    if let Some(hit) = CACHE.lock().unwrap().get(&key) {
+    if let Some(hit) = cache_lock().get(&key) {
         return (*hit).clone();
     }
 
@@ -316,18 +315,18 @@ pub fn preview_file(path: &str) -> CursorPreview {
         .unwrap_or_default();
 
     let shared = Arc::new(result);
-    CACHE.lock().unwrap().insert(key, shared.clone());
+    cache_lock().insert(key, shared.clone());
     (*shared).clone()
 }
 
 /// 让单个文件的预览失效（文件被替换、但大小与秒级修改时间恰好相同时兜底）
 pub fn invalidate_path(path: &Path) {
-    CACHE.lock().unwrap().invalidate_path(path);
+    cache_lock().invalidate_path(path);
 }
 
 /// 让目录下所有预览失效（删除主题后调用，避免缓存继续持有已删文件）
 pub fn invalidate_dir(dir: &Path) {
-    CACHE.lock().unwrap().invalidate_dir(dir);
+    cache_lock().invalidate_dir(dir);
 }
 
 #[cfg(test)]

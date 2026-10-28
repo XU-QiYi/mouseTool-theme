@@ -22,6 +22,12 @@ export interface SettingsSnapshot {
   effective_themes_dir: string;
   auto_check_update: boolean;
   shortcuts_enabled: boolean;
+  /** 跟随系统深浅色自动切换主题（切换逻辑在 `lib/auto-switch.ts`） */
+  auto_switch_enabled: boolean;
+  /** 系统浅色时使用的主题 ID；null = 浅色时不切换 */
+  auto_switch_light_id: string | null;
+  /** 系统深色时使用的主题 ID；null = 深色时不切换 */
+  auto_switch_dark_id: string | null;
   /** 读取设置时的非致命问题（典型：文件损坏已自动备份） */
   warnings: string[];
 }
@@ -38,6 +44,13 @@ export interface SettingsPatch {
   close_behavior?: CloseBehavior;
   auto_check_update?: boolean;
   shortcuts_enabled?: boolean;
+  auto_switch_enabled?: boolean;
+  /**
+   * 主题 ID 映射的清空用**空串**表示：后端要靠「传了」和「没传」区分补丁，
+   * 而 serde_json 分不清 null 和缺省（与 Rust 侧 `normalize_theme_id` 对应）
+   */
+  auto_switch_light_id?: string;
+  auto_switch_dark_id?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -53,6 +66,9 @@ const MOCK_DEFAULT: SettingsSnapshot = {
   effective_themes_dir: "C:\\Users\\demo\\AppData\\Local\\CursorStudio\\themes",
   auto_check_update: true,
   shortcuts_enabled: true,
+  auto_switch_enabled: false,
+  auto_switch_light_id: null,
+  auto_switch_dark_id: null,
   warnings: [],
 };
 
@@ -100,6 +116,9 @@ export function updateSettings(patch: SettingsPatch): Promise<SettingsSnapshot> 
     closeBehavior: patch.close_behavior,
     autoCheckUpdate: patch.auto_check_update,
     shortcutsEnabled: patch.shortcuts_enabled,
+    autoSwitchEnabled: patch.auto_switch_enabled,
+    autoSwitchLightId: patch.auto_switch_light_id,
+    autoSwitchDarkId: patch.auto_switch_dark_id,
   });
 }
 

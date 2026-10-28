@@ -359,9 +359,7 @@ mod tests {
         fs::create_dir_all(new_dir.join("cursors")).expect("建新主题目录");
         fs::write(new_dir.join("cursors").join("arrow.cur"), "x").expect("写光标");
 
-        let old_path = format!(
-            r"C:\Users\old\AppData\Local\CursorStudio\themes\11111111-1111-4111-8111-111111111111\cursors\arrow.cur"
-        );
+        let old_path = r"C:\Users\old\AppData\Local\CursorStudio\themes\11111111-1111-4111-8111-111111111111\cursors\arrow.cur".to_string();
         let theme = theme_with_path("11111111-1111-4111-8111-111111111111", &old_path);
         let (disk, warnings) = to_storage(&theme, &new_dir);
 

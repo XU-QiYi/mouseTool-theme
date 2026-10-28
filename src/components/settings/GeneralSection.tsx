@@ -13,6 +13,7 @@ import { toast } from "@/lib/toast";
 import { inTauri } from "@/services/theme";
 import type { CloseBehavior } from "@/services/settings";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useThemeStore } from "@/stores/themeStore";
 
 const THEME_MODES = [
   { value: "system", label: "跟随系统", icon: Monitor },
@@ -24,6 +25,46 @@ const CLOSE_BEHAVIORS = [
   { value: "exit", label: "直接退出" },
   { value: "tray", label: "最小化到托盘" },
 ] as const;
+
+/**
+ * 深浅色主题映射的单行下拉：用原生 `<select>`（无障碍与键盘行为免费，
+ * 深浅色下弹层颜色由 color-scheme 同步）；选项是全部主题，「不切换」存空串。
+ */
+function ThemeMappingSelect({
+  label,
+  value,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  value: string;
+  onChange: (id: string) => void;
+  disabled?: boolean;
+}) {
+  const themes = useThemeStore((s) => s.themes);
+  const exists = themes.some((theme) => theme.id === value);
+  return (
+    <label className="flex items-center justify-between gap-2">
+      <span className="text-2xs text-muted-foreground">{label}</span>
+      <select
+        aria-label={label}
+        data-auto-switch-select={label}
+        className="h-8 max-w-56 rounded-lg border border-input bg-transparent px-2 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <option value="">不切换</option>
+        {value !== "" && !exists && <option value={value}>（主题已删除，请改选）</option>}
+        {themes.map((theme) => (
+          <option key={theme.id} value={theme.id}>
+            {theme.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
 
 /**
  * 通用：外观、启动与关闭、存储与更新
@@ -122,6 +163,34 @@ export function GeneralSection() {
             />
           }
         />
+
+        <SettingCard
+          title="跟随系统切换主题"
+          description="系统在深浅色之间切换时自动应用配对主题，光标不会在反色背景上消失；手动「还原默认」会暂停切换，直到系统深浅色再次变化"
+          action={
+            <Toggle
+              label="跟随系统切换主题"
+              checked={settings?.auto_switch_enabled ?? false}
+              onCheckedChange={(checked) => void patchSettings({ auto_switch_enabled: checked })}
+              disabled={!settings}
+            />
+          }
+        >
+          <div className="mt-3 grid gap-2">
+            <ThemeMappingSelect
+              label="系统浅色时用"
+              value={settings?.auto_switch_light_id ?? ""}
+              onChange={(id) => void patchSettings({ auto_switch_light_id: id })}
+              disabled={!settings}
+            />
+            <ThemeMappingSelect
+              label="系统深色时用"
+              value={settings?.auto_switch_dark_id ?? ""}
+              onChange={(id) => void patchSettings({ auto_switch_dark_id: id })}
+              disabled={!settings}
+            />
+          </div>
+        </SettingCard>
       </SettingsGroup>
 
       <SettingsGroup title="启动与关闭">

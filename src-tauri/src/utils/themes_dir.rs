@@ -645,6 +645,23 @@ fn rollback_target(target: &Path, restore_empty: bool) -> Result<(), String> {
     removed.map_err(|err| format!("清理新目录失败（{err}）"))
 }
 
+/// 迁移中途失败：反向重绑注册表并清理目标目录，把没能恢复的部分拼进错误文案
+fn rollback_and_report(
+    rebind: &mut dyn FnMut(&Path, &Path) -> Result<usize, String>,
+    source: &Path,
+    target: &Path,
+    restore_empty: bool,
+    mut message: String,
+) -> String {
+    if rebind(target, source).is_err() {
+        message.push_str("。注意：注册表可能仍有部分槽位指向新目录，请重新应用一次主题");
+    }
+    if let Err(err) = rollback_target(target, restore_empty) {
+        message.push_str(&format!("；清理新目录也失败（{err}）"));
+    }
+    message
+}
+
 /// 执行迁移；设置与注册表通过闭包注入，测试可以模拟写入失败
 pub fn change_with(
     new_dir: Option<&str>,
@@ -713,32 +730,26 @@ pub fn change_with(
     let rebound_slots = match rebind(&source, &target) {
         Ok(count) => count,
         Err(err) => {
-            let reverse = rebind(&target, &source);
-            let cleanup = rollback_target(&target, prepared.target_existed_empty);
-            let mut message = format!("重新绑定正在使用的主题失败（{err}）；已回滚，原目录未改动");
-            if reverse.is_err() {
-                message.push_str("。注意：注册表可能仍有部分槽位指向新目录，请重新应用一次主题");
-            }
-            if let Err(cleanup_err) = cleanup {
-                message.push_str(&format!("；清理新目录也失败（{cleanup_err}）"));
-            }
-            return Err(message);
+            return Err(rollback_and_report(
+                rebind,
+                &source,
+                &target,
+                prepared.target_existed_empty,
+                format!("重新绑定正在使用的主题失败（{err}）；已回滚，原目录未改动"),
+            ));
         }
     };
 
     // 6. 落盘设置；失败则把注册表与文件都回滚
     on_progress(MoveProgress::phase("settings", "正在保存设置…"));
     if let Err(err) = commit_settings(prepared.settings_value.as_deref()) {
-        let reverse = rebind(&target, &source);
-        let cleanup = rollback_target(&target, prepared.target_existed_empty);
-        let mut message = format!("保存设置失败（{err}）；已回滚，原目录与设置均未改动");
-        if reverse.is_err() {
-            message.push_str("。注意：注册表可能仍有部分槽位指向新目录，请重新应用一次主题");
-        }
-        if let Err(cleanup_err) = cleanup {
-            message.push_str(&format!("；清理新目录也失败（{cleanup_err}）"));
-        }
-        return Err(message);
+        return Err(rollback_and_report(
+            rebind,
+            &source,
+            &target,
+            prepared.target_existed_empty,
+            format!("保存设置失败（{err}）；已回滚，原目录与设置均未改动"),
+        ));
     }
 
     // 7. 清理源目录：设置已经指向新目录，删不掉不影响使用，只提示
@@ -936,6 +947,51 @@ mod tests {
         assert_eq!(rebound.len(), 2, "先正向绑定，失败后要反向绑定");
         assert_eq!(rebound[0].0, source);
         assert_eq!(rebound[1].0, target);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 注册表重绑失败：文件与设置都要回到原样，且不再继续写设置
+    #[test]
+    fn 重绑注册表失败时回滚且源目录完好() {
+        let root = temp_root("rebind-fail");
+        let data_root = root.join("CursorStudio");
+        let source = data_root.join("themes");
+        let target = root.join("target");
+        let id = "44444444-4444-4444-8444-444444444444";
+        write_theme(&source, id, true);
+
+        let mut committed = false;
+        let mut calls = 0usize;
+        let mut commit = |_: Option<&str>| -> Result<(), String> {
+            committed = true;
+            Ok(())
+        };
+        let mut rebind = |_: &Path, _: &Path| -> Result<usize, String> {
+            calls += 1;
+            if calls == 1 {
+                Err("模拟重绑失败".to_string())
+            } else {
+                Ok(1)
+            }
+        };
+        let mut progress = |_: MoveProgress| {};
+
+        let err = change_with(
+            Some(target.to_str().unwrap()),
+            &data_root,
+            &source,
+            &mut commit,
+            &mut rebind,
+            &mut progress,
+        )
+        .unwrap_err();
+
+        assert!(err.contains("重新绑定正在使用的主题失败"), "实际：{err}");
+        assert!(source.join(id).join("theme.json").exists(), "源主题必须完好");
+        assert!(!target.exists(), "回滚后不能留下新目录");
+        assert!(!committed, "注册表失败后不应继续写设置");
+        assert_eq!(calls, 2, "先正向绑定失败，再反向绑定一次");
 
         let _ = fs::remove_dir_all(&root);
     }

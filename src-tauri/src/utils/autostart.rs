@@ -58,14 +58,14 @@ pub fn set_at(key_path: &str, name: &str, exe: &str, enable: bool) -> Result<(),
         key.set_value(name, &format!("\"{exe}\""))
             .map_err(|err| format!("写入自启动项失败（{err}）"))?;
     } else {
-        // 要删值得带 KEY_SET_VALUE 打开：默认的 open_subkey 是只读句柄
-        match hkcu.open_subkey_with_flags(key_path, KEY_SET_VALUE) {
-            Ok(key) => key.delete_value(name).or_else(|err| match err.kind() {
+        // 要删值得带 KEY_SET_VALUE 打开：默认的 open_subkey 是只读句柄；
+        // 连键都没有 = 从未注册过，不用删
+        if let Ok(key) = hkcu.open_subkey_with_flags(key_path, KEY_SET_VALUE) {
+            key.delete_value(name).or_else(|err| match err.kind() {
                 // 本来就没有 = 移除成功
                 std::io::ErrorKind::NotFound => Ok(()),
                 _ => Err(err),
-            }).map_err(|err| format!("移除自启动项失败（{err}）"))?,
-            Err(_) => {} // 连键都没有 = 从未注册过
+            }).map_err(|err| format!("移除自启动项失败（{err}）"))?;
         }
     }
     Ok(())

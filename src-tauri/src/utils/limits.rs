@@ -221,7 +221,7 @@ pub fn is_reparse_path(path: &Path) -> bool {
     {
         use std::os::windows::fs::MetadataExt;
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        return meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+        meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
     }
     #[cfg(not(windows))]
     false
@@ -381,7 +381,9 @@ mod tests {
 
     #[test]
     fn 深度与条目数受限() {
-        let deep = std::iter::repeat("a").take(THEME_LIMITS.max_depth + 1).collect::<Vec<_>>().join("/");
+        let deep = std::iter::repeat_n("a", THEME_LIMITS.max_depth + 1)
+            .collect::<Vec<_>>()
+            .join("/");
         assert!(safe_relative_parts(&deep, &THEME_LIMITS).is_err());
 
         let mut budget = ArchiveBudget::new(&THEME_LIMITS);

@@ -38,7 +38,7 @@ export const SETTINGS_SECTIONS = {
     label: "数据",
     icon: Database,
     title: "数据",
-    hint: "数据目录、备份与诊断信息",
+    hint: "数据目录、备份、回收站与诊断信息",
   },
   system: {
     label: "系统集成",

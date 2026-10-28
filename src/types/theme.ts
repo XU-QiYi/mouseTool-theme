@@ -80,3 +80,46 @@ export interface ApplyOutcome {
   /** 光标已切换、但历史没记上时的原因；正常为 null */
   warning: string | null;
 }
+
+/** 与 Rust 端 `utils::trash::TrashEntry` 字段一一对应 */
+export interface TrashEntry {
+  /** 回收站条目 ID（与主题 ID 分开：同一主题可以删多次） */
+  id: string;
+  /** 原主题 ID，恢复时作为主题目录名 */
+  theme_id: string;
+  /** 删除时的显示名快照 */
+  name: string;
+  /** 本地时区 `YYYY-MM-DD HH:MM` */
+  deleted_at: string;
+  slot_count: number;
+  bytes: number;
+  /** "ok" | "damaged"；damaged 时无法恢复，只能彻底删除 */
+  status: "ok" | "damaged";
+  error: string | null;
+}
+
+/** `list_trash` 的返回值：条目 + 当前生效的限额 */
+export interface TrashListing {
+  entries: TrashEntry[];
+  max_entries: number;
+  max_bytes: number;
+}
+
+/** `delete_theme` 的返回值：删除进回收站，可能伴随自动清理与残留提示 */
+export interface DeleteOutcome {
+  /** 本次因超出上限而被自动清理的旧条目数 */
+  auto_purged: number;
+  /** 非致命问题（典型：跨盘复制后原目录没能完全删除） */
+  warning: string | null;
+}
+
+/** `restore_from_trash` 的返回值 */
+export interface RestoreOutcome {
+  warning: string | null;
+}
+
+/** `empty_trash` 的返回值 */
+export interface EmptyTrashOutcome {
+  removed: number;
+  failed: string[];
+}

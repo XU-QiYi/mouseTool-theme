@@ -13,7 +13,7 @@
 - **导入**：`.zip` 主题包点侧栏按钮选择或直接拖进窗口；解压好的**主题文件夹**也能整个拖进窗口。包内带 `.inf` 安装说明时槽位按说明书对号，没有时按 `arrow`、`busy`、`hand` 这类标准命名推断，自动对上 15 个槽位
 - **预览**：静态 `.cur` 与动态 `.ani` 都能在界面里真实播放（Rust 提帧 → canvas 逐帧）
 - **应用**：一次写入 15 个槽位并立即刷新系统光标，全程普通用户权限，无 UAC
-- **管理**：改名、导出（包内文件按槽位重命名，保证"导出 → 再导入"能还原）、删除
+- **管理**：改名、导出（包内文件按槽位重命名，保证"导出 → 再导入"能还原）、删除；删错可在「设置 → 数据 → 回收站」恢复
 - **回溯**：每次切换记一条历史，按自然日分组，可一键切回
 - **还原**：随时回到 Windows 默认光标
 - **外观**：跟随系统 / 浅色 / 深色，三态可手动覆盖
@@ -46,7 +46,8 @@ npm run dev            # 浏览器打开 http://localhost:1420，走内置示例
 ## 数据与隐私
 
 - 主题存在 `%LOCALAPPDATA%\CursorStudio\themes\<uuid>\{theme.json, cursors/}`
-- 历史存在 `%LOCALAPPDATA%\CursorStudio\history.json`（上限 50 条，只存名称快照）
+- 删除的主题先移入 `%LOCALAPPDATA%\CursorStudio\trash\`（可恢复；上限 20 套 / 512 MB，超出自动清理最早）
+- 历史存在 `%LOCALAPPDATA%\CursorStudio\history.json`（事件流上限 200 条，界面按主题去重展示最近 50 个）
 - 卸载不删数据；程序不联网
 
 ## 技术栈
@@ -66,9 +67,9 @@ src/
 ├── stores/           唯一全局状态
 └── services/         invoke 封装 + 浏览器示例数据
 src-tauri/
-├── commands/         23 个命令：主题读取/导入/应用/删除/改名/导出 + 数据目录/设置/系统集成/备份等
+├── commands/         30 个命令：主题读取/导入/应用/删除/改名/导出 + 回收站 + 数据目录/设置/系统集成/备份等
 ├── models/           前后端共用的数据结构
-└── utils/            注册表、光标解码、主题导入（zip/文件夹/.inf）、路径相对化、目录迁移、历史
+└── utils/            注册表、光标解码、主题导入（zip/文件夹/.inf）、路径相对化、目录迁移、回收站、历史
 docs/                 决策记录、需求、架构、设计系统、动效
 ```
 
@@ -110,5 +111,8 @@ node scripts/migration_check.mjs # 迁移确认框/进度/失败回滚（mock）
 node scripts/recent_check.mjs  # 最近使用时间轴
 node scripts/ui_check.mjs      # 点击 / 应用 / 删除链路
 node scripts/dnd_check.mjs     # 拖拽遮罩 / 类型与数量校验
+node scripts/future_check.mjs  # 诊断中心 / 备份历史 / 导入中心
+node scripts/auto_switch_check.mjs # 跟随系统深浅色切换
+node scripts/trash_check.mjs   # 删除 → 回收站 → 恢复 / 彻底删除 / 清空
 node scripts/dev_bg.mjs stop
 ```

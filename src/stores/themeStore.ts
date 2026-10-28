@@ -12,6 +12,7 @@ import {
   openDataDir as apiOpenDataDir,
   renameTheme as apiRenameTheme,
   restoreDefault as apiRestoreDefault,
+  restoreFromTrash as apiRestoreFromTrash,
   type TaskProgress,
 } from "@/services/theme";
 import { readableError, toast } from "@/lib/toast";
@@ -24,10 +25,7 @@ import {
   takePendingImport as apiTakePendingImport,
   type ZipMenuStatus,
 } from "@/services/system";
-import type { CursorTheme, HistoryEntry } from "@/types/theme";
-
-/** 三个页面的语义（互不重叠，各自有一套视图与任务）： */
-export type { Page };
+import type { CursorTheme, HistoryEntry, TrashEntry } from "@/types/theme";
 
 /**
  * 每页各记一份选中项：切页回来还是原来的上下文，又不会把别的页的选择带过来
@@ -131,6 +129,8 @@ interface ThemeStore {
   importTheme: (sourcePath: string) => Promise<void>;
   /** 返回是否真的删掉了；确认对话框据此决定关不关 */
   deleteTheme: (id: string) => Promise<boolean>;
+  /** 从回收站恢复；成功后重读主题列表，并把恢复的主题选在图库与我的主题里 */
+  restoreTrashEntry: (entry: TrashEntry) => Promise<boolean>;
   renameTheme: (id: string, newName: string) => Promise<void>;
   exportTheme: (id: string, destPath: string) => Promise<void>;
   /** 读一次数据目录路径（幂等，拿到就不再请求） */
@@ -328,13 +328,21 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     if (get().busy[key]) return false;
     set((state) => ({ busy: withBusyFlag(state.busy, key, true) }));
     try {
-      await apiDeleteTheme(id);
+      // 前端热更新、后端还是旧二进制时返回值可能为空；删除结果以列表变更为准
+      const outcome = (await apiDeleteTheme(id)) ?? { auto_purged: 0, warning: null };
       set((state) => ({
         themes: state.themes.filter((t) => t.id !== id),
         // 所有页面的选择都要清，不然检查器会挂着一个已经不存在的 ID
         selection: clearSelection(state.selection, id),
       }));
-      toast.success(`已删除「${theme.name}」`);
+      const hints = ["可在 设置 → 数据 → 回收站 恢复"];
+      if (outcome.auto_purged > 0) {
+        hints.push(`回收站超出上限，已自动清理最早的 ${outcome.auto_purged} 套`);
+      }
+      toast.success(`已移入回收站「${theme.name}」`, hints.join("；"));
+      if (outcome.warning) {
+        toast.warning("主题已移入回收站，但收尾没完全成功", outcome.warning);
+      }
       return true;
     } catch (err) {
       console.error("删除主题失败：", err);
@@ -342,6 +350,33 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
       return false;
     } finally {
       set((state) => ({ busy: withBusyFlag(state.busy, key, false) }));
+    }
+  },
+
+  restoreTrashEntry: async (entry) => {
+    try {
+      const outcome = (await apiRestoreFromTrash(entry.id)) ?? { warning: null };
+      await get().loadThemes();
+      // 恢复目标可能因为列表读取失败而不在本地列表里；只有确实回来了才选中
+      if (get().themes.some((theme) => theme.id === entry.theme_id)) {
+        set((state) => ({
+          selection: {
+            ...state.selection,
+            gallery: entry.theme_id,
+            mine: entry.theme_id,
+          },
+        }));
+      }
+      if (outcome.warning) {
+        toast.warning(`已恢复「${entry.name}」`, outcome.warning);
+      } else {
+        toast.success(`已恢复「${entry.name}」`, "已重新出现在主题图库与我的主题里");
+      }
+      return true;
+    } catch (err) {
+      console.error("恢复主题失败：", err);
+      toast.error("恢复失败", readableError(err));
+      return false;
     }
   },
 

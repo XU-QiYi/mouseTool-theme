@@ -31,12 +31,26 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "license": "MIT",
+    "licenseFile": "installer/license.rtf",
+    "resources": ["LICENSE.txt"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "template": "installer/template/installer.nsi",
+        "installerIcon": "icons/icon.ico",
+        "installMode": "currentUser",
+        "languages": ["SimpChinese"]
+      },
+      "wix": {
+        "language": "zh-CN"
+      }
+    }
   }
 }

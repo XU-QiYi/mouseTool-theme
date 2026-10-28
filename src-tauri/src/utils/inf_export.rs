@@ -303,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn 字节层面是_BOM_UTF16LE_CRLF() {
+    fn 字节层面是_bom_utf16le_crlf() {
         let bytes = build_inf("测试", &sample_files());
         assert_eq!(&bytes[..2], &[0xFF, 0xFE]);
 

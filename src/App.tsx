@@ -17,6 +17,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { useDragDropImport } from "@/hooks/useDragDropImport";
 import { useInspectorWidth } from "@/hooks/useInspectorWidth";
 import { PAGE_META, type Page, type PageMeta } from "@/lib/pages";
+import { initAutoSwitch } from "@/lib/auto-switch";
 import { initShortcuts } from "@/lib/shortcuts";
 import { toast } from "@/lib/toast";
 import { checkForUpdates } from "@/lib/update-check";
@@ -60,6 +61,10 @@ function App() {
   // 应用内快捷键（Ctrl+1~4 切页 / Ctrl+O 导入 / Ctrl+F 搜索）：
   // 注册一次，卸载时注销；开关在「设置 → 快捷键」
   useEffect(() => initShortcuts(), []);
+
+  // 跟随系统深浅色自动切换主题（「设置 → 通用」可配）：系统翻转 / 窗口聚焦 /
+  // 设置与主题列表变更三类时机评估一次；还原默认会挂起，见 lib/auto-switch.ts
+  useEffect(() => initAutoSwitch(), []);
 
   // 启动时自动检查更新（「设置 → 通用」可关）：只在发现新版本时提示，
   // 检查失败静默——启动不是报错的场合。每次启动最多查一次
