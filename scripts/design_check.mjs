@@ -422,10 +422,10 @@ try {
 
   const after = await evaluate(`document.querySelectorAll("[data-theme-row]").length`);
   const delToast = await evaluate(
-    `document.body.innerText.includes("已删除") ? "toast 出现" : "toast 缺失"`,
+    `document.body.innerText.includes("已移入回收站") ? "toast 出现" : "toast 缺失"`,
   );
   console.log(`删除链路: ${before} 行 → ${after} 行 | ${delToast}`);
-  if (after !== before - 1) process.exitCode = 1;
+  if (after !== before - 1 || delToast !== "toast 出现") process.exitCode = 1;
 
   const shot6 = await send("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(OUT_DIR, "design_deleted.png"), Buffer.from(shot6.result.data, "base64"));

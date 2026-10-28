@@ -16,6 +16,7 @@ use commands::theme::{
     apply_theme, delete_theme, export_theme, get_active_state, get_all_themes, import_theme,
     rename_theme, restore_default,
 };
+use commands::trash::{delete_from_trash, empty_trash, list_trash, restore_from_trash};
 use utils::settings::{self, CloseBehavior};
 use utils::{integration, tray};
 
@@ -69,7 +70,11 @@ pub fn run() {
             export_backup,
             import_backup,
             list_backups,
-            delete_backup
+            delete_backup,
+            list_trash,
+            restore_from_trash,
+            delete_from_trash,
+            empty_trash
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

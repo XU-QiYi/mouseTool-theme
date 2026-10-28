@@ -15,5 +15,6 @@ pub mod settings;
 pub mod test_support;
 pub mod theme_paths;
 pub mod themes_dir;
+pub mod trash;
 pub mod tray;
 pub mod validation;

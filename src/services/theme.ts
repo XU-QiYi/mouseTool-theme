@@ -5,9 +5,14 @@ import type {
   ActiveState,
   ApplyOutcome,
   CursorTheme,
+  DeleteOutcome,
+  EmptyTrashOutcome,
   HistoryEntry,
   ImportReport,
+  RestoreOutcome,
   ThemesResult,
+  TrashEntry,
+  TrashListing,
 } from "@/types/theme";
 import type { CursorPreview } from "@/types/cursor";
 import { MOCK_RECENT, MOCK_THEMES } from "@/services/mock";
@@ -24,10 +29,17 @@ export interface TaskProgress {
 }
 
 /** 浏览器预览用的「上一次使用时间」，格式与 Rust 侧一致（本地时区、分钟精度） */
-function stamp(): string {
-  const now = new Date();
+function stampAt(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function stamp(): string {
+  return stampAt(new Date());
+}
+
+function stampMinutesAgo(minutes: number): string {
+  return stampAt(new Date(Date.now() - minutes * 60_000));
 }
 
 /** 浏览器里没有 history.json，用内存数组模拟，方便开发时走通「最近使用」 */
@@ -49,6 +61,58 @@ let devThemes: CursorTheme[] = [];
  */
 const devActive: { id: string | null; external: boolean } = { id: null, external: false };
 
+/**
+ * 浏览器里被「删除」的 mock 主题 ID
+ *
+ * MOCK_THEMES 是常量列表；删除后再 `getAllThemes`（例如回收站恢复后刷新）
+ * 不能让它复活，所以用一份隐藏集合表达「已从主题库移走」。
+ */
+const devHiddenThemeIds = new Set<string>();
+
+/** 浏览器里模拟的回收站：条目 + 恢复所需的完整主题对象 */
+const devTrash = new Map<string, { entry: TrashEntry; theme: CursorTheme }>();
+
+/** 回收站示例数据：给「设置 → 数据 → 回收站」在浏览器里两行可视内容 */
+function seedDevTrash() {
+  const sources = MOCK_THEMES.filter((theme) => !theme.is_built_in);
+  const samples = [
+    { source: sources[0], name: "像素小队（示例）", minutesAgo: 45 },
+    { source: sources[1], name: "旧日黑白（示例）", minutesAgo: 26 * 60 },
+  ].filter((sample) => Boolean(sample.source));
+
+  for (const sample of samples) {
+    const theme: CursorTheme = {
+      ...sample.source,
+      id: crypto.randomUUID(),
+      name: sample.name,
+      is_built_in: false,
+      cursors: sample.source.cursors.map((slot) => ({ ...slot })),
+    };
+    const entry: TrashEntry = {
+      id: crypto.randomUUID(),
+      theme_id: theme.id,
+      name: theme.name,
+      deleted_at: stampMinutesAgo(sample.minutesAgo),
+      slot_count: theme.cursors.length,
+      bytes: theme.cursors.length * 4096 + 512,
+      status: "ok",
+      error: null,
+    };
+    devTrash.set(entry.id, { entry, theme });
+  }
+
+  // 开发用开关：?mock-trash-damaged 让第一行进入「记录损坏」态，方便目验
+  if (new URLSearchParams(window.location.search).has("mock-trash-damaged")) {
+    const first = devTrash.values().next().value;
+    if (first) {
+      first.entry.status = "damaged";
+      first.entry.error = "回收站记录不是有效 JSON（模拟）";
+    }
+  }
+}
+
+if (!inTauri) seedDevTrash();
+
 /** 对应 Rust 命令 `get_all_themes`；数据源独立容错，失败项进 warnings 而非整体报错 */
 export function getAllThemes(): Promise<ThemesResult> {
   if (!inTauri) {
@@ -60,7 +124,10 @@ export function getAllThemes(): Promise<ThemesResult> {
     }
     // 浏览器里读不到注册表，用 mock 状态回填（槽位数编一个自洽的）
     return Promise.resolve({
-      themes: [...devThemes, ...MOCK_THEMES],
+      themes: [
+        ...devThemes,
+        ...MOCK_THEMES.filter((theme) => !devHiddenThemeIds.has(theme.id)),
+      ],
       warnings: [],
       active_theme_id: devActive.id,
       current_slots_filled: devActive.id ? 15 : 0,
@@ -183,13 +250,86 @@ export async function importTheme(
   }
 }
 
-/** 对应 Rust 命令 `delete_theme`：删除已导入主题及其光标文件目录 */
-export function deleteTheme(themeId: string): Promise<void> {
+/** 对应 Rust 命令 `delete_theme`：主题移入回收站（软删除，决策 26） */
+export function deleteTheme(themeId: string): Promise<DeleteOutcome> {
   if (!inTauri) {
-    console.warn("[dev] 浏览器环境不删除真实主题");
+    console.warn("[dev] 浏览器环境：主题移入内存回收站");
+    const theme = [...devThemes, ...MOCK_THEMES].find((item) => item.id === themeId);
+    if (theme) {
+      const entry: TrashEntry = {
+        id: crypto.randomUUID(),
+        theme_id: theme.id,
+        name: theme.name,
+        deleted_at: stamp(),
+        slot_count: theme.cursors.length,
+        bytes: theme.cursors.length * 4096 + 512,
+        status: "ok",
+        error: null,
+      };
+      devTrash.set(entry.id, { entry, theme });
+      if (MOCK_THEMES.some((item) => item.id === themeId)) {
+        devHiddenThemeIds.add(themeId);
+      } else {
+        devThemes = devThemes.filter((item) => item.id !== themeId);
+      }
+    }
+    return Promise.resolve({ auto_purged: 0, warning: null });
+  }
+  return invoke<DeleteOutcome>("delete_theme", { themeId });
+}
+
+/** 对应 Rust 命令 `list_trash`：列出回收站与当前限额 */
+export function listTrash(): Promise<TrashListing> {
+  if (!inTauri) {
+    const entries = [...devTrash.values()]
+      .map((item) => item.entry)
+      .sort((a, b) => b.deleted_at.localeCompare(a.deleted_at));
+    return Promise.resolve({
+      entries,
+      max_entries: 20,
+      max_bytes: 512 * 1024 * 1024,
+    });
+  }
+  return invoke<TrashListing>("list_trash");
+}
+
+/** 对应 Rust 命令 `restore_from_trash`：把主题搬回当前主题目录 */
+export function restoreFromTrash(entryId: string): Promise<RestoreOutcome> {
+  if (!inTauri) {
+    const found = devTrash.get(entryId);
+    if (!found) {
+      return Promise.reject(new Error("回收站里没有这个条目，可能已被清理"));
+    }
+    if (found.entry.status !== "ok") {
+      return Promise.reject(new Error("回收站记录已损坏，无法恢复"));
+    }
+    devTrash.delete(entryId);
+    // 删除时藏起来的 mock 主题：取消隐藏即可原样回来；导入过的主题则重新加入列表
+    if (!devHiddenThemeIds.delete(found.theme.id)) {
+      devThemes = [found.theme, ...devThemes];
+    }
+    return Promise.resolve({ warning: null });
+  }
+  return invoke<RestoreOutcome>("restore_from_trash", { entryId });
+}
+
+/** 对应 Rust 命令 `delete_from_trash`：彻底删除一个条目 */
+export function deleteFromTrash(entryId: string): Promise<void> {
+  if (!inTauri) {
+    devTrash.delete(entryId);
     return Promise.resolve();
   }
-  return invoke<void>("delete_theme", { themeId });
+  return invoke<void>("delete_from_trash", { entryId });
+}
+
+/** 对应 Rust 命令 `empty_trash`：清空回收站 */
+export function emptyTrash(): Promise<EmptyTrashOutcome> {
+  if (!inTauri) {
+    const removed = devTrash.size;
+    devTrash.clear();
+    return Promise.resolve({ removed, failed: [] });
+  }
+  return invoke<EmptyTrashOutcome>("empty_trash");
 }
 
 /**

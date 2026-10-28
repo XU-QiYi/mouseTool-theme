@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::models::{ActiveState, ApplyOutcome, CursorSlot, CursorTheme, ThemesResult};
 use crate::utils::{
-    cursor, history, importer, inf_export, limits, ops, paths, registry, theme_paths, validation,
+    history, importer, inf_export, limits, ops, paths, registry, theme_paths, trash, validation,
 };
 
 /// `export_theme` 的返回值：跳过项要说清是哪个槽位，否则用户不知道少了什么
@@ -301,18 +301,21 @@ fn restore() -> Result<(), String> {
     registry::refresh_cursors()
 }
 
-/// 删除一个已导入的主题（连同它的光标文件目录）
+/// 删除一个已导入的主题：整目录移入回收站（可恢复，决策 26）
 ///
 /// 只接受 UUID。theme_id 来自前端，必须校验格式——否则传入 `../` 之类的值
 /// 会让 `theme_dir` 拼到数据目录之外，误删用户其它文件。
 #[tauri::command]
-pub async fn delete_theme(theme_id: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || delete(&theme_id))
-        .await
-        .map_err(|err| format!("删除主题任务异常退出（{err}）"))?
+pub async fn delete_theme(theme_id: String) -> Result<trash::DeleteOutcome, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = ops::try_begin("删除主题")?;
+        delete(&theme_id)
+    })
+    .await
+    .map_err(|err| format!("删除主题任务异常退出（{err}）"))?
 }
 
-fn delete(theme_id: &str) -> Result<(), String> {
+fn delete(theme_id: &str) -> Result<trash::DeleteOutcome, String> {
     let id = Uuid::parse_str(theme_id).map_err(|_| "非法的主题 ID".to_string())?;
     if id.to_string() != theme_id {
         return Err("非法的主题 ID".to_string());
@@ -326,6 +329,7 @@ fn delete(theme_id: &str) -> Result<(), String> {
     // 后端再拦一次：前端按钮禁用只是体验，IPC 调用可能来自别处。
     // theme.json 读不出来时不阻止删除（否则损坏主题永远删不掉），
     // 但只要能读到，就按磁盘内容与注册表事实复核。
+    let mut meta: Option<(String, usize)> = None;
     if let Ok(raw) =
         limits::read_text_bounded(&dir.join("theme.json"), limits::MAX_THEME_JSON_BYTES)
     {
@@ -343,16 +347,15 @@ fn delete(theme_id: &str) -> Result<(), String> {
                         );
                     }
                 }
+                meta = Some((stored.name, stored.cursors.len()));
             }
         }
     }
 
-    fs::remove_dir_all(&dir).map_err(|err| {
-        format!("删不掉主题目录，它可能正被其它程序占用（{err}）")
-    })?;
-    // 预览缓存里可能还抱着刚删掉的文件，及时释放
-    cursor::invalidate_dir(&dir);
-    Ok(())
+    // 读不出 theme.json 仍允许删除；回收站条目只能展示为「损坏的主题」，
+    // 恢复时会再校验一次，坏掉的主题不会悄悄变回可用状态。
+    let (name, slot_count) = meta.unwrap_or_else(|| ("损坏的主题".to_string(), 0));
+    trash::move_into_trash(theme_id, &name, slot_count)
 }
 
 /// 重命名已导入的主题
@@ -973,9 +976,9 @@ mod tests {
         println!("样例已写到 {}", sample.display());
     }
 
-    /// 删除是破坏性操作：既要真的把目录删掉，重复删除也要给人话而不是崩溃
+    /// 删除改为软删除：目录移入回收站，重复删除也要给人话而不是崩溃
     #[test]
-    fn 删除应移除主题目录且重复删除有提示() {
+    fn 删除应移入回收站且重复删除有提示() {
         let root = TempDir::new("delete");
         let _guard = root.isolate_paths();
         let _registry = isolate_registry("delete", false);
@@ -983,14 +986,58 @@ mod tests {
         let id = Uuid::new_v4().to_string();
         let dir = paths::theme_dir(&id).expect("解析主题目录");
         paths::ensure_dir(&dir).expect("建临时主题目录");
-        fs::write(dir.join("theme.json"), "{}").expect("写占位文件");
+        let mut theme = fake_theme(&id);
+        theme.name = "待删除".to_string();
+        fs::write(
+            dir.join("theme.json"),
+            serde_json::to_string_pretty(&theme).unwrap(),
+        )
+        .expect("写 theme.json");
         assert!(dir.exists());
 
-        delete(&id).expect("删除应成功");
-        assert!(!dir.exists(), "主题目录必须被真正删掉");
+        let outcome = delete(&id).expect("删除应成功");
+        assert_eq!(outcome.auto_purged, 0);
+        assert!(!dir.exists(), "主题目录必须从主题库移走");
+        let listing = crate::utils::trash::list().expect("列出回收站");
+        assert_eq!(listing.entries.len(), 1, "删除后应留下回收站条目");
+        assert_eq!(listing.entries[0].name, "待删除");
+        assert_eq!(listing.entries[0].theme_id, id);
 
         let err = delete(&id).unwrap_err();
         assert!(err.contains("已经不在了"), "重复删除应给人话提示，实际：{err}");
+        assert_eq!(
+            crate::utils::trash::list().expect("列出回收站").entries.len(),
+            1,
+            "重复删除不应产生第二条回收站记录"
+        );
+    }
+
+    /// 读不出 theme.json 的主题也必须删得掉，否则损坏主题永远占着位置
+    #[test]
+    fn 损坏主题也能删除并进入回收站() {
+        let root = TempDir::new("delete-corrupt");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("corrupt", false);
+
+        let id = Uuid::new_v4().to_string();
+        let dir = paths::theme_dir(&id).expect("解析主题目录");
+        paths::ensure_dir(&dir).expect("建主题目录");
+        fs::write(dir.join("theme.json"), "{}").expect("写损坏的 theme.json");
+
+        delete(&id).expect("损坏主题也应能删除");
+        assert!(!dir.exists());
+        let listing = crate::utils::trash::list().expect("列出回收站");
+        assert_eq!(listing.entries.len(), 1);
+        assert_eq!(listing.entries[0].name, "损坏的主题");
+        assert_eq!(listing.entries[0].slot_count, 0);
+        assert_eq!(
+            listing.entries[0].status, "damaged",
+            "主题信息坏掉的条目应标记为不可恢复"
+        );
+        assert!(
+            listing.entries[0].error.as_deref().is_some_and(|err| err.contains("主题信息")),
+            "原因要说清是主题信息坏了"
+        );
     }
 
     /// 后端也要拒绝删除自称系统方案的主题，不能只靠前端按钮禁用

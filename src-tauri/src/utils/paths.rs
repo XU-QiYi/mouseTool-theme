@@ -85,6 +85,15 @@ pub fn backups_dir() -> Result<PathBuf, String> {
     Ok(data_root()?.join("backups"))
 }
 
+/// 主题回收站：`%LOCALAPPDATA%\CursorStudio\trash`
+///
+/// 删除用户主题时整目录搬到这里（条目 ID ≠ 主题 ID），恢复时再搬回当前主题目录。
+/// 刻意不放在 `themes/` 下：那里会被主题列表与目录迁移整体扫描，回收站必须与
+/// 「可用主题」分开。条目上限与自动清理见 `utils/trash.rs`。
+pub fn trash_dir() -> Result<PathBuf, String> {
+    Ok(data_root()?.join("trash"))
+}
+
 /// 确保目录存在
 pub fn ensure_dir(path: &std::path::Path) -> Result<(), String> {
     std::fs::create_dir_all(path).map_err(|err| format!("创建目录 {} 失败：{err}", path.display()))
