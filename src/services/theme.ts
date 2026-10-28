@@ -11,6 +11,7 @@ import type {
   ImportReport,
   RestoreOutcome,
   SaveCurrentOutcome,
+  ThemeFileGap,
   ThemesResult,
   TrashEntry,
   TrashListing,
@@ -66,6 +67,26 @@ const devActive: { id: string | null; external: boolean } = {
   // 应用 / 还原 / 保存当前光标后会被收编为普通状态。
   external: new URLSearchParams(window.location.search).has("mock-external"),
 };
+
+/**
+ * 浏览器里模拟的「文件缺口」清单（决策 31）
+ *
+ * 开发用开关：`?mock-broken-files=1` 把示例里第一套导入主题标记成
+ * 「缺 2 个文件」，方便目验与验收（真机上由后端 stat 每个槽位文件得出）。
+ */
+const mockBrokenFiles = new URLSearchParams(window.location.search).has("mock-broken-files");
+
+function devFileGaps(): ThemeFileGap[] {
+  if (!mockBrokenFiles) return [];
+  const target = MOCK_THEMES.find((theme) => !theme.is_built_in);
+  if (!target || target.cursors.length === 0) return [];
+  return [
+    {
+      theme_id: target.id,
+      slots: target.cursors.slice(0, 2).map((slot) => slot.registry_key),
+    },
+  ];
+}
 
 /** 浏览器里的当前光标三态：外部改写优先，其次使用中，最后系统默认 */
 function devCurrentState() {
@@ -146,6 +167,7 @@ export function getAllThemes(): Promise<ThemesResult> {
       warnings: [],
       ...devCurrentState(),
       recent: devRecent,
+      file_gaps: devFileGaps(),
     });
   }
   return invoke<ThemesResult>("get_all_themes");

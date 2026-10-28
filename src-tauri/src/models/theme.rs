@@ -29,6 +29,16 @@ pub struct CursorTheme {
     pub cursors: Vec<CursorSlot>,
 }
 
+/// 一套主题的文件缺口：声明了的槽位里，哪些文件已经读不到
+///
+/// 只描述事实，不带建议——怎么处理（重新导入 / 删除）由界面按主题状态说。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThemeFileGap {
+    pub theme_id: String,
+    /// 缺失或不可读槽位的注册表键名，保持主题内声明顺序
+    pub slots: Vec<String>,
+}
+
 /// `get_all_themes` 的返回值：能读到多少给多少，失败项进 `warnings`
 ///
 /// 系统方案（注册表）与用户主题（磁盘）是两个独立来源。以前任何一边出错
@@ -58,6 +68,13 @@ pub struct ThemesResult {
     pub active_external: bool,
     /// **最近主题**（不是原始事件流）：同一主题只留最新一条，最多 50 个，最新在前
     pub recent: Vec<HistoryEntry>,
+    /// 文件缺口清单（决策 31）：声明了的槽位文件读不到的主题
+    ///
+    /// 只列有缺口的主题；`theme.json` 不落这个字段——它每次读列表时现算，
+    /// 文件恢复后缺口自动消失。`#[serde(default)]` 兜住「前端旧、Rust 新」的
+    /// 热更新组合，别的时候当普通字段用。
+    #[serde(default)]
+    pub file_gaps: Vec<ThemeFileGap>,
 }
 
 /// `get_active_state` 的返回值：窗口聚焦时轻量重查「当前使用」

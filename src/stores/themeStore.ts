@@ -26,7 +26,7 @@ import {
   takePendingImport as apiTakePendingImport,
   type ZipMenuStatus,
 } from "@/services/system";
-import type { CursorTheme, HistoryEntry, TrashEntry } from "@/types/theme";
+import type { CursorTheme, HistoryEntry, ThemeFileGap, TrashEntry } from "@/types/theme";
 
 /**
  * 每页各记一份选中项：切页回来还是原来的上下文，又不会把别的页的选择带过来
@@ -85,6 +85,12 @@ interface ThemeStore {
   currentSlotsFilled: number;
   /** 最近主题，最新在前（后端由事件流派生，每个主题一条） */
   recent: HistoryEntry[];
+  /**
+   * 文件缺口清单（决策 31）：声明了的槽位文件读不到的主题
+   *
+   * 后端每次读列表现算；「我的主题」行内提示、检查器警示条与诊断中心都从这里取。
+   */
+  fileGaps: ThemeFileGap[];
   /** 每个页面各自选中的主题 ID；`recent` 页没有检查器，恒为 null */
   selection: Selection;
   /** 搜索关键词（切页清空，见 setCurrentPage） */
@@ -172,6 +178,7 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
   activeExternal: false,
   currentSlotsFilled: 0,
   recent: [],
+  fileGaps: [],
   selection: NO_SELECTION,
   searchQuery: "",
   currentPage: "gallery",
@@ -192,7 +199,7 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
   loadThemes: async () => {
     set({ loading: true, loadError: null });
     try {
-      const { themes, warnings, active_theme_id, current_slots_filled, active_external, recent } =
+      const { themes, warnings, active_theme_id, current_slots_filled, active_external, recent, file_gaps } =
         await getAllThemes();
       // 「正在使用」每次都由后端从注册表反推，不沿用内存旧值：
       // 内存状态一重开就过期，会把已应用的主题当成还能再应用一次。
@@ -206,6 +213,8 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
         activeExternal: active_external ?? false,
         currentSlotsFilled: current_slots_filled ?? 0,
         recent: recent ?? [],
+        // file_gaps 同理兜底：旧后端不认识这个字段，别让缺口提示整体挂掉
+        fileGaps: file_gaps ?? [],
         warnings,
         warningsDismissed: false,
         // 只清掉「已经不存在的主题」，其余选择保留：

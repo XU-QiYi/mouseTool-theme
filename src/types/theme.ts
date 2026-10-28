@@ -42,6 +42,18 @@ export interface HistoryEntry {
   applied_at: string;
 }
 
+/**
+ * 一套主题的文件缺口：声明了的槽位里，哪些文件已经读不到（决策 31）
+ *
+ * 后端每次读列表时现算（只 stat 不读内容）；`theme.json` 不落这个字段，
+ * 文件恢复后缺口自动消失。
+ */
+export interface ThemeFileGap {
+  theme_id: string;
+  /** 缺失或不可读槽位的注册表键名，保持主题内声明顺序 */
+  slots: string[];
+}
+
 /** 与 Rust 端 `models::ThemesResult` 字段一一对应 */
 export interface ThemesResult {
   /** 能读到的主题（系统方案 + 用户主题），部分来源失败时仍返回其余部分 */
@@ -61,6 +73,12 @@ export interface ThemesResult {
   active_external: boolean;
   /** 最近主题（由后端事件流派生，按主题去重），最新在前 */
   recent: HistoryEntry[];
+  /**
+   * 文件缺口清单（决策 31）：声明了的槽位文件读不到的主题
+   *
+   * 只列有缺口的主题；「前端旧、Rust 新」的组合里可能是 undefined，读时兜底 `?? []`。
+   */
+  file_gaps: ThemeFileGap[];
 }
 
 /** 与 Rust 端 `models::ActiveState` 字段一一对应（`get_active_state`） */

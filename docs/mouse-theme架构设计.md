@@ -196,7 +196,8 @@ App.tsx
 | `CursorSlot` | `registry_key`、`display_name`、`english_name`、`file_path`、`file_type` | `file_path` 运行时是绝对路径（直接写注册表）；**落盘到 `theme.json` / 备份 zip 时只存相对主题目录的路径**（决策 17） |
 | `CursorTheme` | `id`、`name`、`description`、`created_at`、`updated_at`、`is_built_in`、`cursors` | `id`：`sys_<名>` 或 UUID |
 | `ImportReport` | `theme`、`warnings` | `import_theme` 的返回值；链接 / 目录联接等跳过项进 `warnings` |
-| `ThemesResult` | `themes`、`warnings`、`active_theme_id`、`current_slots_filled`、`active_external`、`recent` | 部分成功的载体；`recent` 是从事件流派生的最近主题（去重、最多 50）；`active_external` = 槽位非空但匹配不到任何主题（决策 24） |
+| `ThemesResult` | `themes`、`warnings`、`active_theme_id`、`current_slots_filled`、`active_external`、`recent`、`file_gaps` | 部分成功的载体；`recent` 是从事件流派生的最近主题（去重、最多 50）；`active_external` = 槽位非空但匹配不到任何主题（决策 24）；`file_gaps` 是文件缺口清单（决策 31），只列「声明了的槽位文件读不到」的主题，每次读列表现算、不落盘 |
+| `ThemeFileGap` | `theme_id`、`slots` | 一套主题的缺口：`slots` 为缺失 / 不可读槽位的注册表键名（保持声明顺序） |
 | `ActiveState` | `active_theme_id`、`current_slots_filled`、`active_external` | `get_active_state` 的返回值：聚焦时轻量重查「当前使用」三态 |
 | `ApplyOutcome` | `recent`、`warning` | 主操作成功就不回滚；`recent` 为派生视图 |
 | `CursorPreview` | `is_animated`、`image`、`frames`、`rate_ms`、`hotspot` | base64 不含 `data:` 前缀 |
@@ -217,7 +218,7 @@ App.tsx
 
 ## 7. 关键流程
 
-**启动**：`loadThemes()` → `get_all_themes` → 后端分别读「注册表方案」与「磁盘主题」，任一来源失败只降级为 warning → 磁盘主题的槽位相对路径经 `resolve_theme` 拼成绝对路径 → 拼成一张列表 → 读注册表当前槽位，双向比对反推 `active_theme_id`（读不到就置 `null` 并追加 warning；同时给出 `current_slots_filled` 与 `active_external`——槽位非空但匹配不到任何主题即"被系统设置改写"，决策 24）→ 读 `history.json` 事件流并派生「最近主题」（按主题取最新、最多 50）→ 一次性返回 `ThemesResult`。**窗口聚焦时**另有轻量 `get_active_state` 重查上述三态并静默回写 store（失败保留旧状态），系统设置页改完指针切回本应用即可看到真实状态。
+**启动**：`loadThemes()` → `get_all_themes` → 后端分别读「注册表方案」与「磁盘主题」，任一来源失败只降级为 warning → 磁盘主题的槽位相对路径经 `resolve_theme` 拼成绝对路径 → 拼成一张列表 → 读注册表当前槽位，双向比对反推 `active_theme_id`（读不到就置 `null` 并追加 warning；同时给出 `current_slots_filled` 与 `active_external`——槽位非空但匹配不到任何主题即"被系统设置改写"，决策 24）→ 读 `history.json` 事件流并派生「最近主题」（按主题取最新、最多 50）→ 逐主题 `missing_slots` 体检文件存在性拼出 `file_gaps`（决策 31，只 stat 不读内容；托盘与聚焦重查不做这步）→ 一次性返回 `ThemesResult`。**窗口聚焦时**另有轻量 `get_active_state` 重查上述三态并静默回写 store（失败保留旧状态），系统设置页改完指针切回本应用即可看到真实状态。
 
 **应用**：点「应用此主题」→ store 按 `apply:<id>` 加 busy → `apply_theme(theme)` 在 `spawn_blocking` 中先校验 15 槽位白名单、主题 ID 与目录一致、每个光标文件落可信目录且不超过 20MB → 按 `SLOT_DEFS` 写 15 个槽位值 + `SchemeName`（不写 `Schemes`）→ `SPI_SETCURSORS`（只 `SPIF_SENDCHANGE`）→ 向 `history.json` **追加一条事件**（不按主题合并）→ 返回派生的最近主题 → store 更新 `activeThemeId` + `recent`，`finally` 释放 busy。
 
@@ -295,3 +296,4 @@ App.tsx
 | 2026-10-28 | 决策 28：保存并接管当前光标——新增 `save_current_theme`（命令契约 30 → 31）与 `utils/capture.rs`；外部改写态下把当前注册表光标复制为我的主题（单文件 20MB / 总量 50MB、同源去重），抄全时自动应用并记历史，有槽位缺失时只保存不自动应用；当前已是已知主题时拒绝重复；侧栏当前使用卡增加「保存并应用」入口 |
 | 2026-10-28 | 决策 29：光标守护——`settings.json` 新增 `cursor_guard_enabled`（默认 false），前端新增 `lib/cursor-guard.ts`（启动 / 外部改写 / 开启开关三类时机，目标优先自动切换配对、否则最近主题），`applyTheme` 增加 `silent` 选项、`refreshActive` 返回读取是否成功；「设置 → 通用 → 外观」新增守护卡与「立即恢复」；命令数保持 31（本功能未新增命令），验收 `scripts/guard_check.mjs` |
 | 2026-10-28 | 决策 30：托盘快速切换——`tray.rs` 右键菜单新增最近使用主题（≤8，当前主题勾选）与「还原默认光标」，应用 / 还原复用 `apply` / `restore` 同链路（`apply_by_id` 点击时复核，过期条目自愈）；`tray::refresh` 在应用 / 还原 / 保存当前光标 / 删除 / 改名 / 回收站 / 备份恢复等命令完成后重建菜单（命令新增的 `AppHandle` 参数为 Tauri 注入，IPC 契约与前端不变）；命令数保持 31，纯函数与隔离单测覆盖 |
+| 2026-10-29 | 决策 31：主题文件完整性——`ThemesResult` 新增 `file_gaps`（`ThemeFileGap`：`theme_id` + 缺失槽位键名），`all_themes` 聚合时逐主题 stat 槽位文件（`theme_paths::missing_slots`，只查存在性）；命令数保持 31；前端「我的主题」行内「缺 N 个文件」提示、检查器头部警示条、诊断中心第五项「文件完整性」；mock 增加 `?mock-broken-files`，验收 `scripts/integrity_check.mjs` |

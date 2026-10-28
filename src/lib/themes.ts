@@ -1,4 +1,4 @@
-import type { CursorTheme, HistoryEntry } from "@/types/theme";
+import type { CursorTheme, HistoryEntry, ThemeFileGap } from "@/types/theme";
 
 /**
  * 主题的纯派生计算（筛选、分组、排序）
@@ -32,6 +32,22 @@ export function mineThemes(themes: CursorTheme[], query: string): CursorTheme[] 
   return filterByName(
     themes.filter((theme) => !theme.is_built_in),
     query,
+  );
+}
+
+/**
+ * 取某主题的文件缺口（槽位注册表键名列表）；没有缺口返回空数组（决策 31）
+ *
+ * 纯查表：缺口清单整体来自 store（后端现算），这里只按主题 ID 找自己那份。
+ */
+export function missingSlotsOf(fileGaps: ThemeFileGap[], themeId: string): string[] {
+  return fileGaps.find((gap) => gap.theme_id === themeId)?.slots ?? [];
+}
+
+/** 缺口里的注册表键名 → 主题内的中文名；键名必然来自主题自身，找不到才原样显示 */
+export function missingSlotNames(theme: CursorTheme, slots: string[]): string[] {
+  return slots.map(
+    (key) => theme.cursors.find((slot) => slot.registry_key === key)?.display_name ?? key,
   );
 }
 

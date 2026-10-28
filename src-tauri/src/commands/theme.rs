@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use crate::models::{
-    ActiveState, ApplyOutcome, CursorSlot, CursorTheme, HistoryEntry, ThemesResult,
+    ActiveState, ApplyOutcome, CursorSlot, CursorTheme, HistoryEntry, ThemeFileGap, ThemesResult,
 };
 use crate::utils::{
     capture, history, importer, inf_export, limits, ops, paths, registry, theme_paths, trash,
@@ -220,6 +220,19 @@ pub(crate) fn collect_snapshot() -> ThemesSnapshot {
 
 fn all_themes() -> Result<ThemesResult, String> {
     let snapshot = collect_snapshot();
+    // 文件完整性（决策 31）：读列表时顺带体检一遍。只 stat 不读内容，
+    // 15 槽位 × 主题数的代价可忽略；托盘与聚焦重查用不到它，不进 collect_snapshot
+    let file_gaps = snapshot
+        .themes
+        .iter()
+        .filter_map(|theme| {
+            let slots = theme_paths::missing_slots(theme);
+            (!slots.is_empty()).then(|| ThemeFileGap {
+                theme_id: theme.id.clone(),
+                slots,
+            })
+        })
+        .collect();
     Ok(ThemesResult {
         themes: snapshot.themes,
         warnings: snapshot.warnings,
@@ -227,6 +240,7 @@ fn all_themes() -> Result<ThemesResult, String> {
         current_slots_filled: snapshot.active.filled,
         active_external: snapshot.active.external,
         recent: snapshot.recent,
+        file_gaps,
     })
 }
 
