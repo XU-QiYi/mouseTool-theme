@@ -662,9 +662,12 @@ async function mockRunAutoBackup(keep: number): Promise<AutoBackupOutcome> {
     ];
   }
 
-  // 清理过期：mockBackups 天然新到旧（与 list_backups 同序），auto 条目保序留 keep 份
+  // 清理过期：与 Rust prune 同一口径——按文件名时间戳新到旧排序（字典序即
+  // 时间序），保 keep 份；不做会像 mtime 一样被"写入更晚的旧日期文件"骗过
   const keepCount = Math.max(1, Math.min(100, Math.trunc(keep) || 10));
-  const autos = mockBackups.filter((entry) => mockAutoBackupDate(entry.file_name) !== null);
+  const autos = mockBackups
+    .filter((entry) => mockAutoBackupDate(entry.file_name) !== null)
+    .sort((left, right) => right.file_name.localeCompare(left.file_name));
   let pruned = 0;
   if (autos.length > keepCount) {
     const doomed = new Set(autos.slice(keepCount).map((entry) => entry.file_name));

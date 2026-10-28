@@ -672,15 +672,22 @@ fn generate_backup_path(dir: &Path, prefix: &str) -> Result<PathBuf, String> {
     Err("同一秒内创建了太多备份，请稍后再试".to_string())
 }
 
+/// 从自动备份文件名里取出完整时间戳段（`YYYYMMDD-HHMMSS`，字典序即时间序）；
+/// 不是自动备份或名字不规整返回 None
+fn auto_backup_stamp(file_name: &str) -> Option<&str> {
+    let rest = file_name.strip_prefix(AUTO_BACKUP_PREFIX)?;
+    let stamp = rest.get(0..15)?;
+    let well_formed = stamp.as_bytes()[8] == b'-'
+        && stamp
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| index == 8 || byte.is_ascii_digit());
+    if well_formed { Some(stamp) } else { None }
+}
+
 /// 从自动备份文件名里取出日期段（`YYYYMMDD`）；不是自动备份或名字不规整返回 None
 fn auto_backup_date(file_name: &str) -> Option<&str> {
-    let rest = file_name.strip_prefix(AUTO_BACKUP_PREFIX)?;
-    let date = rest.get(0..8)?;
-    if date.bytes().all(|byte| byte.is_ascii_digit()) {
-        Some(date)
-    } else {
-        None
-    }
+    auto_backup_stamp(file_name).map(|stamp| &stamp[..8])
 }
 
 /// 今天是否已经有自动备份（按文件名里的日期段判断，不依赖修改时间）
@@ -706,9 +713,12 @@ fn has_auto_backup_today(dir: &Path) -> Result<bool, String> {
     Ok(false)
 }
 
-/// 清理过期的自动备份：按修改时间从旧到新删，只动 `auto` 前缀条目
+/// 清理过期的自动备份：只动 `auto` 前缀条目
 ///
-/// 手动备份是用户亲手做的，一份都不碰；单个文件删除失败不中断（下次还会再清）。
+/// 年龄以**文件名里的时间戳**为准（mtime 在文件被整体拷贝、系统时钟回调时
+/// 不可信，会把新备份误判成最旧的删掉），认不出时间戳的当最旧先删；同名
+/// 时间戳按修改时间兜底。手动备份是用户亲手做的，一份都不碰；单个文件
+/// 删除失败不中断（下次还会再清）。
 fn prune_auto_backups(dir: &Path, keep: u32) -> usize {
     if !dir.is_dir() {
         return 0;
@@ -717,7 +727,7 @@ fn prune_auto_backups(dir: &Path, keep: u32) -> usize {
     let Ok(entries) = fs::read_dir(dir) else {
         return 0;
     };
-    let mut autos: Vec<(Option<std::time::SystemTime>, PathBuf)> = entries
+    let mut autos: Vec<(String, Option<std::time::SystemTime>, PathBuf)> = entries
         .flatten()
         .filter(|entry| !limits::is_reparse_entry(entry))
         .map(|entry| entry.path())
@@ -728,18 +738,22 @@ fn prune_auto_backups(dir: &Path, keep: u32) -> usize {
                     .and_then(|name| name.to_str())
                     .is_some_and(|name| name.starts_with(AUTO_BACKUP_PREFIX))
         })
-        .map(|path| (fs::metadata(&path).and_then(|meta| meta.modified()).ok(), path))
+        .filter_map(|path| {
+            let name = path.file_name()?.to_string_lossy().into_owned();
+            let stamp = auto_backup_stamp(&name).unwrap_or("").to_string();
+            let modified = fs::metadata(&path).and_then(|meta| meta.modified()).ok();
+            Some((stamp, modified, path))
+        })
         .collect();
     if autos.len() <= keep {
         return 0;
     }
-    // 时间拿不到的（None）排最前，当作最旧先删
-    autos.sort_by_key(|(stamp, _)| *stamp);
+    autos.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
     let surplus = autos.len() - keep;
     autos
         .into_iter()
         .take(surplus)
-        .filter(|(_, path)| fs::remove_file(path).is_ok())
+        .filter(|(_, _, path)| fs::remove_file(path).is_ok())
         .count()
 }
 
@@ -1604,10 +1618,36 @@ mod tests {
         let summary =
             run_auto_backup_in(&backups, &themes, &data.join("history.json"), 2).expect("自动备份");
         assert!(summary.created);
-        // 4 份自动备份（3 旧 + 本次新建）只留最新 2 份；手动备份不动
+        // 4 份自动备份（3 旧 + 本次新建）只留最新 2 份；手动备份不动。
+        // 年龄按文件名时间戳算：占位文件哪怕写入更晚（mtime 更新）也不能把
+        // 当天真备份挤进"最旧"里——这正是清理排序必须看文件名的原因
         assert_eq!(summary.pruned, 2, "要清到保留份数：{}", summary.pruned);
         assert_eq!(count_auto_backups(&backups), 2);
         assert!(manual.exists(), "手动备份绝不能被牵连");
+        let today = chrono::Local::now().format("%Y%m%d").to_string();
+        let survivors: Vec<String> = fs::read_dir(&backups)
+            .expect("读备份目录")
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(AUTO_BACKUP_PREFIX)
+            })
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            survivors.iter().any(|name| auto_backup_date(name) == Some(today.as_str())),
+            "当天备份必须幸存：{:?}",
+            survivors
+        );
+        assert!(
+            survivors
+                .iter()
+                .all(|name| name.contains("20200103") || auto_backup_date(name) == Some(today.as_str())),
+            "被删的必须是文件名最旧的（20200101/02），留下的是 20200103 + 当天：{:?}",
+            survivors
+        );
 
         let _ = fs::remove_dir_all(&data);
     }
