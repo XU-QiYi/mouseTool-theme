@@ -19,7 +19,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useThemeStore } from "@/stores/themeStore";
 import { cn } from "@/lib/utils";
 
-/** 严重度：ok < warning < error，整体取四项最大值 */
+/** 严重度：ok < warning < error，整体取五项最大值 */
 type Severity = "ok" | "warning" | "error";
 
 const SEVERITY_ORDER: Record<Severity, number> = { ok: 0, warning: 1, error: 2 };
@@ -79,11 +79,13 @@ function localStamp(): string {
  *
  * 检查数据全部从现有 store 派生（`useMemo` 组装，不写 selector），
  * 不新增命令、不做任何写操作。严重度只用结构化状态判定
- * （loadError / dataDirError / autostartError / warnings），不从错误文本猜分类。
+ * （loadError / dataDirError / autostartError / warnings / fileGaps），
+ * 不从错误文本猜分类。
  */
 export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps) {
   const version = useAppVersion();
   const themes = useThemeStore((s) => s.themes);
+  const fileGaps = useThemeStore((s) => s.fileGaps);
   const loadError = useThemeStore((s) => s.loadError);
   const warnings = useThemeStore((s) => s.warnings);
   const activeThemeId = useThemeStore((s) => s.activeThemeId);
@@ -204,8 +206,42 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
           run: () => useThemeStore.getState().setSettingsSection("general"),
         },
       },
+      {
+        id: "file-gaps",
+        title: "文件完整性",
+        severity: fileGaps.length > 0 ? "warning" : "ok",
+        summary:
+          fileGaps.length === 0
+            ? "全部主题的光标文件都在"
+            : `${fileGaps.length} 套主题的光标文件缺失`,
+        evidence:
+          fileGaps.length === 0
+            ? ["每套主题声明了的槽位文件都能读到（只查存在性，内容损坏由预览占位图兜底）"]
+            : [
+                ...fileGaps.slice(0, 6).map((gap) => {
+                  const name = themes.find((theme) => theme.id === gap.theme_id)?.name ?? gap.theme_id;
+                  const shown = gap.slots.slice(0, 4).join("、");
+                  return `「${name}」缺 ${gap.slots.length} 个文件（${shown}${gap.slots.length > 4 ? " 等" : ""}）`;
+                }),
+                ...(fileGaps.length > 6 ? [`还有 ${fileGaps.length - 6} 套主题有缺口`] : []),
+              ],
+        advice:
+          fileGaps.length > 0
+            ? "重新导入这些主题，或到「我的主题」删除；文件缺失只影响该主题本身，应用后缺失槽位会被写成空"
+            : null,
+        action:
+          fileGaps.length > 0
+            ? {
+                label: "去「我的主题」",
+                run: () => {
+                  onOpenChange(false);
+                  useThemeStore.getState().setCurrentPage("mine");
+                },
+              }
+            : undefined,
+      },
     ];
-  }, [themes, loadError, warnings, activeThemeId, activeExternal, currentSlotsFilled, dataDir, dataDirError, settings, settingsError, autostart, autostartError, onOpenChange]);
+  }, [themes, fileGaps, loadError, warnings, activeThemeId, activeExternal, currentSlotsFilled, dataDir, dataDirError, settings, settingsError, autostart, autostartError, onOpenChange]);
 
   const overall = checks.reduce<Severity>(
     (worst, check) =>

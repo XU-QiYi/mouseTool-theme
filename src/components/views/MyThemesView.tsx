@@ -12,7 +12,7 @@ import { DeleteThemeDialog } from "@/components/theme/DeleteThemeDialog";
 import { useExportTheme } from "@/hooks/useExportTheme";
 import { useImportTheme } from "@/hooks/useImportTheme";
 import { coverSlot, slotStats } from "@/lib/slots";
-import { mineThemes } from "@/lib/themes";
+import { mineThemes, missingSlotsOf } from "@/lib/themes";
 import { cn } from "@/lib/utils";
 import { actionBusyKey, useThemeStore } from "@/stores/themeStore";
 import type { CursorTheme } from "@/types/theme";
@@ -30,6 +30,7 @@ import type { CursorTheme } from "@/types/theme";
  */
 export function MyThemesView() {
   const themes = useThemeStore((s) => s.themes);
+  const fileGaps = useThemeStore((s) => s.fileGaps);
   const query = useThemeStore((s) => s.searchQuery);
   const setSearchQuery = useThemeStore((s) => s.setSearchQuery);
   const loading = useThemeStore((s) => s.loading);
@@ -130,6 +131,7 @@ export function MyThemesView() {
             const deleting = Boolean(busy[actionBusyKey("delete", theme.id)]);
             const stats = slotStats(theme);
             const cover = coverSlot(theme);
+            const missing = missingSlotsOf(fileGaps, theme.id);
             const [importDate, importTime] = theme.updated_at
               ? theme.updated_at.split(" ")
               : ["—", undefined];
@@ -190,6 +192,16 @@ export function MyThemesView() {
                     {stats.total}
                   </span>
                   <SlotMeter compact filled={stats.filled} total={stats.total} className="mt-1 w-14" />
+                  {/* 「没提供槽位」是部分覆盖（上面的口径），「文件丢了」是缺口——两种缺要分开说（决策 31） */}
+                  {missing.length > 0 && (
+                    <span
+                      data-gap-hint={theme.id}
+                      title="声明的槽位文件读不到，应用后这些槽位会被写成空"
+                      className="mt-1 block text-2xs text-warning"
+                    >
+                      缺 {missing.length} 个文件
+                    </span>
+                  )}
                 </td>
 
                 <td className="px-3 py-2.5 text-xs text-muted-foreground tabular-nums">

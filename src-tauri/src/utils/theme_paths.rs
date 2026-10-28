@@ -80,6 +80,23 @@ pub fn resolve_theme(theme: &mut CursorTheme, theme_dir: &Path) {
     }
 }
 
+/// 运行时体检（决策 31）：主题声明了的槽位文件现在还摸不摸得到
+///
+/// 只查「文件在不在」：`metadata` 失败（不存在、权限不够、被独占）都算缺口，
+/// **不读文件内容**——内容损坏由预览占位图兜底，列表阶段逐个打开 20MB 上限的
+/// 光标文件代价太高。空槽位是主题没提供（部分覆盖，`SlotMeter` 的口径），不算缺口。
+///
+/// 只读不写：文件恢复后缺口自动消失，无需任何清理动作。
+pub fn missing_slots(theme: &CursorTheme) -> Vec<String> {
+    theme
+        .cursors
+        .iter()
+        .filter(|slot| !slot.file_path.trim().is_empty())
+        .filter(|slot| fs::metadata(&slot.file_path).is_err())
+        .map(|slot| slot.registry_key.clone())
+        .collect()
+}
+
 /// 递归收集主题目录内的文件，返回相对路径列表
 fn collect_candidates(theme_dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -330,6 +347,56 @@ mod tests {
         assert_eq!(Path::new(&resolved), root.join("cursors/arrow.cur"));
         assert_eq!(resolve("", &root), "");
         assert_eq!(resolve("../evil.cur", &root), "", "越界相对路径不解析");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn 缺失的槽位文件被标记为缺口() {
+        let root = temp_root("gaps");
+        let theme_dir = root.join("11111111-1111-4111-8111-111111111111");
+        fs::create_dir_all(theme_dir.join("cursors")).expect("建主题目录");
+        fs::write(theme_dir.join("cursors").join("arrow.cur"), "x").expect("写光标");
+
+        let mut theme = theme_with_path(
+            "11111111-1111-4111-8111-111111111111",
+            &theme_dir.join("cursors").join("arrow.cur").to_string_lossy(),
+        );
+        theme.cursors.push(CursorSlot {
+            registry_key: "Wait".to_string(),
+            display_name: "忙".to_string(),
+            english_name: "Busy".to_string(),
+            file_path: theme_dir
+                .join("cursors")
+                .join("busy.cur")
+                .to_string_lossy()
+                .into_owned(),
+            file_type: "cur".to_string(),
+        });
+        // 空槽位 = 主题没提供这个槽位（部分覆盖），不能和「文件丢了」混为一谈
+        theme.cursors.push(CursorSlot {
+            registry_key: "Hand".to_string(),
+            display_name: "链接选择".to_string(),
+            english_name: "Link Select".to_string(),
+            file_path: String::new(),
+            file_type: "cur".to_string(),
+        });
+
+        let missing = missing_slots(&theme);
+        assert_eq!(
+            missing,
+            vec!["Wait".to_string()],
+            "只有声明了却读不到的槽位算缺口"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn 文件齐全时没有缺口() {
+        let root = temp_root("gaps-ok");
+        let file = root.join("arrow.cur");
+        fs::write(&file, "x").expect("写光标");
+        let theme = theme_with_path("t", &file.to_string_lossy());
+        assert!(missing_slots(&theme).is_empty());
         let _ = fs::remove_dir_all(&root);
     }
 

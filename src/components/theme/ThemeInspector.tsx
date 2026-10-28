@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { CSSProperties } from "react";
-import { Archive, Check, MousePointer2, ScanSearch, Trash2 } from "lucide-react";
+import { Archive, Check, MousePointer2, ScanSearch, Trash2, TriangleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -11,6 +11,7 @@ import { DeleteThemeDialog } from "@/components/theme/DeleteThemeDialog";
 import { ThemeNameField } from "@/components/theme/ThemeNameField";
 import { useExportTheme } from "@/hooks/useExportTheme";
 import { coverSlot, slotStats } from "@/lib/slots";
+import { missingSlotNames, missingSlotsOf } from "@/lib/themes";
 import { actionBusyKey, useThemeStore } from "@/stores/themeStore";
 import type { CursorTheme } from "@/types/theme";
 
@@ -57,6 +58,7 @@ function EmptyInspector({ style }: { style: CSSProperties }) {
 
 function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSProperties }) {
   const activeThemeId = useThemeStore((s) => s.activeThemeId);
+  const fileGaps = useThemeStore((s) => s.fileGaps);
   const applyTheme = useThemeStore((s) => s.applyTheme);
   const busy = useThemeStore((s) => s.busy);
   const { isExporting, pickAndExport } = useExportTheme();
@@ -68,6 +70,7 @@ function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSPropert
   const exporting = isExporting(theme.id);
   const stats = slotStats(theme);
   const cover = coverSlot(theme);
+  const missingNames = missingSlotNames(theme, missingSlotsOf(fileGaps, theme.id));
 
   // 系统自带方案没有文件可删；正在使用的主题删掉会让注册表指向空文件
   const canDelete = !theme.is_built_in && !isActive;
@@ -157,6 +160,22 @@ function InspectorBody({ theme, style }: { theme: CursorTheme; style: CSSPropert
               <Trash2 />
             </Button>
           </div>
+
+          {/* 文件缺口警示（决策 31）：放头部不随槽位列表滚走——
+              「应用后这些槽位会被写成空」是应用前必须看见的后果，不是详情 */}
+          {missingNames.length > 0 && (
+            <div
+              data-missing-files
+              role="status"
+              className="mt-2.5 flex items-start gap-2 rounded-lg bg-warning/10 px-3 py-2 ring-1 ring-warning/25"
+            >
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-warning" />
+              <p className="text-xs leading-relaxed text-warning">
+                {missingNames.length} 个槽位的光标文件缺失或不可读（{missingNames.join("、")}
+                ）。应用后这些槽位会被写成空，建议重新导入，或在「我的主题」删除该主题。
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-4 py-3">
