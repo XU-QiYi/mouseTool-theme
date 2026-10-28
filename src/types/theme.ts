@@ -123,3 +123,17 @@ export interface EmptyTrashOutcome {
   removed: number;
   failed: string[];
 }
+
+/** 与 Rust 端 `commands::theme::SaveCurrentOutcome` 字段一一对应 */
+export interface SaveCurrentOutcome {
+  theme: CursorTheme;
+  /** 捕获时被跳过的槽位说明 */
+  warnings: string[];
+  /** 实际复制进新主题的光标文件数 */
+  file_count: number;
+  /** 是否已经接管为当前主题 */
+  applied: boolean;
+  recent: HistoryEntry[];
+  /** 未自动应用 / 应用后历史没记上时的原因 */
+  warning: string | null;
+}

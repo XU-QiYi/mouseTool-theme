@@ -7,9 +7,12 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
-use crate::models::{ActiveState, ApplyOutcome, CursorSlot, CursorTheme, ThemesResult};
+use crate::models::{
+    ActiveState, ApplyOutcome, CursorSlot, CursorTheme, HistoryEntry, ThemesResult,
+};
 use crate::utils::{
-    history, importer, inf_export, limits, ops, paths, registry, theme_paths, trash, validation,
+    capture, history, importer, inf_export, limits, ops, paths, registry, theme_paths, trash,
+    validation,
 };
 
 /// `export_theme` 的返回值：跳过项要说清是哪个槽位，否则用户不知道少了什么
@@ -283,6 +286,98 @@ fn apply(theme: &CursorTheme) -> Result<ApplyOutcome, String> {
             Ok(ApplyOutcome {
                 recent,
                 warning: Some(err),
+            })
+        }
+    }
+}
+
+/// `save_current_theme` 的返回值
+///
+/// `applied = false` 有两种情况：有槽位没抄全（只保存、不改变当前光标），
+/// 或抄全了但写注册表 / 刷新失败；`warning` 会给出具体原因。
+#[derive(Debug, Serialize)]
+pub struct SaveCurrentOutcome {
+    pub theme: CursorTheme,
+    /// 捕获时被跳过的槽位说明
+    pub warnings: Vec<String>,
+    /// 实际复制进新主题的光标文件数
+    pub file_count: usize,
+    pub applied: bool,
+    pub recent: Vec<HistoryEntry>,
+    pub warning: Option<String>,
+}
+
+/// 把当前注册表里的光标保存为「我的主题」并立即接管
+///
+/// 只读注册表 + 复制文件；当前已是已知主题时拒绝重复保存。有槽位没抄全时
+/// 只保存不应用——自动应用会把那些没抄到的非空槽位写成空字符串，反而改变
+/// 用户当前的光标设置。
+#[tauri::command]
+pub async fn save_current_theme() -> Result<SaveCurrentOutcome, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let _guard = ops::try_begin("保存当前光标")?;
+        save_current()
+    })
+    .await
+    .map_err(|err| format!("保存当前光标任务异常退出（{err}）"))?
+}
+
+fn save_current() -> Result<SaveCurrentOutcome, String> {
+    let current = registry::read_current_slots()?;
+    if current.is_empty() {
+        return Err("当前是系统默认光标，没有可保存的自定义光标".to_string());
+    }
+
+    // 当前已经是列表里的某套主题（系统方案或用户主题）时没有保存价值；
+    // 注册表里的路径完全一致才算同一套，部分相似仍允许捕获。
+    let (themes, _) = merge_sources(registry::read_system_schemes(), importer::read_user_themes());
+    if let Some(id) = detect_active_theme(&themes, &current, &registry::read_scheme_name()) {
+        let name = themes
+            .iter()
+            .find(|theme| theme.id == id)
+            .map(|theme| theme.name.clone())
+            .unwrap_or(id);
+        return Err(format!("当前光标已经是「{name}」，无需再保存"));
+    }
+
+    let capture::CaptureReport {
+        theme,
+        warnings,
+        file_count,
+    } = capture::capture_current(&current)?;
+
+    if !warnings.is_empty() {
+        let (recent, _) = history::read_history();
+        return Ok(SaveCurrentOutcome {
+            theme,
+            warnings,
+            file_count,
+            applied: false,
+            recent,
+            warning: Some(
+                "有槽位没能保存，未自动应用；可在「我的主题」里检查后再手动应用".to_string(),
+            ),
+        });
+    }
+
+    match apply(&theme) {
+        Ok(outcome) => Ok(SaveCurrentOutcome {
+            theme,
+            warnings,
+            file_count,
+            applied: true,
+            recent: outcome.recent,
+            warning: outcome.warning,
+        }),
+        Err(err) => {
+            let (recent, _) = history::read_history();
+            Ok(SaveCurrentOutcome {
+                theme,
+                warnings,
+                file_count,
+                applied: false,
+                recent,
+                warning: Some(format!("已保存为我的主题，但没能自动应用（{err}）")),
             })
         }
     }
@@ -1074,6 +1169,149 @@ mod tests {
         let err = delete(&theme.id).unwrap_err();
         assert!(err.contains("正在使用"), "实际：{err}");
         assert!(dir.exists(), "拒绝删除时目录必须保留");
+    }
+
+    /// 外部光标（系统设置 / 其它工具）保存为我的主题后应立即接管
+    #[test]
+    fn 保存当前光标会把外部方案收编并自动应用() {
+        let root = TempDir::new("save-current");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("save-current", true);
+
+        let external = root.join("external");
+        fs::create_dir_all(&external).expect("建外部目录");
+        let arrow_path = external.join("arrow.cur");
+        let wait_path = external.join("busy.ani");
+        fs::write(&arrow_path, fixture_cur()).expect("写 arrow");
+        fs::write(&wait_path, fixture_ani()).expect("写 wait");
+        let slots = vec![
+            CursorSlot {
+                registry_key: "Arrow".into(),
+                display_name: "正常选择".into(),
+                english_name: "Normal Select".into(),
+                file_path: arrow_path.to_string_lossy().into_owned(),
+                file_type: "cur".into(),
+            },
+            CursorSlot {
+                registry_key: "Wait".into(),
+                display_name: "忙".into(),
+                english_name: "Busy".into(),
+                file_path: wait_path.to_string_lossy().into_owned(),
+                file_type: "ani".into(),
+            },
+        ];
+        registry::write_cursors(&slots, "外部方案").expect("写外部光标注册表");
+
+        let outcome = save_current().expect("应保存成功");
+        assert!(outcome.applied, "抄全后应自动接管：{:?}", outcome.warning);
+        assert_eq!(outcome.file_count, 2);
+        assert!(outcome.warnings.is_empty());
+        assert_eq!(outcome.theme.cursors.len(), 2);
+        assert!(outcome.theme.name.starts_with("当前光标 "));
+
+        let theme_dir = paths::theme_dir(&outcome.theme.id).expect("解析新主题目录");
+        assert!(theme_dir.join("cursors/arrow.cur").is_file());
+        assert!(theme_dir.join("cursors/wait.ani").is_file(), "扩展名应保留");
+        let current = registry::read_current_slots().expect("读回注册表");
+        assert_eq!(current.len(), 2);
+        assert!(
+            theme_matches_current(&outcome.theme, &current),
+            "接管后注册表应与新主题一致"
+        );
+        assert_eq!(
+            outcome.recent.first().map(|entry| entry.theme_id.as_str()),
+            Some(outcome.theme.id.as_str()),
+            "接管应记入最近使用"
+        );
+    }
+
+    /// 当前已经是已知主题时没有重复保存的意义
+    #[test]
+    fn 当前已是已知主题时不重复保存() {
+        let root = TempDir::new("save-current-known");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("save-current-known", true);
+
+        let (theme, _dir) =
+            seed_exportable_theme("已经存在", &[("Arrow", "arrow.cur", fixture_cur())]);
+        registry::write_cursors(&theme.cursors, &theme.name).expect("写注册表");
+
+        let err = save_current().unwrap_err();
+        assert!(err.contains("已经是"), "实际：{err}");
+        assert_eq!(
+            fs::read_dir(paths::themes_dir().expect("主题目录"))
+                .expect("列主题目录")
+                .count(),
+            1,
+            "拒绝保存时不能多出主题目录"
+        );
+    }
+
+    /// 有槽位没抄全时只保存、不自动应用，不能反过来清掉当前非空槽位
+    #[test]
+    fn 有槽位没抄全时不自动应用() {
+        let root = TempDir::new("save-current-partial");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("save-current-partial", true);
+
+        let external = root.join("external");
+        fs::create_dir_all(&external).expect("建外部目录");
+        let arrow_path = external.join("arrow.cur");
+        fs::write(&arrow_path, fixture_cur()).expect("写 arrow");
+        let missing = external.join("missing.cur");
+        let slots = vec![
+            CursorSlot {
+                registry_key: "Arrow".into(),
+                display_name: "正常选择".into(),
+                english_name: "Normal Select".into(),
+                file_path: arrow_path.to_string_lossy().into_owned(),
+                file_type: "cur".into(),
+            },
+            CursorSlot {
+                registry_key: "Wait".into(),
+                display_name: "忙".into(),
+                english_name: "Busy".into(),
+                file_path: missing.to_string_lossy().into_owned(),
+                file_type: "cur".into(),
+            },
+        ];
+        registry::write_cursors(&slots, "不完整外部方案").expect("写注册表");
+
+        let outcome = save_current().expect("至少一个槽位可用时应保存");
+        assert!(!outcome.applied, "有槽位没抄全时不能自动应用");
+        assert!(!outcome.warnings.is_empty());
+        assert!(outcome.warning.is_some());
+        assert_eq!(outcome.theme.cursors.len(), 1);
+        let current = registry::read_current_slots().expect("读回注册表");
+        assert!(
+            current
+                .iter()
+                .any(|(_, path)| Path::new(path).starts_with(&external)),
+            "注册表应保持原样，不能清掉当前槽位"
+        );
+        let saved_dir = paths::theme_dir(&outcome.theme.id).expect("解析新主题目录");
+        assert!(
+            current
+                .iter()
+                .all(|(_, path)| !Path::new(path).starts_with(&saved_dir)),
+            "未自动应用时注册表不应指向新主题副本"
+        );
+    }
+
+    #[test]
+    fn 系统默认时不能保存当前光标() {
+        let root = TempDir::new("save-current-default");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("save-current-default", true);
+
+        let err = save_current().unwrap_err();
+        assert!(err.contains("系统默认"), "实际：{err}");
+        assert_eq!(
+            fs::read_dir(paths::themes_dir().expect("主题目录"))
+                .expect("列主题目录")
+                .count(),
+            0
+        );
     }
 
     /// 用户主题引用另一套主题的文件：应用 / 导出都必须拒绝

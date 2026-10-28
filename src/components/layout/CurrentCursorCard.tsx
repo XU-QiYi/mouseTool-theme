@@ -1,4 +1,4 @@
-import { MousePointer2, RotateCcw } from "lucide-react";
+import { MousePointer2, RotateCcw, Save } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { CursorPreviewImage } from "@/components/cursor/CursorPreviewImage";
@@ -25,11 +25,13 @@ export function CurrentCursorCard({ variant }: { variant: "full" | "compact" }) 
     (s) => s.themes.find((theme) => theme.id === s.activeThemeId) ?? null,
   );
   const restoreDefault = useThemeStore((s) => s.restoreDefault);
+  const saveCurrentTheme = useThemeStore((s) => s.saveCurrentTheme);
   const busy = useThemeStore((s) => s.busy);
 
   const cover = activeTheme ? coverSlot(activeTheme) : undefined;
   const stats = activeTheme ? slotStats(activeTheme) : null;
   const restoring = Boolean(busy[actionBusyKey("restore", "default")]);
+  const saving = Boolean(busy[actionBusyKey("save", "current")]);
 
   return (
     <div className="rounded-xl bg-sidebar-accent/60 p-2.5 ring-1 ring-sidebar-border">
@@ -72,26 +74,48 @@ export function CurrentCursorCard({ variant }: { variant: "full" | "compact" }) 
       </div>
 
       {variant === "full" && (
-        <Button
-          variant="ghost"
-          size="xs"
-          className="mt-2 w-full justify-start text-muted-foreground"
-          onClick={restoreDefault}
-          disabled={restoring}
-          aria-busy={restoring}
-          title={
-            restoring
-              ? "正在还原…"
-              : activeThemeId
-                ? "还原系统默认光标"
-                : activeExternal
-                  ? "槽位正被系统设置占用，点此清空还原"
-                  : "当前已是系统默认"
-          }
-        >
-          <RotateCcw data-icon="inline-start" />
-          {restoring ? "还原中…" : "还原系统默认"}
-        </Button>
+        <div className="mt-2 space-y-1">
+          {activeExternal && (
+            <Button
+              variant="outline"
+              size="xs"
+              className="w-full justify-start"
+              onClick={saveCurrentTheme}
+              disabled={saving || restoring}
+              aria-busy={saving}
+              title={
+                saving
+                  ? "正在保存…"
+                  : "把当前系统光标复制为我的主题并立即应用；之后可在图库切换"
+              }
+            >
+              <Save data-icon="inline-start" />
+              {saving ? "保存中…" : "保存并应用"}
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="xs"
+            className="w-full justify-start text-muted-foreground"
+            onClick={restoreDefault}
+            disabled={restoring || saving}
+            aria-busy={restoring}
+            title={
+              restoring
+                ? "正在还原…"
+                : saving
+                  ? "正在保存当前光标…"
+                  : activeThemeId
+                    ? "还原系统默认光标"
+                    : activeExternal
+                      ? "槽位正被系统设置占用，点此清空还原"
+                      : "当前已是系统默认"
+            }
+          >
+            <RotateCcw data-icon="inline-start" />
+            {restoring ? "还原中…" : "还原系统默认"}
+          </Button>
+        </div>
       )}
     </div>
   );
