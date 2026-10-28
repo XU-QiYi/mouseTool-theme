@@ -14,7 +14,7 @@ use commands::system::{
 };
 use commands::theme::{
     apply_theme, delete_theme, export_theme, get_active_state, get_all_themes, import_theme,
-    rename_theme, restore_default,
+    rename_theme, restore_default, save_current_theme,
 };
 use commands::trash::{delete_from_trash, empty_trash, list_trash, restore_from_trash};
 use utils::settings::{self, CloseBehavior};
@@ -50,6 +50,7 @@ pub fn run() {
             get_cursor_preview,
             apply_theme,
             restore_default,
+            save_current_theme,
             import_theme,
             delete_theme,
             rename_theme,

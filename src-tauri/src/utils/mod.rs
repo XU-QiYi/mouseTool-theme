@@ -1,4 +1,5 @@
 pub mod autostart;
+pub mod capture;
 pub mod cursor;
 pub mod history;
 pub mod importer;

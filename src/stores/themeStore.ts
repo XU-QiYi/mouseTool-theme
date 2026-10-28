@@ -13,6 +13,7 @@ import {
   renameTheme as apiRenameTheme,
   restoreDefault as apiRestoreDefault,
   restoreFromTrash as apiRestoreFromTrash,
+  saveCurrentTheme as apiSaveCurrentTheme,
   type TaskProgress,
 } from "@/services/theme";
 import { readableError, toast } from "@/lib/toast";
@@ -126,6 +127,8 @@ interface ThemeStore {
   refreshActive: () => Promise<void>;
   applyTheme: (id: string) => Promise<void>;
   restoreDefault: () => Promise<void>;
+  /** 把外部改写态的当前光标复制为我的主题；抄全时自动接管为当前主题 */
+  saveCurrentTheme: () => Promise<void>;
   importTheme: (sourcePath: string) => Promise<void>;
   /** 返回是否真的删掉了；确认对话框据此决定关不关 */
   deleteTheme: (id: string) => Promise<boolean>;
@@ -270,6 +273,47 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     } catch (err) {
       console.error("恢复默认失败：", err);
       toast.error("还原失败", readableError(err));
+    } finally {
+      set((state) => ({ busy: withBusyFlag(state.busy, key, false) }));
+    }
+  },
+
+  saveCurrentTheme: async () => {
+    const key = actionBusyKey("save", "current");
+    if (get().busy[key]) return;
+    set((state) => ({ busy: withBusyFlag(state.busy, key, true) }));
+    try {
+      const outcome = await apiSaveCurrentTheme();
+      await get().loadThemes();
+      const saved = get().themes.find((theme) => theme.id === outcome.theme.id);
+      if (saved) {
+        // 无论是否自动接管，都把新主题选在图库与我的主题里，方便继续查看 / 改名
+        set((state) => ({
+          selection: { ...state.selection, gallery: saved.id, mine: saved.id },
+          // 与导入一致：有搜索词时新主题可能被过滤掉，清空免得「保存了却看不见」
+          searchQuery: "",
+        }));
+        if (outcome.applied) {
+          set({ activeThemeId: saved.id, activeExternal: false });
+        }
+      }
+      if (!outcome.applied) {
+        const detail =
+          outcome.warnings.length > 0
+            ? `${outcome.warnings[0]}${outcome.warnings.length > 1 ? `（共 ${outcome.warnings.length} 条）` : ""}`
+            : outcome.warning ?? "请到「我的主题」检查后手动应用";
+        toast.warning(`已保存「${outcome.theme.name}」，未自动应用`, detail);
+      } else if (outcome.warning) {
+        toast.warning(`已保存并应用「${outcome.theme.name}」`, outcome.warning);
+      } else {
+        toast.success(
+          `已保存并应用「${outcome.theme.name}」`,
+          `共 ${outcome.file_count} 个光标文件；可在「我的主题」里改名`,
+        );
+      }
+    } catch (err) {
+      console.error("保存当前光标失败：", err);
+      toast.error("保存失败", readableError(err));
     } finally {
       set((state) => ({ busy: withBusyFlag(state.busy, key, false) }));
     }
