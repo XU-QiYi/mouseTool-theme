@@ -553,7 +553,7 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 
 **结论**（2026-10-25，随测试隔离与 CI 实现）
 
-- **不碰真实 `%LOCALAPPDATA%`**：`utils/test_support.rs` 提供手写 `TempDir`（不引 `tempfile`，遵守零新依赖）与生成的最小 `.cur` / `.ani` fixture；测试用 `paths::use_test_roots` 把数据根临时指到临时目录，结束后恢复。
+- **不碰真实 `%LOCALAPPDATA%`**：`utils/test_support.rs` 用 `tempfile`（dev 依赖，决策 27）提供临时目录，并生成最小 `.cur` / `.ani` fixture；测试用 `paths::use_test_roots` 把数据根临时指到临时目录，结束后恢复。
 - **不碰真实光标设置**：注册表测试不再写用户的 `HKCU\Control Panel\Cursors`，而是在 `Software\CursorStudio.Tests\<label>-<pid>-<n>` 下建隔离键；`registry` 通过线程局部 `TEST_CURSORS_KEY` 重定向所有读写，`IsolatedRegistry` 在 Drop 时删除整棵测试键。隔离模式下 `refresh_cursors` 直接 no-op，不会调用 `SPI_SETCURSORS`。
 - 隔离键让注册表用例可以并行；只有确实共享同一个键的用例才需要自行串行（防中毒取回锁：`unwrap_or_else(|e| e.into_inner())`）。
 - **CI**（`.github/workflows/ci.yml`）：`windows-latest` + Node 22 + Rust stable，依次跑 `npm ci` → `npm run build` → `cargo test`（`src-tauri`）→ `node scripts/design_audit.mjs` → `node scripts/doc_ref_check.mjs`。先 build 是故意的：`cargo test` 编译期不需要 dist，但保持与本地验证顺序一致，也顺手把前端类型错误挡在 CI 上。
@@ -642,6 +642,21 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 - **界面**：入口在「设置 → 数据 → 回收站」子页（与备份历史同构，决策 23），不新增一级导航；删除确认文案从「无法撤销」改为「移入回收站，可恢复」，删除成功的 toast 说明去处与自动清理。
 
 **为什么**：删除曾是应用里唯一的不可逆操作，而备份是手动的、恢复还是合并语义；误删一套主题只能靠事后找备份。回收站把「删错」从数据事故降级成一次点击可修复的操作，同时用固定上限和自动清理避免变成第二份主题库。把回收站放在数据根而不是 `themes\` 下，是因为主题列表与目录迁移会整体扫描 `themes\`；混在一起会让被删主题复活，或把回收站一并搬到别的盘。
+
+---
+
+## 决策 27：新增依赖按总成本判断，默认不加
+
+**结论**（2026-10-28）
+
+- **默认不加**：现有依赖与手写能解决的需求不引入新包；浮层继续用 `@base-ui/react` 自封装（决策 6）。
+- **要加就单独决策**：先在决策记录里写清三件事——现有能力为什么不够、手写成本（含测试与安全加固）、代价（安装包体积 / 供应链 / 构建时间 / 本机代理）；没有记录就不加。
+- **按总成本判断，不是「零依赖」教条**：领域特殊、主流库不覆盖（`.cur` / `.ani` 解码）或手写明显更大更易错时，用成熟依赖更划算。
+- **替换有门槛**：已经手写并测过的部分不因为「有现成库」就重写；只有依赖已在锁文件里（不新增供应链）且能明显减少维护面时才评估替换。
+- **本次复核（2026-10-28）**：测试临时目录改用 `tempfile`（dev 依赖，锁文件已有，不进安装包）；`fnv`、`.inf` 编码识别、光标解码、导出临时 zip、单实例插件维持手写或现状——分别是 18 行小函数、需再引检测库且只影响回退路径、没有覆盖 `.ani` 的成熟库、只有两处且覆盖行为敏感、涉及行为变更需单独决策。
+- **预埋例外**：自动更新需要 `tauri-plugin-updater`，属新依赖，必须按本决策单独评估（发布指南已标注）。
+
+**为什么**：原来的「零新依赖」写在硬约束里，容易被读成永远禁止；项目实际一直按成本逐项取舍（BOM 识别、FNV 哈希、测试临时目录都没引库）。把默认倾向与例外流程分开写，既保留供应链收敛与安装包体积的好处，又不让规则挡住明显更划算的选择。
 
 ---
 

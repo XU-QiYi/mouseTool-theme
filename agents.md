@@ -84,9 +84,9 @@
 4. 「正在使用」只从注册表反推（`active_theme_id`），不存内存 / localStorage。
 5. 导出 zip 的文件名**按槽位命名**（导入端先看 `.inf` 映射、没有再靠文件名反推槽位；两种来源结果一致，否则"导出→再导入"必丢槽位）。
 6. 重命名只改 `theme.json`，目录名保持 UUID；`updated_at` 不动（界面当"导入于"用）。
-7. 删改类命令必须先 `Uuid::parse_str` 校验——`theme_dir(id)` 是字符串拼接，传 `../` 能越出数据目录。
+7. 删改类命令必须按规范 UUID 校验（`validation::is_canonical_uuid`，要求 `to_string()` 与原文完全一致）——`theme_dir(id)` 是字符串拼接，传 `../` 能越出数据目录。
 8. 多来源必须部分成功：注册表读不到不能让用户主题一起消失，失败进 `warnings`。
-9. **不加新依赖**；Toast/浮层用 `@base-ui/react` 自封装，不引 sonner / radix。
+9. 新增依赖需单独决策并记入决策记录（现有能力为何不够 / 手写成本 / 安装包与供应链代价），默认不加；Toast/浮层用 `@base-ui/react` 自封装，不引 sonner / radix（决策 6/27）。
 10. 动效只写 `duration-(--motion-*)` + `ease-standard/ease-exit`，禁裸数字时长、禁 `transition-all`。**唯一例外 Toast 倒计时条**：时长=toast timeout（内联注入）、缓动必须 `linear` —— 它是剩余时间的读数，改缓动=读数失真（详见 motion.md §2）。
 11. zustand selector **不能返回新对象**（`filter`/`map`/字面量）→ 无限重渲染白屏；派生数据用纯函数 + `useMemo`。
 12. 后台起 dev server 只用 `npm run dev:bg`，且**启动与验证写进同一条命令**；禁止 `npm run dev | head`（管道一关 EPIPE 直接杀死 vite）。

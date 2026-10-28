@@ -700,7 +700,7 @@ gh release create v0.1.0 `
 
 若将来想让应用**自动检查更新**，需要额外三样东西：
 
-1. 加依赖 `tauri-plugin-updater`（注意：本项目「不加新依赖」原则，需单独决策）
+1. 加依赖 `tauri-plugin-updater`（注意：本项目默认不加新依赖，加它要按决策 27 单独评估并记入决策记录）
 2. 在 Tauri Cloud 或自有服务器上配置 **updater endpoint**
 3. 构建时生成签名密钥对，把**私钥存进 GitHub Secrets**
 

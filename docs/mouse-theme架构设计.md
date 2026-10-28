@@ -238,11 +238,11 @@ App.tsx
 2. **数据目录唯一来源**是 `utils/paths.rs::data_root()`。任何地方硬编码 `%LOCALAPPDATA%\CursorStudio` 都算 bug。
 3. **多来源必须部分成功**：`get_all_themes` 不能因为注册表读不到就让用户主题一起消失。
 4. **`active_theme_id` 只从注册表反推**。内存或 localStorage 记的 active 一重启就过期，会让已应用的主题还能再点一次「应用」。
-5. **删改类命令必须校验 UUID**：`theme_dir(id)` 是字符串拼接，不校验时传 `../` 就能越出数据目录。
+5. **删改类命令必须校验 UUID**：统一走 `validation::is_canonical_uuid`（`to_string()` 必须与原文完全一致）；`theme_dir(id)` 是字符串拼接，不校验时传 `../` 就能越出数据目录。
 6. **导出包内文件名按槽位重命名**，因为导入端要靠它还原槽位（带 `.inf` 的包按说明书映射，但包内文件按槽位命名时两种来源结果一致）；用源文件名会破坏"导出→再导入"闭环。
 7. **重命名只改 `theme.json`**，目录名保持 UUID。
 8. **预览不落盘**：单帧最长边 128px、动态光标最多 32 帧，缓存是前端内存 `Map`（按路径去重 + 请求合并）。
-9. **不加新依赖**：`@base-ui/react` 已覆盖 toast/dialog/menu/popover，优先手写封装（决策 6）。
+9. **默认不加新依赖**：新增依赖要单独决策并记入决策记录（决策 27）；`@base-ui/react` 已覆盖 toast/dialog/menu/popover，优先手写封装（决策 6）。
 10. **`--no-sandbox` 不能删**：本机 WebView2 沙箱初始化失败会表现为"窗口正常但纯白不绘制"（决策 5）。
 11. **槽位路径磁盘相对、内存绝对**：`theme.json` 与备份 zip 里出现绝对路径就是 bug；写盘一律走 `theme_paths::to_storage` / `write_theme_json`，读盘一律 `resolve_theme` 后再用于预览/应用/注册表比对。
 12. **迁移不直接搬目录**：只走 `utils/themes_dir.rs`，顺序固定为「预检 → 暂存复制 → 内容校验 → 原子切换 → 重绑注册表 → 写设置 → 清理源」。非空目标（尤其含同名主题）必须拒绝且不删任何文件；设置或重绑失败必须回滚到源目录原样。
