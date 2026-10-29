@@ -37,7 +37,7 @@ export function SystemSection() {
 
         <SettingCard
           title="右键菜单导入"
-          description="第一步点右侧按钮注册；之后在任意 .zip 文件上点右键，菜单里选「用鼠标主题工具导入」，应用会自动导入这份主题包"
+          description="第一步点右侧按钮注册；之后在 .zip / .themepack 主题包或 .theme 光标方案上点右键，菜单里选「用鼠标主题工具导入」，应用会自动导入这份文件（决策 41：三类扩展名一把注册）"
           action={
             <Button
               size="sm"
@@ -54,8 +54,8 @@ export function SystemSection() {
               ? "状态读取失败：应用可能是旧版本，重启应用后重试"
               : zipMenu
                 ? zipMenu.registered
-                  ? `已注册 · 命令指向 ${zipMenu.exe_path}`
-                  : "尚未注册，注册后 .zip 右键菜单才会出现导入项"
+                  ? `三类扩展名已注册 · 命令指向 ${zipMenu.exe_path}`
+                  : "尚未注册，注册后右键菜单才会出现导入项"
                 : "读取中…"}
           </p>
           <p className="mt-1 text-2xs text-muted-foreground">
