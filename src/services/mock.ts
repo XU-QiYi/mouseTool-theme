@@ -131,6 +131,37 @@ export const MOCK_THEMES: CursorTheme[] = [
 ];
 
 /**
+ * 浏览器预览用「只存在于备份里」的主题（决策 34）
+ *
+ * 它的 ID 与下面「已删除」的那条最近使用记录一致：恢复后时间轴里的
+ * 「已删除」会重新变成可应用状态，正好覆盖备份恢复的完整故事。
+ */
+export const MOCK_ARCHIVED_THEMES: CursorTheme[] = [
+  {
+    id: "6b1f0c44-2d95-4a37-8f18-0c9d2e5b7a90",
+    name: "Midnight Blue",
+    description: "导入自 midnight-blue.zip",
+    created_at: "2026-10-05 22:10",
+    updated_at: "2026-10-05 22:10",
+    is_built_in: false,
+    cursors: makeCursors(
+      [
+        ["Arrow", "正常选择", "Normal Select", "arrow.cur"],
+        ["Help", "帮助选择", "Help Select", "help.cur"],
+        ["AppStarting", "后台运行", "Working in Background", "working.ani"],
+        ["Wait", "忙", "Busy", "busy.ani"],
+        ["IBeam", "文本选择", "Text Select", "beam.cur"],
+        ["No", "不可用", "Unavailable", "no.cur"],
+        ["SizeAll", "移动", "Move", "move.cur"],
+        ["Hand", "链接选择", "Link Select", "hand.cur"],
+      ],
+      userDir("6b1f0c44-2d95-4a37-8f18-0c9d2e5b7a90"),
+      "cur",
+    ),
+  },
+];
+
+/**
  * 浏览器预览用的「最近使用」示例：真实记录由 Rust 侧写 history.json。
  * 覆盖三种状态：今天用过、昨天用过、主题已被删除。
  */

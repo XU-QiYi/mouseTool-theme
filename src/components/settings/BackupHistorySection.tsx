@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { ArrowLeft, Archive, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowLeft, Archive, ListTree, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -12,6 +12,7 @@ import {
   AlertDialogFooter,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { BackupContentDialog } from "@/components/settings/BackupContentDialog";
 import { BackupProgress } from "@/components/settings/BackupProgress";
 import { SettingsStatusBanner } from "@/components/settings/SettingsStatusBanner";
 import { SummaryBlock } from "@/components/settings/SummaryBlock";
@@ -45,6 +46,8 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [pendingRestore, setPendingRestore] = useState<BackupEntry | null>(null);
   const [pendingDelete, setPendingDelete] = useState<BackupEntry | null>(null);
+  /** 正在查看内容的备份；null = 弹窗关闭 */
+  const [contentEntry, setContentEntry] = useState<BackupEntry | null>(null);
 
   const setBusyFlag = (key: string, value: boolean) =>
     setBusy((prev) => {
@@ -249,7 +252,7 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
               <th scope="col" className="w-16 px-2 py-2 text-left text-xs font-normal text-muted-foreground">
                 状态
               </th>
-              <th scope="col" className="w-28 px-2 py-2 text-right text-xs font-normal text-muted-foreground">
+              <th scope="col" className="w-40 px-2 py-2 text-right text-xs font-normal text-muted-foreground">
                 操作
               </th>
             </tr>
@@ -309,6 +312,17 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
                   <td className="px-2 py-2.5">
                     <span className="flex items-center justify-end gap-1">
                       <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`查看备份 ${entry.file_name} 的内容`}
+                        title={corrupt ? "备份文件已损坏，无法查看内容" : "查看备份里有哪些主题"}
+                        onClick={() => setContentEntry(entry)}
+                        disabled={corrupt || backupBusy !== null}
+                        className="text-muted-foreground"
+                      >
+                        <ListTree />
+                      </Button>
+                      <Button
                         variant="outline"
                         size="sm"
                         onClick={() => setPendingRestore(entry)}
@@ -339,8 +353,10 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
       )}
 
       <p className="mt-3 text-2xs leading-relaxed text-muted-foreground">
-        这里只列出应用自己生成的备份（数据目录 backups\）；「导出到…」保存到其它位置的备份不在此列。
+        这里只列出应用自己生成的备份（数据目录 backups\）；「导出到…」保存到其它位置的备份不在此列。行内「查看内容」可只恢复其中一套主题，不影响其它内容。
       </p>
+
+      <BackupContentDialog entry={contentEntry} onClose={() => setContentEntry(null)} />
 
       {/* 恢复确认：沿用合并语义说明 */}
       <AlertDialog

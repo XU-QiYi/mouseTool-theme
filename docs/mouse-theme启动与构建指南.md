@@ -335,7 +335,7 @@ mouseTool-theme/
 │   ├── tauri.conf.json     ← 窗口/打包配置（含 --no-sandbox，勿删）
 │   ├── Cargo.toml          ← Rust 依赖
 │   └── src/
-│       ├── commands/       ← 前端可调用的 Tauri 命令（23 个）
+│       ├── commands/       ← 前端可调用的 Tauri 命令（34 个）
 │       ├── models/         ← 数据结构（前后端契约）
 │       └── utils/          ← paths 数据目录 / registry 注册表 / cursor 解析 / importer 导入 / history 历史
 ├── scripts/                ← 验收脚本（设计/动效/交互/文档引用/后台起服务）

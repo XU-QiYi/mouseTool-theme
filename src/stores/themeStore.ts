@@ -163,6 +163,8 @@ interface ThemeStore {
   toggleZipMenu: () => Promise<void>;
   /** 领取待导入路径并走正常导入流程；没有就静默返回 */
   pickupPendingImport: () => Promise<void>;
+  /** 把主题选在图库与我的主题，并清搜索：导入 / 恢复后应当立刻看得见 */
+  revealTheme: (id: string) => void;
   selectTheme: (id: string) => void;
   setSearchQuery: (q: string) => void;
   setCurrentPage: (p: Page) => void;
@@ -499,6 +501,13 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
       set((state) => ({ busy: withBusyFlag(state.busy, key, false) }));
     }
   },
+
+  revealTheme: (id) =>
+    set((state) => ({
+      selection: { ...state.selection, gallery: id, mine: id },
+      // 有搜索词时新主题可能被过滤掉，清空免得「恢复了却看不见」
+      searchQuery: "",
+    })),
 
   selectTheme: (id) =>
     set((state) => ({

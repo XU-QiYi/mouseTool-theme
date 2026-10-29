@@ -79,7 +79,7 @@ export function DataSection() {
 
         <SettingCard
           title="数据备份"
-          description="「立即备份」保存到数据目录的 backups\，可在「备份历史」里恢复或清理；恢复是合并式——本地已有的保留，只补回缺失的"
+          description="「立即备份」保存到数据目录的 backups\，可在「备份历史」里恢复或清理；整包恢复是合并式（本地已有的保留，只补回缺失），也可以只查看内容并恢复其中一套主题"
           action={
             <div className="flex items-center gap-2">
               <Button

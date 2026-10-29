@@ -19,7 +19,7 @@
 - **守护**：可选开启「光标守护」，启动时或检测到系统改写光标后自动恢复上次使用的主题（默认关闭；需要应用正在运行，配合开机自启动可在登录后恢复）
 - **自动切换**：可选跟随系统深浅色自动换主题（浅/深各配一个主题）；也可按时间段定时切换（如上班低调、下班炫彩，支持跨零点窗口，两者都在设置里默认关闭）
 - **托盘驻留**：可选关闭到托盘，托盘菜单直接切最近用过的主题或还原默认，不展开窗口也能换光标
-- **备份**：手动一键备份全部主题与历史；可选每天自动备份一份进备份历史并按保留份数自动清理（默认关闭）
+- **备份**：手动一键备份全部主题与历史；可选每天自动备份一份进备份历史并按保留份数自动清理（默认关闭）；备份历史可只读查看包内主题，并只把其中一套恢复回主题库（不覆盖已有、不合并历史）
 - **还原**：随时回到 Windows 默认光标
 - **外观**：跟随系统 / 浅色 / 深色，三态可手动覆盖
 
@@ -53,6 +53,7 @@ npm run dev            # 浏览器打开 http://localhost:1420，走内置示例
 - 主题存在 `%LOCALAPPDATA%\CursorStudio\themes\<uuid>\{theme.json, cursors/}`
 - 删除的主题先移入 `%LOCALAPPDATA%\CursorStudio\trash\`（可恢复；上限 20 套 / 512 MB，超出自动清理最早）
 - 历史存在 `%LOCALAPPDATA%\CursorStudio\history.json`（事件流上限 200 条，界面按主题去重展示最近 50 个）
+- 手动 / 自动备份存在 `%LOCALAPPDATA%\CursorStudio\backups\`（可整包恢复，也可只恢复其中一套主题）
 - 卸载不删数据；程序不联网
 
 ## 技术栈
@@ -72,7 +73,7 @@ src/
 ├── stores/           唯一全局状态
 └── services/         invoke 封装 + 浏览器示例数据
 src-tauri/
-├── commands/         32 个命令：主题读取/导入/应用/保存当前/删除/改名/导出 + 回收站 + 数据目录/设置/系统集成/备份（含自动备份）等
+├── commands/         34 个命令：主题读取/导入/应用/保存当前/删除/改名/导出 + 回收站 + 数据目录/设置/系统集成/备份（含自动备份、备份内容与单主题恢复）等
 ├── models/           前后端共用的数据结构
 └── utils/            注册表、光标解码、主题导入（zip/文件夹/.inf）、路径相对化、目录迁移、回收站、捕获当前光标、历史
 docs/                 决策记录、需求、架构、设计系统、动效
@@ -122,5 +123,8 @@ node scripts/auto_switch_check.mjs # 跟随系统深浅色切换
 node scripts/guard_check.mjs   # 光标守护：启动 / 外部改写恢复、还原不抢、开关与优先级
 node scripts/trash_check.mjs   # 删除 → 回收站 → 恢复 / 彻底删除 / 清空
 node scripts/capture_check.mjs # 外部改写 → 保存并应用 → 收编为当前主题
+node scripts/auto_backup_check.mjs # 自动备份：当日去重 / 清理 / 关闭落盘
+node scripts/schedule_check.mjs # 定时切换：窗口 / 跨零点 / 让位 / 挂起
+node scripts/backup_content_check.mjs # 备份内容浏览 → 单主题恢复
 node scripts/dev_bg.mjs stop
 ```
