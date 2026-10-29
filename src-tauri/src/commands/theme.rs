@@ -78,46 +78,81 @@ fn normalize_path(path: &str) -> String {
     }
 }
 
+/// 一轮扫描里复用注册表侧的归一化结果
+///
+/// `normalize_path` 会开文件句柄，而 `detect_active_theme` 要拿每套主题都跟同一份
+/// 注册表槽位比一遍；不缓存的话注册表侧那批 canonicalize 要按主题数重复付。
+struct PreparedCurrent<'a> {
+    raw: &'a [(String, String)],
+    normalized: Vec<Option<String>>,
+}
+
+impl<'a> PreparedCurrent<'a> {
+    fn new(current: &'a [(String, String)]) -> Self {
+        Self {
+            raw: current,
+            normalized: vec![None; current.len()],
+        }
+    }
+
+    /// 取第 index 个槽位的归一化路径，第一次被碰到才付那次 canonicalize
+    fn path_at(&mut self, index: usize) -> &str {
+        if self.normalized[index].is_none() {
+            self.normalized[index] = Some(normalize_path(&self.raw[index].1));
+        }
+        self.normalized[index].as_deref().unwrap_or_default()
+    }
+}
+
 /// 主题与注册表里当前生效的光标是否为同一套
+fn theme_matches_current(theme: &CursorTheme, current: &[(String, String)]) -> bool {
+    let mut prepared = PreparedCurrent::new(current);
+    theme_matches_prepared(theme, &mut prepared)
+}
+
+/// 同上，但复用调用方备好的注册表侧缓存
 ///
 /// 双向覆盖：主题定义的槽位都要能在注册表里对上，注册表里的非空槽位也要都能
 /// 在主题里找到。只查单向会把「某主题是当前方案的子集」误判成正在使用。
 ///
-/// 先比非空槽位数再归一化：`normalize_path` 现在会开文件句柄，绝大多数主题与
-/// 当前方案的槽位数不同，让它们白付这批系统调用不值。
-fn theme_matches_current(theme: &CursorTheme, current: &[(String, String)]) -> bool {
-    if current.is_empty() {
+/// 逐槽惰性比较，而不是先把两侧整个归一化：绝大多数主题在第一个槽位就该被挡掉，
+/// 让它们白付一整套开句柄不值。反向覆盖留到正向全中之后再查——那一步本来就只
+/// 可能发生在真正匹配的那一套上，代价不会摊到所有主题头上。
+fn theme_matches_prepared(theme: &CursorTheme, current: &mut PreparedCurrent) -> bool {
+    let raw = current.raw;
+    if raw.is_empty() {
         return false;
     }
 
-    let non_empty = theme
+    let theme_slots: Vec<&CursorSlot> = theme
         .cursors
         .iter()
         .filter(|slot| !slot.file_path.trim().is_empty())
-        .count();
-    if non_empty != current.len() {
+        .collect();
+    if theme_slots.len() != raw.len() {
         return false;
     }
 
-    let theme_slots: Vec<(&str, String)> = theme
-        .cursors
-        .iter()
-        .filter(|slot| !slot.file_path.trim().is_empty())
-        .map(|slot| (slot.registry_key.as_str(), normalize_path(&slot.file_path)))
-        .collect();
-    let current_slots: Vec<(&str, String)> = current
-        .iter()
-        .map(|(key, path)| (key.as_str(), normalize_path(path)))
-        .collect();
+    let mut normalized: Vec<(&str, String)> = Vec::with_capacity(theme_slots.len());
+    for slot in &theme_slots {
+        let path = normalize_path(&slot.file_path);
+        let matched = (0..raw.len())
+            .any(|index| raw[index].0 == slot.registry_key && current.path_at(index) == path);
+        if !matched {
+            return false;
+        }
+        normalized.push((slot.registry_key.as_str(), path));
+    }
 
-    theme_slots.iter().all(|(key, path)| {
-        current_slots
+    // 反向覆盖：注册表里每个非空槽位都得被某个主题槽位认领。数量相等并不保证
+    // 正向命中就蕴含反向命中——主题里两个重复的槽位键会同时认领同一个注册表
+    // 槽位，把另一个留空（手改过的 theme.json 就会出现这种主题）
+    (0..raw.len()).all(|index| {
+        let key = raw[index].0.as_str();
+        let path = current.path_at(index);
+        normalized
             .iter()
-            .any(|(other_key, other_path)| other_key == key && other_path == path)
-    }) && current_slots.iter().all(|(key, path)| {
-        theme_slots
-            .iter()
-            .any(|(other_key, other_path)| other_key == key && other_path == path)
+            .any(|(other_key, other_path)| *other_key == key && other_path.as_str() == path)
     })
 }
 
@@ -130,9 +165,10 @@ fn detect_active_theme(
     current: &[(String, String)],
     scheme_name: &str,
 ) -> Option<String> {
+    let mut prepared = PreparedCurrent::new(current);
     let candidates: Vec<&CursorTheme> = themes
         .iter()
-        .filter(|theme| theme_matches_current(theme, current))
+        .filter(|theme| theme_matches_prepared(theme, &mut prepared))
         .collect();
 
     let chosen = candidates
@@ -1035,6 +1071,25 @@ mod tests {
             ("Wait", r"C:\A\wait.cur"),
         ]);
         assert!(detect_active_theme(&[theme], &superset, "").is_none());
+    }
+
+    /// 数量相等但注册表里有槽位没被认领，仍然不算同一套
+    ///
+    /// 手改过的 theme.json 会出现重复的 registry_key：两个 Arrow 同时认领注册表的
+    /// Arrow，把 Wait 留空。只查「每个主题槽位都能对上」会漏掉这一类。
+    #[test]
+    fn 重复槽位键不能顶替未认领的注册表槽位() {
+        let theme = theme_with_slots(
+            "dup",
+            "Dup",
+            &[("Arrow", r"C:\A\arrow.cur"), ("Arrow", r"C:\A\arrow.cur")],
+        );
+        let slots = current(&[("Arrow", r"C:\A\arrow.cur"), ("Wait", r"C:\A\wait.cur")]);
+
+        assert!(
+            detect_active_theme(&[theme], &slots, "").is_none(),
+            "Wait 没被任何主题槽位认领，不能判成正在使用"
+        );
     }
 
     #[test]
