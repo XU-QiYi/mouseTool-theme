@@ -413,6 +413,8 @@ export interface BackupThemeEntry {
   files: number;
   /** 这套主题在包里的解压后总字节数（按中央目录声明值） */
   bytes: number;
+  /** 声明的槽位里，包里找不到对应文件的个数（决策 31 的缺口口径） */
+  missing_files: number;
 }
 
 /** `list_backup_themes` 的返回值 */
@@ -576,6 +578,9 @@ let mockBackups: BackupEntry[] = [
 /** 浏览器里的备份内容：一套主题库里已有的（用于「已在主题库」）+ 一套只在备份里的 */
 function mockBackupContent(): BackupThemeListing {
   const local = MOCK_THEMES.find((theme) => !theme.is_built_in);
+  const partialId = new URLSearchParams(window.location.search).has("mock-backup-partial")
+    ? MOCK_ARCHIVED_THEMES[0]?.id
+    : null;
   const themes = [...(local ? [local] : []), ...MOCK_ARCHIVED_THEMES].map((theme) => ({
     id: theme.id,
     name: theme.name,
@@ -585,6 +590,7 @@ function mockBackupContent(): BackupThemeListing {
     slots: theme.cursors.length,
     files: theme.cursors.length + 1,
     bytes: theme.cursors.length * 4096 + 512,
+    missing_files: theme.id === partialId ? 1 : 0,
   }));
   return { themes, warnings: [] };
 }
@@ -600,7 +606,13 @@ function mockRestoreThemeFromBackup(themeId: string): Promise<RestoreBackupTheme
   if (!addMockTheme(theme)) {
     return Promise.reject(new Error("主题库里已有同 ID 的主题，无需从备份恢复（模拟）"));
   }
-  return Promise.resolve({ theme, warnings: [] });
+  const partial = new URLSearchParams(window.location.search).has("mock-backup-partial");
+  return Promise.resolve({
+    theme,
+    warnings: partial
+      ? ["恢复后的主题有 1 个槽位文件缺失（忙），应用时这些槽位会被写成空"]
+      : [],
+  });
 }
 
 function mockStamp(offsetMinutes = 0): string {

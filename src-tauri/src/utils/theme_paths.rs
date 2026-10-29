@@ -248,6 +248,26 @@ pub fn to_storage_with_candidates(
     if let Some(extra) = extra_candidates {
         candidates.extend(extra.iter().cloned());
     }
+    normalize_slots(theme, theme_dir, &candidates)
+}
+
+/// 只用调用方给出的文件清单做路径归一化（备份内容浏览：还没解压，不能扫盘）
+///
+/// 候选路径是 zip 中央目录里相对主题目录的写法；用于判断 theme.json 声明的
+/// 槽位文件是否真的在包里。旧绝对路径同样按主题 id / 文件名映射。
+pub fn to_storage_with_file_candidates(
+    theme: &CursorTheme,
+    candidates: &[PathBuf],
+) -> (CursorTheme, Vec<String>) {
+    normalize_slots(theme, Path::new(""), candidates)
+}
+
+fn normalize_slots(
+    theme: &CursorTheme,
+    theme_dir: &Path,
+    candidates: &[PathBuf],
+) -> (CursorTheme, Vec<String>) {
+    let mut candidates = candidates.to_vec();
     candidates.sort();
     candidates.dedup();
 

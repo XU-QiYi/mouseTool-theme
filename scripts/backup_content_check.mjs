@@ -88,7 +88,7 @@ try {
 
   await send("Page.enable");
   await send("Runtime.enable");
-  await send("Page.navigate", { url: "http://localhost:1420" });
+  await send("Page.navigate", { url: "http://localhost:1420/?mock-backup-partial=1" });
   for (let i = 0; i < 80; i++) {
     await sleep(300);
     if (await evaluate(`Boolean(window.__toast)`).catch(() => false)) break;
@@ -128,6 +128,7 @@ try {
         rows: [...dialog?.querySelectorAll("[data-backup-theme-row]") ?? []].map((row) => ({
           id: row.getAttribute("data-backup-theme-row"),
           state: row.getAttribute("data-backup-theme-state"),
+          missing: row.getAttribute("data-backup-theme-missing"),
           text: row.textContent,
           buttons: [...row.querySelectorAll("button")].map((b) => b.textContent.trim()),
         })),
@@ -147,7 +148,10 @@ try {
     String(listing.count),
   );
   const local = listing.rows.find((row) => row.state === "local");
-  const restorable = listing.rows.find((row) => row.state === "restorable");
+  const partial = listing.rows.find((row) => row.state === "partial");
+  const restorable = listing.rows.find(
+    (row) => row.state === "restorable" || row.state === "partial",
+  );
   check("已有主题标为「已在主题库」", Boolean(local), local?.text ?? "缺失");
   check(
     "已在库的主题不提供恢复按钮",
@@ -155,6 +159,11 @@ try {
     local?.buttons.join("/"),
   );
   check("存在只在该备份里的主题", Boolean(restorable), restorable?.text ?? "缺失");
+  check(
+    "缺文件主题标出缺口",
+    Boolean(partial) && partial.missing === "1" && partial.text.includes("缺 1 个文件"),
+    partial ? `${partial.state}/${partial.missing}/${partial.text}` : "缺失",
+  );
   check(
     "恢复按钮存在",
     Boolean(restorable) && restorable.buttons.some((text) => text.includes("恢复")),
@@ -191,10 +200,18 @@ try {
           gallery: state.selection.gallery,
           mine: state.selection.mine,
           search: state.searchQuery,
+          toast: [...document.querySelectorAll('[data-slot="toast"]')]
+            .map((item) => item.textContent)
+            .join(" "),
         });
       })()`),
     );
     check("恢复后该行变为「已在主题库」", after.rowState === "local", String(after.rowState));
+    check(
+      "恢复缺文件主题时提示缺口",
+      after.toast.includes("槽位文件缺失"),
+      String(after.toast).slice(0, 160),
+    );
     check(
       "恢复后在图库与我的主题里选中",
       after.gallery === restoreId && after.mine === restoreId,

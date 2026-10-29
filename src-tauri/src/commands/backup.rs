@@ -69,12 +69,17 @@ pub struct BackupThemeEntry {
     pub files: usize,
     /// 这套主题在包里的解压后总字节数（按中央目录声明值）
     pub bytes: u64,
+    /// 声明的槽位里，包里找不到对应文件的个数
+    ///
+    /// 0 = 文件齐全；大于 0 仍可按套恢复，但恢复后的主题会在主题库里
+    /// 显示文件缺口（决策 31）；等于 `slots` 时没有任何可用文件，界面禁用恢复。
+    pub missing_files: usize,
 }
 
 /// `list_backup_themes` 的返回值
 #[derive(Debug, Serialize)]
 pub struct BackupThemeListing {
-    /// 能完整恢复的主题（`theme.json` 可解析、id 与目录一致、不是系统方案）
+    /// 能恢复的主题（`theme.json` 可解析、id 与目录一致、不是系统方案）
     pub themes: Vec<BackupThemeEntry>,
     /// 备份里被跳过或损坏的主题说明
     pub warnings: Vec<String>,
@@ -502,6 +507,45 @@ fn open_backup_archive(zip_path: &Path) -> Result<zip::ZipArchive<fs::File>, Str
     Ok(archive)
 }
 
+/// 统计 theme.json 声明、但备份包里找不到文件的槽位数
+///
+/// 用包里已有的相对路径当候选（`to_storage_with_file_candidates`）：旧备份的
+/// 绝对路径也能先按主题 id / 文件名归一化再比较；空路径表示主题没提供该槽位，
+/// 不算缺口（与决策 31 的 `missing_slots` 同口径）。
+fn count_missing_files(theme: &CursorTheme, candidates: &[PathBuf]) -> usize {
+    let (disk, _) = theme_paths::to_storage_with_file_candidates(theme, candidates);
+    let available: HashSet<String> = candidates
+        .iter()
+        .map(|path| path.to_string_lossy().replace('\\', "/").to_lowercase())
+        .collect();
+    disk.cursors
+        .iter()
+        .filter(|slot| !slot.file_path.trim().is_empty())
+        .filter(|slot| {
+            theme_paths::normalize_relative(&slot.file_path)
+                .map(|relative| !available.contains(&relative.to_lowercase()))
+                .unwrap_or(true)
+        })
+        .count()
+}
+
+/// 恢复后实际缺失的槽位中文名（决策 31 的缺口口径）
+fn missing_slot_names(theme: &CursorTheme) -> Vec<String> {
+    theme
+        .cursors
+        .iter()
+        .filter(|slot| !slot.file_path.trim().is_empty())
+        .filter(|slot| fs::metadata(&slot.file_path).is_err())
+        .map(|slot| {
+            if slot.display_name.trim().is_empty() {
+                slot.registry_key.clone()
+            } else {
+                slot.display_name.clone()
+            }
+        })
+        .collect()
+}
+
 /// 只读备份内容：列出包里能完整恢复的主题与它们的体积，不解压光标
 ///
 /// 第一遍沿用合并恢复的完整性判定（`collect_complete_themes`，含整包预算预检），
@@ -518,6 +562,7 @@ fn list_backup_themes_in(zip_path: &Path) -> Result<BackupThemeListing, String> 
     }
 
     let mut stats: HashMap<String, (usize, u64)> = HashMap::new();
+    let mut candidates_by_theme: HashMap<String, Vec<PathBuf>> = HashMap::new();
     let mut parsed: HashMap<String, CursorTheme> = HashMap::new();
     for index in 0..archive.len() {
         let mut entry = archive
@@ -540,6 +585,13 @@ fn list_backup_themes_in(zip_path: &Path) -> Result<BackupThemeListing, String> 
         let stat = stats.entry(id.to_string()).or_insert((0, 0));
         stat.0 += 1;
         stat.1 = stat.1.saturating_add(entry.size());
+
+        if rel != Path::new("theme.json") {
+            candidates_by_theme
+                .entry(id.to_string())
+                .or_default()
+                .push(rel.clone());
+        }
 
         if rel == Path::new("theme.json") {
             let mut raw = String::new();
@@ -566,6 +618,8 @@ fn list_backup_themes_in(zip_path: &Path) -> Result<BackupThemeListing, String> 
         .into_iter()
         .map(|(id, theme)| {
             let (files, bytes) = stats.get(&id).copied().unwrap_or((0, 0));
+            let candidates = candidates_by_theme.remove(&id).unwrap_or_default();
+            let missing_files = count_missing_files(&theme, &candidates);
             BackupThemeEntry {
                 id,
                 name: theme.name,
@@ -575,6 +629,7 @@ fn list_backup_themes_in(zip_path: &Path) -> Result<BackupThemeListing, String> 
                 slots: theme.cursors.len(),
                 files,
                 bytes,
+                missing_files,
             }
         })
         .collect();
@@ -686,6 +741,17 @@ fn restore_theme_from_backup_in(
         warnings.extend(validation::sanitize_loaded_slots(&mut theme, &target_dir));
         if theme.cursors.is_empty() {
             return Err("备份里的这套主题没有可用的光标槽位".to_string());
+        }
+        let missing = missing_slot_names(&theme);
+        if missing.len() == theme.cursors.len() {
+            return Err("备份里的这套主题没有任何可用的光标文件，已拒绝恢复".to_string());
+        }
+        if !missing.is_empty() {
+            warnings.push(format!(
+                "恢复后的主题有 {} 个槽位文件缺失（{}），应用时这些槽位会被写成空",
+                missing.len(),
+                missing.join("、")
+            ));
         }
         validation::validate_theme_slots(&theme)
             .map_err(|err| format!("恢复出的主题数据不合法：{err}"))?;
@@ -2051,6 +2117,7 @@ mod tests {
         assert_eq!(alpha.name, "Alpha");
         assert_eq!(alpha.slots, 2);
         assert_eq!(alpha.files, 3, "两个光标 + theme.json");
+        assert_eq!(alpha.missing_files, 0, "文件齐全时不应报缺口");
         assert!(alpha.bytes > 0, "体积应来自中央目录声明值");
 
         let beta = listing
@@ -2060,6 +2127,7 @@ mod tests {
             .expect("应列出 Beta");
         assert_eq!(beta.slots, 1);
         assert_eq!(beta.files, 2, "一个光标 + theme.json");
+        assert_eq!(beta.missing_files, 0, "文件齐全时不应报缺口");
 
         let _ = fs::remove_dir_all(&data);
     }
@@ -2233,6 +2301,7 @@ mod tests {
         assert_eq!(listing.themes.len(), 1);
         assert_eq!(listing.themes[0].slots, 0);
         assert_eq!(listing.themes[0].files, 1, "只剩 theme.json");
+        assert_eq!(listing.themes[0].missing_files, 0, "没有声明槽位就不算缺文件");
 
         let restored_dir = data.join("restored");
         let err = restore_theme_from_backup_in(&zip, empty_id, &restored_dir)
@@ -2240,6 +2309,70 @@ mod tests {
         assert!(err.contains("没有可用的光标槽位"), "实际：{err}");
         assert!(
             !restored_dir.join(empty_id).exists(),
+            "失败后必须清理半成品主题目录"
+        );
+
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn 备份内容标出缺文件主题且恢复后提示缺口() {
+        let (data, _guard) = sandbox("content-partial");
+        let themes = data.join("themes");
+        seed_full_theme(
+            &themes,
+            THEME_ALPHA,
+            "Alpha",
+            &[("Arrow", "arrow.cur"), ("Wait", "busy.cur")],
+        );
+        fs::remove_file(themes.join(THEME_ALPHA).join("cursors").join("busy.cur"))
+            .expect("删掉一个光标，模拟备份包内文件缺失");
+        let zip = export_sample_backup(&data, &themes);
+
+        let listing = list_backup_themes_in(&zip).expect("列出内容");
+        let alpha = listing
+            .themes
+            .iter()
+            .find(|theme| theme.id == THEME_ALPHA)
+            .expect("应列出 Alpha");
+        assert_eq!(alpha.slots, 2);
+        assert_eq!(alpha.files, 2, "只剩一个光标 + theme.json");
+        assert_eq!(alpha.missing_files, 1, "声明了两个槽位，包里只有一个文件");
+
+        let restored = restore_theme_from_backup_in(&zip, THEME_ALPHA, &data.join("restored"))
+            .expect("部分缺文件仍可按套恢复");
+        assert_eq!(restored.theme.cursors.len(), 2, "缺口槽位要保留，交给完整性体检展示");
+        assert!(
+            restored
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("1 个槽位文件缺失") && warning.contains("Wait")),
+            "恢复结果要点名缺口：{:?}",
+            restored.warnings
+        );
+
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn 全缺文件主题恢复失败并清理() {
+        let (data, _guard) = sandbox("content-no-files");
+        let themes = data.join("themes");
+        seed_full_theme(&themes, THEME_ALPHA, "Alpha", &[("Arrow", "arrow.cur")]);
+        fs::remove_file(themes.join(THEME_ALPHA).join("cursors").join("arrow.cur"))
+            .expect("删掉唯一光标");
+        let zip = export_sample_backup(&data, &themes);
+
+        let listing = list_backup_themes_in(&zip).expect("列出内容");
+        assert_eq!(listing.themes[0].slots, 1);
+        assert_eq!(listing.themes[0].missing_files, 1);
+
+        let restored_dir = data.join("restored");
+        let err = restore_theme_from_backup_in(&zip, THEME_ALPHA, &restored_dir)
+            .expect_err("没有任何可用文件应拒绝");
+        assert!(err.contains("没有任何可用"), "实际：{err}");
+        assert!(
+            !restored_dir.join(THEME_ALPHA).exists(),
             "失败后必须清理半成品主题目录"
         );
 

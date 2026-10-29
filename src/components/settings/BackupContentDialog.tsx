@@ -126,7 +126,7 @@ export function BackupContentDialog({ entry, onClose }: BackupContentDialogProps
           <div className="min-w-0">
             <DialogTitle>备份内容</DialogTitle>
             <DialogDescription>
-              只恢复选中的一套主题；不会合并其余内容，也不会覆盖主题库里已有的同 ID 主题。
+              只恢复选中的一套主题；不会合并其余内容，也不会覆盖主题库里已有的同 ID 主题。缺文件的主题仍可恢复，缺口会在「我的主题」里标出。
             </DialogDescription>
             <p
               data-backup-content-file
@@ -188,6 +188,10 @@ export function BackupContentDialog({ entry, onClose }: BackupContentDialogProps
                 {listing?.themes.map((theme) => {
                   const local = localIds.has(theme.id) || restoredIds.has(theme.id);
                   const empty = theme.slots === 0;
+                  // 声明的槽位全都没有文件 = 恢复出来也是一套空主题，直接禁用；
+                  // 部分缺文件仍允许恢复，缺口交给主题库的完整性体检展示（决策 31）
+                  const allMissing = !empty && theme.missing_files >= theme.slots;
+                  const partial = theme.missing_files > 0 && !allMissing;
                   const restoring = restoringId === theme.id;
                   const stamp = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(theme.created_at)
                     ? theme.created_at
@@ -196,7 +200,18 @@ export function BackupContentDialog({ entry, onClose }: BackupContentDialogProps
                     <li
                       key={theme.id}
                       data-backup-theme-row={theme.id}
-                      data-backup-theme-state={local ? "local" : empty ? "empty" : "restorable"}
+                      data-backup-theme-state={
+                        local
+                          ? "local"
+                          : empty
+                            ? "empty"
+                            : allMissing
+                              ? "missing-all"
+                              : partial
+                                ? "partial"
+                                : "restorable"
+                      }
+                      data-backup-theme-missing={theme.missing_files}
                       className="flex items-center gap-3 rounded-lg px-2.5 py-2 transition-[background-color] duration-(--motion-fast) ease-standard hover:bg-muted/50"
                     >
                       <span
@@ -209,6 +224,11 @@ export function BackupContentDialog({ entry, onClose }: BackupContentDialogProps
                         <span className="block truncate text-sm font-medium">{theme.name}</span>
                         <span className="mt-0.5 block truncate text-2xs text-muted-foreground tabular-nums">
                           {theme.slots} 个槽位 · {theme.files} 个文件 · {formatBytes(theme.bytes)}
+                          {theme.missing_files > 0 && (
+                            <span className="text-warning">
+                              {" "}· 缺 {theme.missing_files} 个文件
+                            </span>
+                          )}
                           {stamp && (
                             <>
                               {" · "}
@@ -222,6 +242,8 @@ export function BackupContentDialog({ entry, onClose }: BackupContentDialogProps
                           <StatusBadge tone="neutral">已在主题库</StatusBadge>
                         ) : empty ? (
                           <StatusBadge tone="warning">没有槽位</StatusBadge>
+                        ) : allMissing ? (
+                          <StatusBadge tone="warning">没有可用文件</StatusBadge>
                         ) : (
                           <Button
                             size="xs"
@@ -229,7 +251,14 @@ export function BackupContentDialog({ entry, onClose }: BackupContentDialogProps
                             onClick={() => void restore(theme)}
                             disabled={busy}
                             aria-busy={restoring}
-                            aria-label={`从备份恢复「${theme.name}」`}
+                            aria-label={`从备份恢复「${theme.name}」${
+                              partial ? `（缺 ${theme.missing_files} 个文件）` : ""
+                            }`}
+                            title={
+                              partial
+                                ? `恢复后会在主题库里标出缺 ${theme.missing_files} 个文件`
+                                : undefined
+                            }
                           >
                             {restoring ? (
                               "恢复中…"

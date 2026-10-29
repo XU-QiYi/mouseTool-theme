@@ -166,8 +166,8 @@ App.tsx
 | `set_themes_dir` | `path`（字符串 \| null） | `ThemesDirChangeResult` | 预检失败；复制 / 校验 / 切换 / 重绑注册表 / 写设置任一步失败都会回滚（源目录与设置保持原样），执行中通过 `themes-dir-progress` 事件报阶段 |
 | `export_backup` | `destPath?`（字符串 | null） | `ExportBackupSummary`（含 `saved_path` / `bytes`） | `destPath = null` 时写入数据目录 `backups` 自动命名（`cursorstudio-backup-YYYYMMDD-HHmmss.zip`，同秒加 `-2`/`-3`；目录不存在先建）；传路径 = 导出到任意位置（不受备份历史管理）。其余失败场景：目标路径校验失败、没有可备份内容、写 zip 失败（临时包删除、原目标保留）；`theme.json` 改写成相对路径，无法改写的进 `warnings`；执行期发 `backup-progress` |
 | `list_backups` | — | `Vec<BackupEntry>`（时间倒序，上限 200） | 目录不存在返回空；只扫 `backups` 一级 `.zip`、跳过链接 / 目录联接；`kind` 按文件名前缀判定（`cursorstudio-backup-auto-` = `"auto"`，决策 32）；只读 zip 中央目录统计主题 / 文件数，打不开的保留为 `status="corrupt"` 条目并附中文原因（计数为 0） |
-| `list_backup_themes` | `path` | `BackupThemeListing`（`themes` + `warnings`） | 不是 `.zip`、超过 `BACKUP_LIMITS`、zip 损坏、条目名不合法；只读中央目录与 `theme.json`，**不解压光标**；`theme.json` 损坏或 ID 不一致的主题进 `warnings`（决策 34） |
-| `restore_theme_from_backup` | `zipPath`, `themeId` | `RestoreBackupThemeOutcome`（`theme` + `warnings`） | 非规范 UUID、目标 ID 已存在、备份里没有该主题 / theme.json 损坏、零槽位、写盘失败；只解压请求的一套，旧绝对路径按主题 id / 文件名映射后落相对路径，失败清理本次新建目录；取 `ops` 锁，不发进度事件（决策 34） |
+| `list_backup_themes` | `path` | `BackupThemeListing`（`themes` + `warnings`；每项含 `missing_files`） | 不是 `.zip`、超过 `BACKUP_LIMITS`、zip 损坏、条目名不合法；只读中央目录与 `theme.json`，**不解压光标**；`theme.json` 损坏或 ID 不一致的主题进 `warnings`；`missing_files` 按包内实际条目统计（决策 34） |
+| `restore_theme_from_backup` | `zipPath`, `themeId` | `RestoreBackupThemeOutcome`（`theme` + `warnings`） | 非规范 UUID、目标 ID 已存在、备份里没有该主题 / theme.json 损坏、零槽位、全部槽位缺文件、写盘失败；只解压请求的一套，旧绝对路径按主题 id / 文件名映射后落相对路径，失败清理本次新建目录；部分缺文件仍恢复并进 `warnings`；取 `ops` 锁，不发进度事件（决策 34） |
 | `delete_backup` | `fileName`（只收文件名） | `void` | 空名、含 `/` `` `..`、非 `.zip`、拼接后越出 `backups`、链接 / 目录联接、文件不存在——一律中文错误拒绝；删除前二次确认在前端 |
 | `run_auto_backup` | `keep`（保留份数） | `AutoBackupSummary`（`created` / `skipped` / `file_name` / `pruned`） | 当天已有自动备份则跳过并顺带清理过期（`created=false`）；空库返回「还没有可备份的内容」；与手动备份共用 `ops` 锁，冲突立即失败（决策 32）；不发 `backup-progress` |
 | `import_backup` | `zipPath` | `ImportBackupSummary` | 不是有效 zip、超限额（1GiB 总量 / 64MB 单文件 / 4096 条目 / 10 层）、条目名不合法、写盘失败（清掉本次新建主题目录）；恢复后按新根重写相对路径，失败项进 `warnings`；执行期发 `backup-progress` |
@@ -209,7 +209,7 @@ App.tsx
 | `AutostartStatus` | `enabled`、`exe_path` | `exe_path` 是注册表实际登记的程序路径，未开启时为空串 |
 | `ExportSummary` | `file_count`、`skipped` | 跳过原因给界面提示 |
 | `ExportBackupSummary` / `ImportBackupSummary` / `AutoBackupSummary` | 主题/文件/记录计数、`warnings`；`created`、`skipped`、`file_name`、`pruned` | 备份恢复是合并语义；路径改写等非致命问题进 `warnings`；`AutoBackupSummary` 是自动备份的结果（决策 32） |
-| `BackupThemeEntry` / `BackupThemeListing` | `id`、`name`、`description`、`created_at`、`updated_at`、`slots`、`files`、`bytes`；`themes`、`warnings` | 备份内容只读摘要（决策 34）；`files` 含 `theme.json`，`bytes` 按中央目录声明值累计；损坏 / ID 不一致的主题不列出并进 `warnings` |
+| `BackupThemeEntry` / `BackupThemeListing` | `id`、`name`、`description`、`created_at`、`updated_at`、`slots`、`files`、`bytes`、`missing_files`；`themes`、`warnings` | 备份内容只读摘要（决策 34）；`files` 含 `theme.json`，`bytes` 按中央目录声明值累计；`missing_files` 是声明槽位里包内找不到文件的个数（空路径不算），损坏 / ID 不一致的主题不列出并进 `warnings` |
 | `RestoreBackupThemeOutcome` | `theme`、`warnings` | 从备份恢复单套主题的结果；`theme.cursors[].file_path` 为运行时绝对路径，落盘仍是相对路径（决策 34） |
 | `ThemesDirPlan` | `source`、`target`、`is_default`、`theme_count`、`file_count`、`total_bytes`、`warnings` | 迁移确认框的数据源，只读不搬 |
 | `ThemesDirChangeResult` | `settings`、`report` | `report` 含 `rebound_slots` 与 `warnings` |
@@ -239,7 +239,7 @@ App.tsx
 
 **备份历史**（决策 23）：`export_backup` 的 `destPath = null` 时备份落数据目录 `backups`（自动命名、同秒加后缀）；`list_backups` 只读中央目录列这里的一级 `.zip`（时间倒序、上限 200、损坏标 corrupt 保留可见、跳过链接）；`delete_backup` 只收文件名，拒绝路径穿越与链接。「导出到…」的自选落点备份不受历史管理。前端是「设置 → 数据」的子视图，删除 / 恢复都先过确认。
 
-**备份内容浏览与单主题恢复**（决策 34）：备份历史行内「查看内容」→ `list_backup_themes` 只读中央目录与 `theme.json`，列出可完整恢复的主题（已在库 / 零槽位在界面标出）→ 选一套点「恢复」→ `restore_theme_from_backup` 在 `ops` 锁中只解压这一套，旧绝对路径按主题 id / 文件名映射到当前根，`theme.json` 重写为相对路径，失败清理本次新建目录；成功后 `loadThemes` 重读列表并选中该主题，托盘菜单重建。不合并历史、不覆盖同 ID 主题，整包合并恢复仍是 `import_backup` 的职责。
+**备份内容浏览与单主题恢复**（决策 34）：备份历史行内「查看内容」→ `list_backup_themes` 只读中央目录与 `theme.json`，列出可恢复的主题并标出 `missing_files`（已在库 / 零槽位 / 全缺文件在界面标出）→ 选一套点「恢复」→ `restore_theme_from_backup` 在 `ops` 锁中只解压这一套，旧绝对路径按主题 id / 文件名映射到当前根，`theme.json` 重写为相对路径，失败清理本次新建目录；部分缺文件仍恢复并把缺失槽位写进 `warnings`，全缺文件拒绝；成功后 `loadThemes` 重读列表并选中该主题，托盘菜单重建。不合并历史、不覆盖同 ID 主题，整包合并恢复仍是 `import_backup` 的职责。
 
 **删除**：按钮禁用（使用中/系统方案）→ store 二次拦截 → 后端 `Uuid::parse_str` 校验 → 回读 `theme.json` 与注册表，拒绝系统方案和正在使用的主题 → 整个目录移入 `trash\<条目 UUID>\` 并写 `.trash.json` 快照 → 超出 20 套 / 512 MB 时按删除时间自动清理最早条目。跨盘（`ERROR_NOT_SAME_DEVICE`）走「复制 → 校验文件数与字节数 → 删源」，复制失败清理半成品、源保持原样。
 
@@ -272,7 +272,7 @@ App.tsx
 21. **回收站与主题库分开**：条目目录名是回收站条目 UUID（不是主题 ID），只接受规范 UUID；恢复前必须复核快照、`theme.json` 与当前主题目录；`trash\` 不参与主题扫描、备份与迁移（决策 26）。
 22. **保存当前光标是复制，不是搬移**：只读注册表当前值，把光标文件复制进新的主题目录并写相对路径；不改系统光标目录、不写 `Schemes`；有槽位没抄全时不得自动应用（自动应用会把没抄到的非空槽位写成空字符串）（决策 28）。
 23. **光标守护只事件驱动**：默认关闭；启动检查必须等设置与主题列表就绪且注册表读取成功，运行期只处理 `active_external`，不抢已知主题与系统默认；目标必须在主题库里仍存在；复用 `applyTheme`，不轮询注册表、不写 `Schemes`、不做后台服务（决策 29）。
-24. **从备份恢复单套主题只做追加**：目标 ID 已存在必须拒绝且不碰原目录；只解压请求的那套主题，不合并使用记录、不改设置、不影响其它主题；失败清理本次新建目录；旧绝对路径必须按主题 id / 文件名映射后落相对路径；取 `ops` 锁（禁止改成覆盖 / 排队）（决策 34）。
+24. **从备份恢复单套主题只做追加**：目标 ID 已存在必须拒绝且不碰原目录；只解压请求的那套主题，不合并使用记录、不改设置、不影响其它主题；失败清理本次新建目录；旧绝对路径必须按主题 id / 文件名映射后落相对路径；部分缺文件恢复后必须把缺口写进 `warnings`，全部槽位缺文件必须拒绝；取 `ops` 锁（禁止改成覆盖 / 排队）（决策 34）。
 
 ---
 
@@ -307,4 +307,4 @@ App.tsx
 | 2026-10-29 | 决策 31：主题文件完整性——`ThemesResult` 新增 `file_gaps`（`ThemeFileGap`：`theme_id` + 缺失槽位键名），`all_themes` 聚合时逐主题 stat 槽位文件（`theme_paths::missing_slots`，只查存在性）；命令数保持 31；前端「我的主题」行内「缺 N 个文件」提示、检查器头部警示条、诊断中心第五项「文件完整性」；mock 增加 `?mock-broken-files`，验收 `scripts/integrity_check.mjs` |
 | 2026-10-29 | 决策 32：自动备份——新增 `run_auto_backup`（命令契约 31 → 32）与前端 `lib/auto-backup.ts`；`settings.json` 新增 `auto_backup_enabled` / `auto_backup_keep`；`BackupEntry.kind` 区分 auto / manual，备份历史显示「自动」徽标；验收 `scripts/auto_backup_check.mjs` |
 | 2026-10-29 | 决策 33：定时切换主题——`settings.json` 新增 `schedule_switch_enabled` / `schedule_start` / `schedule_end` / `schedule_in_id` / `schedule_out_id`，前端 `lib/schedule-switch.ts` 按边界 `setTimeout` 评估，时间段内深浅色切换让位；验收 `scripts/schedule_check.mjs` |
-| 2026-10-29 | 决策 34：备份内容浏览与单主题恢复——新增 `list_backup_themes` / `restore_theme_from_backup`（命令契约 32 → 34）与 `BackupThemeListing` / `RestoreBackupThemeOutcome`；备份历史行内「查看内容」任务层弹窗，只解压选中一套、目标已存在拒绝、不合并历史；前端 `BackupContentDialog`，验收 `scripts/backup_content_check.mjs` |
+| 2026-10-29 | 决策 34：备份内容浏览与单主题恢复——新增 `list_backup_themes` / `restore_theme_from_backup`（命令契约 32 → 34）与 `BackupThemeListing` / `RestoreBackupThemeOutcome`；备份历史行内「查看内容」任务层弹窗，只解压选中一套、目标已存在拒绝、不合并历史；`missing_files` 标出包内缺文件，部分缺文件恢复提示、全缺拒绝；前端 `BackupContentDialog`，验收 `scripts/backup_content_check.mjs` |
