@@ -315,6 +315,28 @@ pub fn record(theme: &CursorTheme) -> Result<Vec<HistoryEntry>, String> {
     record_to(&paths::history_file()?, theme)
 }
 
+/// 清空事件流：返回清掉的条数（决策 34）
+///
+/// 文件本来就不存在时直接返回 0，不凭空创建——「清空」不该是一次写入。
+/// 只降级为只读的记录文件（版本过高 / 损坏）不允许清空覆盖原文件。
+pub fn clear(path: &Path) -> Result<usize, String> {
+    if !path.exists() {
+        return Ok(0);
+    }
+    let read = read_events_from(path);
+    if !read.writable {
+        let reason = read
+            .warnings
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "记录文件暂不可写".to_string());
+        return Err(format!("没有清空最近使用记录（{reason}）"));
+    }
+    let count = read.events.len();
+    write_to(path, &[])?;
+    Ok(count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -523,5 +545,31 @@ mod tests {
 
         let future = r#"{"version":99,"events":[]}"#;
         assert!(parse_events(future).unwrap_err().contains("不认识"));
+    }
+
+    #[test]
+    fn 清空事件流并返回条数() {
+        let path = temp_path("clear-events");
+        let _ = fs::remove_file(&path);
+
+        record_to(&path, &theme("a", "A")).expect("写入第一条");
+        record_to(&path, &theme("b", "B")).expect("写入第二条");
+
+        let cleared = clear(&path).expect("清空不应失败");
+        assert_eq!(cleared, 2, "返回清掉的条数");
+        let read = read_events_from(&path);
+        assert!(read.events.is_empty(), "清空后事件流应为空");
+        assert!(read.writable, "清空后的文件仍可写");
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn 清空不存在的记录文件不创建文件() {
+        let path = temp_path("clear-missing");
+        let _ = fs::remove_file(&path);
+
+        let cleared = clear(&path).expect("文件不存在时清空不算失败");
+        assert_eq!(cleared, 0);
+        assert!(!path.exists(), "不应凭空创建 history.json");
     }
 }

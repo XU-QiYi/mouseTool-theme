@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { ArrowLeft, Archive, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowLeft, Archive, Eye, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -19,7 +19,7 @@ import { readableError, toast } from "@/lib/toast";
 import { formatBytes } from "@/lib/utils";
 import { appliedAtMachine } from "@/lib/themes";
 import { inTauri } from "@/services/theme";
-import { deleteBackup, listBackups, type BackupEntry } from "@/services/settings";
+import { deleteBackup, listBackups, peekBackup, type BackupEntry, type BackupPeek } from "@/services/settings";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 interface BackupHistorySectionProps {
@@ -45,6 +45,17 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [pendingRestore, setPendingRestore] = useState<BackupEntry | null>(null);
   const [pendingDelete, setPendingDelete] = useState<BackupEntry | null>(null);
+  /**
+   * 内容预览（决策 34）：恢复前先看包里有哪些主题
+   *
+   * 按需读取、不缓存——备份列表随时可能被自动备份改写，缓存反而会骗人。
+   */
+  const [peek, setPeek] = useState<{
+    entry: BackupEntry;
+    loading: boolean;
+    data: BackupPeek | null;
+    error: string | null;
+  } | null>(null);
 
   const setBusyFlag = (key: string, value: boolean) =>
     setBusy((prev) => {
@@ -143,6 +154,18 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
       toast.error("删除失败", readableError(err));
     } finally {
       setBusyFlag(key, false);
+    }
+  };
+
+  // 内容预览：损坏的包在行上就禁用了入口，这里只管正常包
+  const openPeek = async (entry: BackupEntry) => {
+    setPeek({ entry, loading: true, data: null, error: null });
+    try {
+      const data = await peekBackup(entry.file_name);
+      setPeek({ entry, loading: false, data, error: null });
+    } catch (err) {
+      console.error("读取备份内容失败：", err);
+      setPeek({ entry, loading: false, data: null, error: readableError(err) });
     }
   };
 
@@ -249,7 +272,7 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
               <th scope="col" className="w-16 px-2 py-2 text-left text-xs font-normal text-muted-foreground">
                 状态
               </th>
-              <th scope="col" className="w-28 px-2 py-2 text-right text-xs font-normal text-muted-foreground">
+              <th scope="col" className="w-36 px-2 py-2 text-right text-xs font-normal text-muted-foreground">
                 操作
               </th>
             </tr>
@@ -321,6 +344,17 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
                       <Button
                         variant="ghost"
                         size="icon-sm"
+                        aria-label={`查看备份内容 ${entry.file_name}`}
+                        title={corrupt ? "备份文件已损坏，无法读取" : "查看包含哪些主题"}
+                        onClick={() => void openPeek(entry)}
+                        disabled={corrupt}
+                        className="text-muted-foreground"
+                      >
+                        <Eye />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
                         aria-label={`删除备份 ${entry.file_name}`}
                         title={deleting ? "删除中…" : "删除这份备份"}
                         onClick={() => setPendingDelete(entry)}
@@ -373,6 +407,69 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
                 }}
               >
                 开始恢复
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        )}
+      </AlertDialog>
+
+      {/* 内容预览（决策 34）：恢复前先知道包里有什么；只读展示，不带任何动作副作用 */}
+      <AlertDialog
+        open={peek !== null}
+        onOpenChange={(next) => {
+          if (!next) setPeek(null);
+        }}
+      >
+        {peek && (
+          <AlertDialogContent className="w-[30rem]">
+            <AlertDialogTitle>备份内容</AlertDialogTitle>
+            <AlertDialogDescription>
+              这份备份打包的主题；恢复时本地已有的同 ID 主题会整套跳过。
+            </AlertDialogDescription>
+            <div
+              data-backup-peek
+              className="mt-3 max-h-56 overflow-y-auto rounded-lg bg-muted/40 p-1.5 scroll-thin"
+            >
+              {peek.loading && (
+                <p className="p-2 text-xs text-muted-foreground">正在读取备份内容…</p>
+              )}
+              {peek.error && <p className="p-2 text-xs text-warning">{peek.error}</p>}
+              {!peek.loading && !peek.error && peek.data?.themes.length === 0 && (
+                <p className="p-2 text-xs text-muted-foreground">
+                  包里没有主题（可能只打了使用记录）
+                </p>
+              )}
+              {peek.data?.themes.map((theme) => (
+                <div
+                  key={theme.id}
+                  data-peek-theme={theme.name}
+                  className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-xs"
+                >
+                  <span className="truncate">{theme.name}</span>
+                  <span className="shrink-0 text-2xs text-muted-foreground tabular-nums">
+                    {theme.slots_filled} 个槽位
+                  </span>
+                </div>
+              ))}
+            </div>
+            {peek.data && peek.data.warnings.length > 0 && (
+              <p className="mt-2 text-2xs leading-relaxed text-warning">
+                {peek.data.warnings[0]}
+              </p>
+            )}
+            <AlertDialogFooter>
+              <Button variant="outline" onClick={() => setPeek(null)}>
+                关闭
+              </Button>
+              <Button
+                onClick={() => {
+                  const entry = peek.entry;
+                  setPeek(null);
+                  setPendingRestore(entry);
+                }}
+                disabled={peek.loading || peek.error !== null}
+              >
+                去恢复
               </Button>
             </AlertDialogFooter>
           </AlertDialogContent>

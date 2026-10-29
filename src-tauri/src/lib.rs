@@ -3,10 +3,10 @@ pub mod models;
 pub mod utils;
 
 use commands::backup::{
-    delete_backup, export_backup, import_backup, list_backups, run_auto_backup,
+    delete_backup, export_backup, import_backup, list_backups, peek_backup, run_auto_backup,
 };
 use commands::cursor::get_cursor_preview;
-use commands::data::{get_data_dir, open_data_dir};
+use commands::data::{clear_history, get_data_dir, get_storage_stats, open_data_dir};
 use commands::settings::{
     get_autostart, get_settings, preview_themes_dir, set_autostart, set_themes_dir, update_settings,
 };
@@ -15,8 +15,8 @@ use commands::system::{
     take_pending_import,
 };
 use commands::theme::{
-    apply_theme, delete_theme, export_theme, get_active_state, get_all_themes, import_theme,
-    rename_theme, restore_default, save_current_theme,
+    apply_theme, delete_theme, export_all_themes, export_theme, get_active_state, get_all_themes,
+    import_theme, rename_theme, restore_default, save_current_theme,
 };
 use commands::trash::{delete_from_trash, empty_trash, list_trash, restore_from_trash};
 use utils::settings::{self, CloseBehavior};
@@ -57,8 +57,11 @@ pub fn run() {
             delete_theme,
             rename_theme,
             export_theme,
+            export_all_themes,
             get_data_dir,
             open_data_dir,
+            get_storage_stats,
+            clear_history,
             get_windows_version,
             open_mouse_panel,
             get_zip_menu_registered,
@@ -74,6 +77,7 @@ pub fn run() {
             import_backup,
             list_backups,
             delete_backup,
+            peek_backup,
             run_auto_backup,
             list_trash,
             restore_from_trash,

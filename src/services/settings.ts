@@ -466,6 +466,48 @@ export function deleteBackup(fileName: string): Promise<void> {
   return invoke<void>("delete_backup", { fileName });
 }
 
+/** 一块区域的占用：条目数与字节数（`get_storage_stats`，决策 34） */
+export interface StorageDirStats {
+  count: number;
+  bytes: number;
+}
+
+/** 数据目录各区域的磁盘占用（只读统计） */
+export interface StorageStats {
+  themes: StorageDirStats;
+  backups: StorageDirStats;
+  trash: StorageDirStats;
+  history_bytes: number;
+  settings_bytes: number;
+  total_bytes: number;
+}
+
+/** 数据目录各区域的磁盘占用（决策 34）；统计期间其它操作照常跑 */
+export function getStorageStats(): Promise<StorageStats> {
+  if (!inTauri) return Promise.resolve(mockStorageStats());
+  return invoke<StorageStats>("get_storage_stats");
+}
+
+/** 备份内容预览里的一套主题（`peek_backup`，决策 34） */
+export interface BackupPeekTheme {
+  id: string;
+  name: string;
+  /** theme.json 里声明了非空文件路径的槽位数 */
+  slots_filled: number;
+}
+
+/** `peek_backup` 的返回值；解析失败的主题进 warnings，不拖垮整包预览 */
+export interface BackupPeek {
+  themes: BackupPeekTheme[];
+  warnings: string[];
+}
+
+/** 预览一份应用内备份包含哪些主题（只读中央目录，不解压） */
+export function peekBackup(fileName: string): Promise<BackupPeek> {
+  if (!inTauri) return Promise.resolve(mockPeekBackup(fileName));
+  return invoke<BackupPeek>("peek_backup", { fileName });
+}
+
 /** 自动备份的结果，字段与 Rust `AutoBackupSummary` 一一对应 */
 export interface AutoBackupOutcome {
   /** 本次是否真的创建了备份 */
@@ -676,4 +718,40 @@ async function mockRunAutoBackup(keep: number): Promise<AutoBackupOutcome> {
   }
 
   return { created: created !== null, skipped: created === null, file_name: created, pruned };
+}
+
+// ---------------------------------------------------------------------------
+// 开发模式存储统计与备份内容预览模拟（决策 34）
+// ---------------------------------------------------------------------------
+
+/** 浏览器里的存储占用模拟：备份区随 mockBackups 走，其余编一个自洽的量级 */
+function mockStorageStats(): StorageStats {
+  const backupsBytes = mockBackups.reduce((sum, entry) => sum + entry.bytes, 0);
+  const themes = MOCK_THEMES.filter((theme) => !theme.is_built_in);
+  const themeBytes = 28_400_000;
+  const trashBytes = 18_700_000;
+  return {
+    themes: { count: themes.length, bytes: themeBytes },
+    backups: { count: mockBackups.length, bytes: backupsBytes },
+    trash: { count: 2, bytes: trashBytes },
+    history_bytes: 38_400,
+    settings_bytes: 1_120,
+    total_bytes: themeBytes + backupsBytes + trashBytes + 38_400 + 1_120,
+  };
+}
+
+const MOCK_PEEK_NAMES = ["极简黑", "像素猫", "墨玉", "霜白", "炭笔"];
+
+/** 浏览器里的备份内容预览：主题名从固定样表按备份记录的 themes 数截取 */
+function mockPeekBackup(fileName: string): BackupPeek {
+  const entry = mockBackups.find((backup) => backup.file_name === fileName);
+  const count = Math.max(1, Math.min(entry?.themes ?? 2, MOCK_PEEK_NAMES.length));
+  return {
+    themes: MOCK_PEEK_NAMES.slice(0, count).map((name, index) => ({
+      id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      name,
+      slots_filled: Math.max(1, 15 - index),
+    })),
+    warnings: [],
+  };
 }

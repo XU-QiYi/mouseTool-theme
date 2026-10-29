@@ -2,7 +2,9 @@ import { create } from "zustand";
 
 import {
   applyTheme as apiApplyTheme,
+  clearHistory as apiClearHistory,
   deleteTheme as apiDeleteTheme,
+  exportAllThemes as apiExportAllThemes,
   exportTheme as apiExportTheme,
   getActiveState,
   getAllThemes,
@@ -14,6 +16,7 @@ import {
   restoreDefault as apiRestoreDefault,
   restoreFromTrash as apiRestoreFromTrash,
   saveCurrentTheme as apiSaveCurrentTheme,
+  type ExportAllOutcome,
   type TaskProgress,
 } from "@/services/theme";
 import { readableError, toast } from "@/lib/toast";
@@ -107,6 +110,8 @@ interface ThemeStore {
   importing: boolean;
   /** 导入进度（解压 / 落盘阶段的人话说明）；null = 没有进行中的导入 */
   importProgress: TaskProgress | null;
+  /** 批量导出进度（来自 `export-all-progress` 事件，决策 34）；null = 没有进行中的批量导出 */
+  exportAllProgress: TaskProgress | null;
   /**
    * 按动作区分的忙碌状态：键见 `actionBusyKey`
    *
@@ -151,6 +156,14 @@ interface ThemeStore {
   restoreTrashEntry: (entry: TrashEntry) => Promise<boolean>;
   renameTheme: (id: string, newName: string) => Promise<void>;
   exportTheme: (id: string, destPath: string) => Promise<void>;
+  /**
+   * 批量导出「我的主题」到指定目录（决策 34）
+   *
+   * 返回结果供界面续接（打开目录等）；null = 没执行（重复点击或失败）。
+   */
+  exportAllThemes: (destDir: string) => Promise<ExportAllOutcome | null>;
+  /** 清空最近使用记录；返回清掉的条数，null = 没执行（重复点击或失败） */
+  clearHistory: () => Promise<number | null>;
   /** 读一次数据目录路径（幂等，拿到就不再请求） */
   loadDataDir: () => Promise<void>;
   /** 在系统文件管理器打开数据目录 */
@@ -187,6 +200,7 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
   loading: false,
   importing: false,
   importProgress: null,
+  exportAllProgress: null,
   busy: {},
   loadError: null,
   warnings: [],
@@ -495,6 +509,56 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     } catch (err) {
       console.error("导出主题失败：", err);
       toast.error("导出失败", readableError(err));
+    } finally {
+      set((state) => ({ busy: withBusyFlag(state.busy, key, false) }));
+    }
+  },
+
+  exportAllThemes: async (destDir) => {
+    const key = actionBusyKey("export", "all");
+    if (get().busy[key]) return null;
+    set((state) => ({ busy: withBusyFlag(state.busy, key, true), exportAllProgress: null }));
+    try {
+      const outcome = await apiExportAllThemes(destDir, (progress) => {
+        if (get().busy[key]) set({ exportAllProgress: progress });
+      });
+      const parts = [`${outcome.exported.length} 套主题`];
+      if (outcome.failed.length > 0) parts.push(`${outcome.failed.length} 套失败`);
+      if (outcome.warnings.length > 0) parts.push(`${outcome.warnings.length} 条提示`);
+      toast.success(`已导出 ${parts.join("，")}`, `保存到 ${outcome.dir}`);
+      if (outcome.failed.length > 0) {
+        toast.warning(
+          "部分主题没能导出",
+          `${outcome.failed[0].name}：${outcome.failed[0].error}`,
+        );
+      }
+      return outcome;
+    } catch (err) {
+      console.error("批量导出失败：", err);
+      toast.error("批量导出失败", readableError(err));
+      return null;
+    } finally {
+      set((state) => ({ busy: withBusyFlag(state.busy, key, false), exportAllProgress: null }));
+    }
+  },
+
+  clearHistory: async () => {
+    const key = actionBusyKey("clear", "history");
+    if (get().busy[key]) return null;
+    set((state) => ({ busy: withBusyFlag(state.busy, key, true) }));
+    try {
+      const count = await apiClearHistory();
+      // 本地列表同步清空：不然「最近使用」页要等下次重载才肯变空
+      set({ recent: [] });
+      toast.success(
+        count > 0 ? `已清空 ${count} 条使用记录` : "没有可清空的使用记录",
+        "主题与设置不受影响",
+      );
+      return count;
+    } catch (err) {
+      console.error("清空使用记录失败：", err);
+      toast.error("清空失败", readableError(err));
+      return null;
     } finally {
       set((state) => ({ busy: withBusyFlag(state.busy, key, false) }));
     }

@@ -663,6 +663,11 @@ fn cleanup(dirs: &[PathBuf]) {
 fn generate_backup_path(dir: &Path, prefix: &str) -> Result<PathBuf, String> {
     paths::ensure_dir(dir)?;
     let base = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+    generate_backup_path_at(dir, prefix, &base)
+}
+
+/// 显式时间戳版（测试用固定时间戳，不赌真实时钟跨秒）
+fn generate_backup_path_at(dir: &Path, prefix: &str, base: &str) -> Result<PathBuf, String> {
     for suffix in ["", "-2", "-3", "-4", "-5", "-6", "-7", "-8", "-9"] {
         let candidate = dir.join(format!("{prefix}{base}{suffix}.zip"));
         if !candidate.exists() {
@@ -944,25 +949,33 @@ fn console_fallback_warning(message: &str) {
     eprintln!("[list_backups] {message}");
 }
 
-/// 删除应用内备份：只收文件名，拒绝任何形式的路径穿越
-fn delete_backup_in(file_name: &str) -> Result<(), String> {
+/// 校验「应用内备份文件名」并拼出完整路径（删除 / 内容预览共用）
+///
+/// 只收文件名，拒绝任何形式的路径穿越。
+fn app_backup_file(file_name: &str, action: &str) -> Result<std::path::PathBuf, String> {
     let name = file_name.trim();
     if name.is_empty() {
-        return Err("只能删除应用内备份：文件名不能为空".to_string());
+        return Err(format!("只能{action}应用内备份：文件名不能为空"));
     }
     if name.contains('/') || name.contains('\\') || name.contains("..") {
-        return Err("只能删除应用内备份：请传备份文件名，不要带路径".to_string());
+        return Err(format!("只能{action}应用内备份：请传备份文件名，不要带路径"));
     }
     if !name.to_ascii_lowercase().ends_with(".zip") {
-        return Err("只能删除应用内备份（.zip 文件）".to_string());
+        return Err(format!("只能{action}应用内备份（.zip 文件）"));
     }
 
     let dir = paths::backups_dir()?;
     let target = dir.join(name);
     // 拼接后的最终位置必须仍落在备份目录内：文件名字符再怪也逃不出去
     if !target.starts_with(&dir) {
-        return Err("只能删除应用内备份".to_string());
+        return Err(format!("只能{action}应用内备份"));
     }
+    Ok(target)
+}
+
+/// 删除应用内备份：只收文件名，拒绝任何形式的路径穿越
+fn delete_backup_in(file_name: &str) -> Result<(), String> {
+    let target = app_backup_file(file_name, "删除")?;
     // 链接 / 目录联接不删：remove_file 跟随链接，可能删掉目录外的真身
     if limits::is_reparse_path(&target) {
         return Err("备份文件是链接或目录联接，已拒绝删除".to_string());
@@ -971,6 +984,107 @@ fn delete_backup_in(file_name: &str) -> Result<(), String> {
         return Err("备份文件不存在，可能已被删除".to_string());
     }
     fs::remove_file(&target).map_err(|err| format!("删除备份失败（{err}）；文件可能正被占用"))
+}
+
+/// 备份内容预览：包内一套主题的名字与槽位覆盖（决策 34）
+#[derive(Debug, Serialize)]
+pub struct BackupPeekTheme {
+    pub id: String,
+    pub name: String,
+    /// theme.json 里声明了非空文件路径的槽位数
+    pub slots_filled: usize,
+}
+
+/// `peek_backup` 的返回值
+#[derive(Debug, Serialize)]
+pub struct BackupPeek {
+    /// 按主题名排序；解析失败的主题进 warnings，不拖垮整包预览
+    pub themes: Vec<BackupPeekTheme>,
+    pub warnings: Vec<String>,
+}
+
+/// 备份包内 theme.json 的最小解析面：预览只要 id / 名字 / 槽位覆盖
+#[derive(serde::Deserialize)]
+struct PeekThemeJson {
+    id: String,
+    name: String,
+    #[serde(default)]
+    cursors: Vec<PeekSlotJson>,
+}
+
+#[derive(serde::Deserialize)]
+struct PeekSlotJson {
+    #[serde(default)]
+    file_path: String,
+}
+
+/// 预览一份应用内备份包含哪些主题（只读中央目录，逐条限界读，不解压）
+fn peek_backup_in(file_name: &str) -> Result<BackupPeek, String> {
+    let target = app_backup_file(file_name, "查看")?;
+    if limits::is_reparse_path(&target) {
+        return Err("备份文件是链接或目录联接，已拒绝读取".to_string());
+    }
+    if !target.is_file() {
+        return Err("备份文件不存在，可能已被删除".to_string());
+    }
+
+    let file = fs::File::open(&target).map_err(|err| format!("打不开备份文件（{err}）"))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|err| format!("备份文件不是有效的 zip（{err}）"))?;
+
+    let mut themes: Vec<BackupPeekTheme> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+    for index in 0..archive.len() {
+        let Ok(mut entry) = archive.by_index(index) else {
+            continue;
+        };
+        if entry.is_dir() {
+            continue;
+        }
+        let Ok(Some(parts)) = limits::safe_relative_parts(entry.name(), &limits::BACKUP_LIMITS)
+        else {
+            continue;
+        };
+        let Some((_, rel)) = theme_entry(&parts) else {
+            continue;
+        };
+        if rel != Path::new("theme.json") {
+            continue;
+        }
+        // theme.json 写盘上限 1MB（limits::MAX_THEME_JSON_BYTES），声明超限的按坏包跳过
+        if entry.size() > limits::MAX_THEME_JSON_BYTES {
+            warnings.push("包内一个 theme.json 声明的大小超出上限，已跳过".to_string());
+            continue;
+        }
+        let mut bytes = Vec::new();
+        if let Err(err) = limits::copy_bounded(
+            &mut entry,
+            &mut bytes,
+            limits::MAX_THEME_JSON_BYTES,
+            &limits::BACKUP_LIMITS,
+        ) {
+            warnings.push(format!("包内一个 theme.json 读不出来，已跳过（{err}）"));
+            continue;
+        }
+        match serde_json::from_slice::<PeekThemeJson>(&bytes) {
+            Ok(parsed) => {
+                let slots_filled = parsed
+                    .cursors
+                    .iter()
+                    .filter(|slot| !slot.file_path.trim().is_empty())
+                    .count();
+                themes.push(BackupPeekTheme {
+                    id: parsed.id,
+                    name: parsed.name,
+                    slots_filled,
+                });
+            }
+            Err(err) => warnings.push(format!("包内一个 theme.json 无法解析，已跳过（{err}）")),
+        }
+    }
+
+    themes.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
+    Ok(BackupPeek { themes, warnings })
 }
 
 // ---------------------------------------------------------------------------
@@ -1025,6 +1139,17 @@ pub async fn delete_backup(file_name: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || delete_backup_in(&file_name))
         .await
         .map_err(|err| format!("删除备份任务异常退出（{err}）"))?
+}
+
+/// 预览一份应用内备份包含哪些主题（决策 34）
+///
+/// 恢复是合并语义、不可预览结果会让用户不敢点；这里只读中央目录里的
+/// `theme.json` 条目（限界读、不解压、不取重操作锁），把主题名列出来。
+#[tauri::command]
+pub async fn peek_backup(file_name: String) -> Result<BackupPeek, String> {
+    tauri::async_runtime::spawn_blocking(move || peek_backup_in(&file_name))
+        .await
+        .map_err(|err| format!("读取备份内容任务异常退出（{err}）"))?
 }
 
 /// 从备份 zip 合并恢复（补回缺失，不覆盖已有）
@@ -1519,12 +1644,111 @@ mod tests {
     }
 
     #[test]
+    fn 预览备份内容列出主题与槽位覆盖() {
+        let (data, _guard) = sandbox("peek");
+        let themes = data.join("themes");
+        let id = "88888888-8888-4888-8888-888888888888";
+        let dir = themes.join(id);
+        fs::create_dir_all(dir.join("cursors")).expect("建主题目录");
+        fs::write(
+            dir.join("theme.json"),
+            format!(
+                r#"{{"id":"{id}","name":"夜色","cursors":[{{"registry_key":"Arrow","display_name":"箭头","english_name":"Arrow","file_path":"cursors/arrow.cur","file_type":"cur"}},{{"registry_key":"Wait","display_name":"等待","english_name":"Wait","file_path":"","file_type":"cur"}}]}}"#
+            ),
+        )
+        .expect("写 theme.json");
+        fs::write(dir.join("cursors").join("arrow.cur"), b"cursor").expect("写光标");
+
+        let dest = data.join("backups").join("cursorstudio-backup-peek.zip");
+        paths::ensure_dir(dest.parent().unwrap()).expect("建备份目录");
+        export_to(&dest, &themes, &data.join("history.json")).expect("导出");
+
+        let peek = peek_backup_in("cursorstudio-backup-peek.zip").expect("预览");
+        assert_eq!(peek.themes.len(), 1);
+        assert_eq!(peek.themes[0].id, id);
+        assert_eq!(peek.themes[0].name, "夜色");
+        assert_eq!(
+            peek.themes[0].slots_filled, 1,
+            "空文件路径的槽位不计入覆盖"
+        );
+        assert!(peek.warnings.is_empty(), "完好的包不该有提示：{:?}", peek.warnings);
+
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn 预览备份拒绝路径穿越与不存在的文件() {
+        let (data, _guard) = sandbox("peek-reject");
+
+        for evil in ["../evil.zip", "sub/evil.zip", "..\\evil.zip", "evil.txt", ""] {
+            let err = peek_backup_in(evil).expect_err(evil);
+            assert!(err.contains("只能查看应用内备份"), "{evil} 应被拒绝：{err}");
+        }
+        let err = peek_backup_in("cursorstudio-backup-missing.zip").expect_err("不存在");
+        assert!(err.contains("不存在"), "{err}");
+
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn 预览跳过解析失败的主题并给出提示() {
+        let (data, _guard) = sandbox("peek-warn");
+        let backups = data.join("backups");
+        fs::create_dir_all(&backups).expect("建备份目录");
+
+        let file = fs::File::create(backups.join("cursorstudio-backup-bad.zip")).expect("建文件");
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        let good_id = "99999999-9999-4999-8999-999999999999";
+        writer
+            .start_file(format!("themes/{good_id}/theme.json"), options)
+            .expect("写好条目");
+        std::io::Write::write_all(
+            &mut writer,
+            format!(r#"{{"id":"{good_id}","name":"好主题","cursors":[]}}"#).as_bytes(),
+        )
+        .expect("写好内容");
+        // 目录名不是规范 UUID：theme_entry 的口径会整条跳过，不算解析失败
+        writer
+            .start_file("themes/not-a-uuid/theme.json", options)
+            .expect("写非 UUID 条目");
+        std::io::Write::write_all(&mut writer, br#"{"id":"x"}"#).expect("写内容");
+        // 规范 UUID 目录里放坏 json：进 warnings，不拖垮整包
+        writer
+            .start_file("themes/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/theme.json", options)
+            .expect("写坏条目");
+        std::io::Write::write_all(&mut writer, b"not json").expect("写坏 json");
+        writer.finish().expect("收尾");
+
+        let peek = peek_backup_in("cursorstudio-backup-bad.zip").expect("预览");
+        assert_eq!(peek.themes.len(), 1, "好主题照常列出");
+        assert_eq!(peek.themes[0].name, "好主题");
+        assert_eq!(peek.warnings.len(), 1, "坏 json 进提示：{:?}", peek.warnings);
+
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn 预览损坏的_zip_直接报错() {
+        let (data, _guard) = sandbox("peek-corrupt");
+        let backups = data.join("backups");
+        fs::create_dir_all(&backups).expect("建备份目录");
+        fs::write(backups.join("broken.zip"), b"").expect("写坏备份");
+
+        let err = peek_backup_in("broken.zip").expect_err("坏包应报错");
+        assert!(err.contains("zip"), "要说明不是有效的 zip：{err}");
+
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
     fn 应用内备份自动命名并落在备份目录() {
         let (data, _guard) = sandbox("auto-name");
+        let backups = data.join("backups");
         let themes = data.join("themes");
         seed_theme(&themes, "88888888-8888-4888-8888-888888888888", "a");
 
-        let first = generate_backup_path(&data.join("backups"), MANUAL_BACKUP_PREFIX).expect("第一个名字");
+        let first = generate_backup_path(&backups, MANUAL_BACKUP_PREFIX).expect("第一个名字");
         assert!(
             first.to_string_lossy().contains("cursorstudio-backup-"),
             "命名要有统一前缀：{}",
@@ -1532,13 +1756,32 @@ mod tests {
         );
         assert!(first.extension().map(|ext| ext == "zip").unwrap_or(false));
         // 目录不存在时自动创建
-        assert!(data.join("backups").is_dir());
+        assert!(backups.is_dir());
 
-        // 同名文件占住后应退到 -2，而不是覆盖
-        fs::write(&first, b"occupied").expect("占住第一个名字");
-        let second = generate_backup_path(&data.join("backups"), MANUAL_BACKUP_PREFIX).expect("第二个名字");
-        assert_ne!(first, second, "同秒冲突必须换名字");
-        assert!(second.to_string_lossy().contains("-2.zip"), "加 -2 后缀：{}", second.display());
+        // 同秒冲突退避用固定时间戳验证，不赌真实时钟——两次调用跨过秒边界时
+        // 时间戳本来就不同，`-2` 断言会随机失败（2026-10-30 零点真挂在 CI 外的手跑里）
+        let stamp = "20261030-000214";
+        let occupied = backups.join(format!("{MANUAL_BACKUP_PREFIX}{stamp}.zip"));
+        fs::write(&occupied, b"occupied").expect("占住当前秒的名字");
+        let second =
+            generate_backup_path_at(&backups, MANUAL_BACKUP_PREFIX, stamp).expect("第二个名字");
+        assert_ne!(second, occupied, "同名冲突必须换名字");
+        assert!(
+            second.to_string_lossy().contains("-2.zip"),
+            "加 -2 后缀：{}",
+            second.display()
+        );
+
+        let third = {
+            // -2 也被占住（上一轮返回的名字落了盘），才会退到 -3
+            fs::write(&second, b"occupied").expect("占住 -2 名字");
+            generate_backup_path_at(&backups, MANUAL_BACKUP_PREFIX, stamp).expect("第三个名字")
+        };
+        assert!(
+            third.to_string_lossy().contains("-3.zip"),
+            "同一秒内继续退避：{}",
+            third.display()
+        );
 
         let _ = fs::remove_dir_all(&data);
     }

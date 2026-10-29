@@ -11,8 +11,8 @@ use crate::models::{
     ActiveState, ApplyOutcome, CursorSlot, CursorTheme, HistoryEntry, ThemeFileGap, ThemesResult,
 };
 use crate::utils::{
-    capture, history, importer, inf_export, limits, ops, paths, registry, theme_paths, trash,
-    tray, validation,
+    capture, history, importer, inf_export, limits, ops, paths, progress, registry, theme_paths,
+    trash, tray, validation,
 };
 
 /// `export_theme` 的返回值：跳过项要说清是哪个槽位，否则用户不知道少了什么
@@ -790,6 +790,205 @@ fn write_export_zip(
     })
 }
 
+// ---------------------------------------------------------------------------
+// 批量导出（决策 34）
+// ---------------------------------------------------------------------------
+
+/// 批量导出结果里的一条成功项
+#[derive(Debug, Serialize)]
+pub struct ExportAllItem {
+    pub theme_id: String,
+    pub name: String,
+    /// 实际落盘的文件名；与目录里已有文件重名时自动加序号
+    pub file_name: String,
+    pub bytes: u64,
+    pub file_count: usize,
+}
+
+/// 批量导出结果里的一条失败项
+#[derive(Debug, Serialize)]
+pub struct ExportAllFailure {
+    pub theme_id: String,
+    pub name: String,
+    pub error: String,
+}
+
+/// `export_all_themes` 的返回值
+///
+/// 部分成功（硬约束 8 的口径）：某一套导不出去（比如文件缺口、源文件被占）
+/// 只记进 `failed`，其余照常落盘；主题清单读不到的降级说明进 `warnings`。
+#[derive(Debug, Serialize)]
+pub struct ExportAllOutcome {
+    pub dir: String,
+    pub exported: Vec<ExportAllItem>,
+    pub failed: Vec<ExportAllFailure>,
+    /// 成功项的 zip 字节数合计
+    pub total_bytes: u64,
+    pub warnings: Vec<String>,
+}
+
+/// 把主题名变成 Windows 文件名安全的 zip 主名
+///
+/// 前端的 `sanitizeFileName` 只管对话框默认名；批量导出的落盘名只有后端知道，
+/// 必须在这里兜底。非法字符替换成空格，保留名加前缀，剔掉结尾的点和空格
+/// （Windows 会静默剥掉它们，重名判断就乱了）。
+fn sanitize_zip_stem(name: &str) -> String {
+    const RESERVED: [&str; 12] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "LPT1", "LPT2",
+    ];
+    let cleaned: String = name
+        .chars()
+        .map(|c| match c {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => ' ',
+            c if (c as u32) < 0x20 => ' ',
+            c => c,
+        })
+        .collect();
+    let mut stem: String = cleaned.trim().chars().take(80).collect();
+    stem = stem.trim().trim_end_matches('.').trim().to_string();
+    if RESERVED.contains(&stem.to_ascii_uppercase().as_str()) {
+        stem = format!("主题-{stem}");
+    }
+    if stem.is_empty() {
+        "未命名主题".to_string()
+    } else {
+        stem
+    }
+}
+
+/// 在导出目录里挑一个不重名的 zip 文件名（`X.zip` → `X (2).zip` → …）
+///
+/// `used` 记录本次批量已占用的名字（小写比较，Windows 文件名不分大小写）；
+/// 目录里先有的同名文件同样避开，不覆盖用户已导出的成果。序号上限 999，
+/// 超过就用 UUID 兜底——正常人的导出目录到不了这个数。
+fn pick_zip_name(dir: &Path, stem: &str, used: &mut HashSet<String>) -> String {
+    let base = format!("{stem}.zip");
+    if !used.contains(&base.to_lowercase()) && !dir.join(&base).exists() {
+        used.insert(base.to_lowercase());
+        return base;
+    }
+    for serial in 2..1000 {
+        let candidate = format!("{stem} ({serial}).zip");
+        if !used.contains(&candidate.to_lowercase()) && !dir.join(&candidate).exists() {
+            used.insert(candidate.to_lowercase());
+            return candidate;
+        }
+    }
+    let fallback = format!("{stem}-{}.zip", Uuid::new_v4());
+    used.insert(fallback.to_lowercase());
+    fallback
+}
+
+/// 目标目录不能是应用自己管理的目录：往 backups\ 里塞 zip 会混进「备份历史」，
+/// 往 trash\ 或主题库里塞包会干扰回收站与主题扫描（硬约束 1 / 决策 26 的边界）
+fn ensure_not_managed_dir(dest: &Path) -> Result<(), String> {
+    let candidates = [
+        ("备份目录", paths::backups_dir()),
+        ("回收站", paths::trash_dir()),
+        ("主题库", paths::themes_dir()),
+    ];
+    for (label, dir) in candidates {
+        let Ok(dir) = dir else { continue };
+        let Ok(resolved) = fs::canonicalize(&dir) else {
+            // 目录还不存在 = 不可能撞上
+            continue;
+        };
+        if dest.starts_with(&resolved) {
+            return Err(format!("不能导出到{label}，会干扰应用自己的数据管理"));
+        }
+    }
+    Ok(())
+}
+
+fn export_all_in(
+    dest_dir: &Path,
+    progress: &mut dyn FnMut(usize, usize, &str),
+) -> Result<ExportAllOutcome, String> {
+    let (user_themes, warnings) = importer::read_user_themes();
+    let mut themes: Vec<CursorTheme> = user_themes
+        .into_iter()
+        .filter(|theme| !theme.is_built_in)
+        .collect();
+    // 按名字排序：批量导出的顺序要稳定，与界面上「我的主题」的浏览顺序呼应
+    themes.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    let total = themes.len();
+    let mut used: HashSet<String> = HashSet::new();
+    let mut outcome = ExportAllOutcome {
+        dir: strip_device_prefix(&dest_dir.to_string_lossy()),
+        exported: Vec::new(),
+        failed: Vec::new(),
+        total_bytes: 0,
+        warnings,
+    };
+
+    for (index, theme) in themes.iter().enumerate() {
+        progress(index + 1, total, &theme.name);
+        let stem = sanitize_zip_stem(&theme.name);
+        let file_name = pick_zip_name(dest_dir, &stem, &mut used);
+        let dest = dest_dir.join(&file_name);
+        match export_to(theme, &dest.to_string_lossy()) {
+            Ok(summary) => {
+                let bytes = fs::metadata(&dest).map(|meta| meta.len()).unwrap_or(0);
+                outcome.total_bytes += bytes;
+                outcome.exported.push(ExportAllItem {
+                    theme_id: theme.id.clone(),
+                    name: theme.name.clone(),
+                    file_name,
+                    bytes,
+                    file_count: summary.file_count,
+                });
+            }
+            Err(err) => outcome.failed.push(ExportAllFailure {
+                theme_id: theme.id.clone(),
+                name: theme.name.clone(),
+                error: err,
+            }),
+        }
+    }
+    Ok(outcome)
+}
+
+/// 批量导出「我的主题」为 zip 主题包（决策 34）
+///
+/// 逐套复用单套导出链路（`export_to`，含 `.inf` 附带与槽位命名），落进用户
+/// 自选目录；某一套失败不拖垮其余。取重操作互斥锁，进度经
+/// `export-all-progress` 事件推给界面（与 `import-progress` 同一套载荷）。
+#[tauri::command]
+pub async fn export_all_themes(
+    app: AppHandle,
+    dest_dir: String,
+) -> Result<ExportAllOutcome, String> {
+    let emitter = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = ops::try_begin("批量导出")?;
+        let trimmed = dest_dir.trim();
+        if trimmed.is_empty() {
+            return Err("导出目录不能为空".to_string());
+        }
+        let dest = fs::canonicalize(trimmed)
+            .map_err(|err| format!("导出目录不存在或无法访问（{err}）"))?;
+        if !dest.is_dir() {
+            return Err("导出目标不是文件夹".to_string());
+        }
+        ensure_not_managed_dir(&dest)?;
+        let emitter = emitter.clone();
+        export_all_in(&dest, &mut |current, total, name| {
+            let _ = emitter.emit(
+                "export-all-progress",
+                progress::TaskProgress::new("export", current, total, name.to_string()),
+            );
+        })
+    })
+    .await
+    .map_err(|err| format!("批量导出任务异常退出（{err}）"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1307,6 +1506,103 @@ mod tests {
         let err = export_to(&theme, &zip_path.to_string_lossy()).unwrap_err();
         assert!(err.contains("没有可导出"), "实际：{err}");
         assert!(!zip_path.exists(), "失败时不能留下空压缩包");
+    }
+
+    /// 批量导出：按名落盘、重名加序号、顺序稳定
+    #[test]
+    fn 批量导出按主题名落盘并避开重名() {
+        let root = TempDir::new("export-all");
+        let _guard = root.isolate_paths();
+        let dest = root.join("导出目录");
+        fs::create_dir_all(&dest).expect("建导出目录");
+
+        let (_a, _) = seed_exportable_theme("夜色", &[("Arrow", "a.cur", fixture_cur())]);
+        let (_b, _) = seed_exportable_theme("夜色", &[("Arrow", "b.cur", fixture_cur())]);
+        let (_c, _) = seed_exportable_theme("晨光", &[("Arrow", "c.cur", fixture_cur())]);
+
+        let outcome = export_all_in(&dest, &mut |_, _, _| {}).expect("批量导出整体不失败");
+        assert_eq!(outcome.exported.len(), 3, "三套全成功：{:?}", outcome.failed);
+        assert!(outcome.failed.is_empty());
+        assert!(outcome.warnings.is_empty());
+
+        let mut names: Vec<&str> = outcome
+            .exported
+            .iter()
+            .map(|item| item.file_name.as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            vec!["夜色 (2).zip", "夜色.zip", "晨光.zip"],
+            "重名自动加序号（两套「夜色」各占一个名字）"
+        );
+        assert!(outcome.total_bytes > 0);
+        for item in &outcome.exported {
+            assert!(dest.join(&item.file_name).is_file(), "{} 应落盘", item.file_name);
+            assert!(item.bytes > 0, "{} 要报出体积", item.file_name);
+            assert_eq!(item.file_count, 1);
+        }
+    }
+
+    /// 部分成功：文件缺口的那套进 failed，好主题照常落盘；管理目录拒绝导出
+    #[test]
+    fn 批量导出部分成功并拒绝落进管理目录() {
+        let root = TempDir::new("export-all-partial");
+        let _guard = root.isolate_paths();
+
+        let (good, _) = seed_exportable_theme("好主题", &[("Arrow", "a.cur", fixture_cur())]);
+        let broken_id = Uuid::new_v4().to_string();
+        let broken_dir = paths::theme_dir(&broken_id).expect("解析主题目录");
+        fs::create_dir_all(&broken_dir).expect("建目录");
+        let broken = theme_with_slots(
+            &broken_id,
+            "缺文件",
+            &[(
+                "Arrow",
+                broken_dir.join("cursors").join("missing.cur").to_str().unwrap(),
+            )],
+        );
+        fs::write(
+            broken_dir.join("theme.json"),
+            serde_json::to_string_pretty(&broken).expect("序列化主题"),
+        )
+        .expect("写 theme.json");
+
+        let dest = root.join("out");
+        fs::create_dir_all(&dest).expect("建导出目录");
+        let outcome = export_all_in(&dest, &mut |_, _, _| {}).expect("批量导出整体不失败");
+        assert_eq!(outcome.exported.len(), 1, "好主题照常落盘");
+        assert_eq!(outcome.exported[0].theme_id, good.id);
+        assert_eq!(outcome.failed.len(), 1, "文件缺口的那套进 failed");
+        assert_eq!(outcome.failed[0].name, "缺文件");
+        assert!(
+            outcome.failed[0].error.contains("没有可导出"),
+            "失败原因要可读：{}",
+            outcome.failed[0].error
+        );
+
+        // 备份 / 回收站 / 主题库不能当导出目标：会干扰应用自己的数据管理
+        for dir in [
+            paths::backups_dir().expect("备份目录"),
+            paths::trash_dir().expect("回收站"),
+            paths::themes_dir().expect("主题库"),
+        ] {
+            fs::create_dir_all(&dir).expect("建管理目录");
+            let resolved = fs::canonicalize(&dir).expect("规范化");
+            let err = ensure_not_managed_dir(&resolved)
+                .expect_err(&dir.to_string_lossy());
+            assert!(err.contains("不能导出到"), "{err}");
+        }
+    }
+
+    /// 批量导出的落盘名只有后端知道：非法字符与保留名必须在这里兜底
+    #[test]
+    fn 批量导出的文件名兜底安全字符() {
+        assert_eq!(sanitize_zip_stem("夜色<magic>"), "夜色 magic");
+        assert_eq!(sanitize_zip_stem("  ..结尾点..  "), "..结尾点");
+        assert_eq!(sanitize_zip_stem("CON"), "主题-CON");
+        assert_eq!(sanitize_zip_stem("///"), "未命名主题");
+        assert_eq!(sanitize_zip_stem(""), "未命名主题");
     }
 
     /// 把一份真实导出的 .inf 抽到系统临时目录，方便用记事本打开人工检查

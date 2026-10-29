@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Archive, FolderDown, MousePointer2, SearchX, Trash2 } from "lucide-react";
+import { Archive, FolderDown, FolderOutput, MousePointer2, SearchX, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { CursorPreviewImage } from "@/components/cursor/CursorPreviewImage";
 import { SlotMeter } from "@/components/theme/SlotMeter";
 import { DeleteThemeDialog } from "@/components/theme/DeleteThemeDialog";
+import { useExportAllThemes } from "@/hooks/useExportAllThemes";
 import { useExportTheme } from "@/hooks/useExportTheme";
 import { useImportTheme } from "@/hooks/useImportTheme";
 import { coverSlot, slotStats } from "@/lib/slots";
@@ -38,8 +39,10 @@ export function MyThemesView() {
   const selectedId = useThemeStore((s) => s.selection.mine);
   const selectTheme = useThemeStore((s) => s.selectTheme);
   const busy = useThemeStore((s) => s.busy);
+  const exportAllProgress = useThemeStore((s) => s.exportAllProgress);
   const { picking, pick } = useImportTheme();
   const { isExporting, pickAndExport } = useExportTheme();
+  const { picking: pickingAll, exportingAll, pickAndExportAll } = useExportAllThemes();
 
   const [pendingDelete, setPendingDelete] = useState<CursorTheme | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -104,6 +107,27 @@ export function MyThemesView() {
   return (
     <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-6 py-4">
       <ContentFrame width="wide">
+        {/* 工具条：批量导出（决策 34）。行内动作不变——「管」的单位仍然是一套主题 */}
+        <div className="mb-3 flex items-center justify-between gap-3" data-export-all-bar>
+          <p className="text-2xs text-muted-foreground tabular-nums">共 {rows.length} 套主题</p>
+          <div className="flex items-center gap-2">
+            {exportAllProgress && (
+              <span data-export-all-progress className="text-2xs text-muted-foreground tabular-nums">
+                {exportAllProgress.current}/{exportAllProgress.total} · {exportAllProgress.message}
+              </span>
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              data-export-all
+              onClick={() => void pickAndExportAll()}
+              disabled={exportingAll || pickingAll}
+            >
+              <FolderOutput data-icon="inline-start" />
+              {exportingAll ? "导出中…" : pickingAll ? "选择中…" : "导出全部"}
+            </Button>
+          </div>
+        </div>
         {/* 抵消首末列 padding：表格首列文字与页标题左缘对齐 */}
         <table className="-mx-3 w-[calc(100%+1.5rem)] table-fixed text-sm">
         <caption className="sr-only">我导入的主题：槽位覆盖、导入时间与操作</caption>
@@ -127,7 +151,8 @@ export function MyThemesView() {
           {rows.map((theme) => {
             const selected = theme.id === selectedId;
             const isActive = theme.id === activeThemeId;
-            const exporting = isExporting(theme.id);
+            // 批量导出占用重操作锁时，行内导出也让位：第二个动作会被锁立即拒绝
+            const exporting = isExporting(theme.id) || exportingAll;
             const deleting = Boolean(busy[actionBusyKey("delete", theme.id)]);
             const stats = slotStats(theme);
             const cover = coverSlot(theme);
@@ -247,8 +272,8 @@ export function MyThemesView() {
                         if (isActive) return;
                         requestDelete(theme);
                       }}
-                      aria-disabled={isActive || deleting}
-                      disabled={deleting}
+                      aria-disabled={isActive || deleting || exportingAll}
+                      disabled={deleting || exportingAll}
                       className={cn(
                         "text-muted-foreground",
                         !isActive && "hover:text-destructive hover:ring-1 hover:ring-destructive/40",
