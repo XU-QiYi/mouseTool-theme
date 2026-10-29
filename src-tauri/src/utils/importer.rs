@@ -246,12 +246,18 @@ fn inf_slot_map(
 ///
 /// 与 `.inf` 的差别：`.theme` 的引用可以指向包外（`%SystemRoot%` 的系统
 /// 光标），解析成功的直接给绝对路径；解析不出的槽位不进映射、退回文件名
-/// 推断。多个 `.theme` 时按路径排序取第一个能给出映射的。
+/// 推断。多个 `.theme` 时按路径排序取第一个能给出映射的；`display_name`
+/// 一并带回（包文件名 stem 之前先看作者的命名，与决策 36 单文件口径一致）。
+struct ThemeSchemeMap {
+    slots: Vec<(&'static str, PathBuf)>,
+    display_name: Option<String>,
+}
+
 fn theme_scheme_slot_map(
     files_root: &Path,
     budget: &mut limits::ScanBudget<'_>,
     warnings: &mut Vec<String>,
-) -> Result<Vec<(&'static str, PathBuf)>, String> {
+) -> Result<ThemeSchemeMap, String> {
     let mut candidates = Vec::new();
     collect_inf_files(files_root, 0, "theme", budget, warnings, &mut candidates)?;
     candidates.sort();
@@ -275,18 +281,24 @@ fn theme_scheme_slot_map(
             .parent()
             .map(|parent| parent.to_path_buf())
             .unwrap_or_else(|| files_root.to_path_buf());
-        let mapped: Vec<(&'static str, PathBuf)> = parsed
+        let slots: Vec<(&'static str, PathBuf)> = parsed
             .slots
             .into_iter()
             .filter_map(|(slot, raw)| {
                 resolve_scheme_file(&raw, &base).map(|resolved| (slot, resolved))
             })
             .collect();
-        if !mapped.is_empty() {
-            return Ok(mapped);
+        if !slots.is_empty() {
+            return Ok(ThemeSchemeMap {
+                slots,
+                display_name: parsed.display_name,
+            });
         }
     }
-    Ok(Vec::new())
+    Ok(ThemeSchemeMap {
+        slots: Vec::new(),
+        display_name: None,
+    })
 }
 
 /// 把 zip 解压到临时目录
@@ -781,10 +793,14 @@ fn persist_theme(
         });
     }
 
-    let picked = pick_slots(&files, files_root, budget, warnings)?;
+    let (picked, scheme_display_name) = pick_slots(&files, files_root, budget, warnings)?;
     let total = picked.len();
     let slots = copy_slots(picked, theme_id, progress_fn)?;
-    let theme = build_theme(theme_id, source, slots);
+    let mut theme = build_theme(theme_id, source, slots);
+    // 包内 .theme 的 DisplayName 比包文件名更代表作者意图（决策 36/39）
+    if let Some(name) = scheme_display_name {
+        theme.name = name;
+    }
 
     // 磁盘只存相对主题目录的路径；返回给调用方的仍是绝对路径（预览/应用直接用）
     theme_paths::write_theme_json(&paths::theme_dir(theme_id)?, &theme)?;
@@ -793,15 +809,17 @@ fn persist_theme(
     Ok(theme)
 }
 
-/// 选出要落盘的槽位：先按 `.inf` 说明书映射，剩余槽位退回文件名推断
+/// 选出要落盘的槽位：先按 `.inf` 说明书映射，再按 `.theme` 方案映射，
+/// 剩余槽位退回文件名推断
 ///
 /// 说明书指了名但包里没有那个文件时，该槽位也退回推断，不因此缺槽位（决策 15）。
+/// 返回值附带 `.theme` 的 `DisplayName`（决策 39：作者命名优先于包文件名）。
 fn pick_slots(
     files: &[PathBuf],
     files_root: &Path,
     budget: &mut limits::ScanBudget<'_>,
     warnings: &mut Vec<String>,
-) -> Result<Vec<(&'static str, PathBuf)>, String> {
+) -> Result<(Vec<(&'static str, PathBuf)>, Option<String>), String> {
     let mut seen: HashSet<&'static str> = HashSet::new();
     let mut picked: Vec<(&'static str, PathBuf)> = Vec::new();
 
@@ -824,8 +842,9 @@ fn pick_slots(
 
     // .theme 方案映射（决策 36/39）：包内带 .theme 时槽位按方案段映射，
     // 优先于文件名推断；引用可以指向包外（系统光标），解析不出的槽位
-    // 同样放开给推断兜底
-    for (slot, path) in theme_scheme_slot_map(files_root, budget, warnings)? {
+    // 同样放开给推断兜底；作者的 DisplayName 随映射带回
+    let theme_map = theme_scheme_slot_map(files_root, budget, warnings)?;
+    for (slot, path) in theme_map.slots {
         if seen.insert(slot) {
             picked.push((slot, path));
         }
@@ -866,7 +885,7 @@ fn pick_slots(
             .unwrap_or(usize::MAX)
     });
 
-    Ok(picked)
+    Ok((picked, theme_map.display_name))
 }
 
 /// 把选中的光标文件复制进主题目录；与 zip 解压共用单文件上限
@@ -1693,10 +1712,18 @@ mod tests {
     }
 
     fn cab_with(path: &Path, entries: Vec<(String, Vec<u8>)>) {
+        cab_with_compression(path, cab::CompressionType::None, entries);
+    }
+
+    fn cab_with_compression(
+        path: &Path,
+        ctype: cab::CompressionType,
+        entries: Vec<(String, Vec<u8>)>,
+    ) {
         let file = File::create(path).expect("建 cab");
         let mut builder = cab::CabinetBuilder::new();
         {
-            let folder = builder.add_folder(cab::CompressionType::None);
+            let folder = builder.add_folder(ctype);
             for (name, _) in &entries {
                 folder.add_file(name.clone());
             }
@@ -1791,5 +1818,36 @@ mod tests {
         assert!(err.contains("themepack"), "要说明不是有效的 CAB 主题包：{err}");
         let themes_root = paths::themes_dir().expect("主题根");
         assert_eq!(fs::read_dir(&themes_root).expect("读主题根").count(), 0, "不残留半成品");
+    }
+
+    #[test]
+    fn mszip_压缩的_themepack_照常导入() {
+        // Windows 个性化打包 .themepack 用的是 MSZIP——这条路径必须与 None 同权
+        let temp = TempDir::new("themepack-mszip");
+        let _guard = temp.isolate_paths();
+        let pack = temp.join("压缩夜航.themepack");
+        let theme_text = "[Control Panel\\Cursors]\r\nArrow=pen.cur\r\n";
+        let pen_bytes = vec![0x5Au8; 300_000]; // 跨多个 MSZIP 块（32KB CFDATA 上限）
+        cab_with_compression(
+            &pack,
+            cab::CompressionType::MsZip,
+            vec![
+                ("夜航.theme".to_string(), utf16le_bytes(theme_text)),
+                ("pen.cur".to_string(), pen_bytes.clone()),
+                ("busy.ani".to_string(), fixture_ani()),
+            ],
+        );
+
+        let report = import_source_report(pack.to_str().unwrap(), &mut |_| {}).expect("导入");
+        assert_eq!(report.theme.name, "压缩夜航");
+        let keys: Vec<&str> = report
+            .theme
+            .cursors
+            .iter()
+            .map(|slot| slot.registry_key.as_str())
+            .collect();
+        assert_eq!(keys, vec!["Arrow", "Wait"], "{keys:?}");
+        let raw = fs::read(&report.theme.cursors[0].file_path).expect("读复制结果");
+        assert_eq!(raw, pen_bytes, "MSZIP 解出的内容要一字不差");
     }
 }
