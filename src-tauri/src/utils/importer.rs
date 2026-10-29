@@ -15,6 +15,10 @@ pub struct ImportReport {
     pub warnings: Vec<String>,
 }
 
+/// `pick_slots` 的返回：按标准槽位顺序排好的 (槽位键, 文件路径) + 包内
+/// `.theme` 的 DisplayName（决策 39，作者命名优先于包文件名）
+type PickedSlots = (Vec<(&'static str, PathBuf)>, Option<String>);
+
 /// 文件名关键字 → 槽位键名
 ///
 /// 顺序即优先级：越靠前越先匹配，所以 `arrow_up` 会先命中 `UpArrow` 而不是 `Arrow`。
@@ -819,7 +823,7 @@ fn pick_slots(
     files_root: &Path,
     budget: &mut limits::ScanBudget<'_>,
     warnings: &mut Vec<String>,
-) -> Result<(Vec<(&'static str, PathBuf)>, Option<String>), String> {
+) -> Result<PickedSlots, String> {
     let mut seen: HashSet<&'static str> = HashSet::new();
     let mut picked: Vec<(&'static str, PathBuf)> = Vec::new();
 

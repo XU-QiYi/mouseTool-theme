@@ -648,6 +648,25 @@ fn list_backup_themes_in(zip_path: &Path) -> Result<BackupThemeListing, String> 
 ///
 /// 与整包合并恢复的区别：不碰其它主题、不合并使用记录、目标已存在时直接拒绝。
 /// 失败会删掉本次新建的主题目录，不留半成品；成功后才刷新托盘菜单。
+/// 把恢复过程中的条目读取失败翻成可行动的中文（决策 40）
+///
+/// 超限错误有自己的完整话术，原样放行；其余（典型：zip CRC 校验失败，
+/// `Invalid checksum`）统一说明「哪个条目坏了 + 备份已损坏 + 恢复已撤销 +
+/// 下一步体检或换备份」。恢复路径遇数据损坏一律拒绝：合并恢复不半途而立，
+/// 单主题恢复不落残缺主题。
+fn corrupt_entry_error(err: &str, entry: &str, theme_id: Option<&str>) -> String {
+    if err.contains("上限") {
+        return err.to_string();
+    }
+    let scope = match theme_id {
+        Some(id) => format!("要恢复的主题 {id} 里"),
+        None => String::new(),
+    };
+    format!(
+        "备份{scope}的条目「{entry}」数据损坏（{err}），恢复已全部撤销、不留半成品。可在「备份历史」用「体检」确认各份备份的完整性，或重新做一份备份再恢复"
+    )
+}
+
 fn restore_theme_from_backup_in(
     zip_path: &Path,
     theme_id: &str,
@@ -710,7 +729,8 @@ fn restore_theme_from_backup_in(
                 &mut out,
                 budget.allowance(),
                 &limits::BACKUP_LIMITS,
-            )?;
+            )
+            .map_err(|err| corrupt_entry_error(&err, entry.name(), Some(theme_id)))?;
             budget.commit(bytes)?;
             files += 1;
         }
@@ -905,7 +925,8 @@ fn import_from_with_progress(
                 &mut out,
                 budget.allowance(),
                 &limits::BACKUP_LIMITS,
-            )?;
+            )
+            .map_err(|err| corrupt_entry_error(&err, entry.name(), None))?;
             budget.commit(bytes)?;
         }
         Ok(())
@@ -2595,5 +2616,126 @@ mod tests {
         assert!(err.contains("不是有效的 zip"), "实际：{err}");
 
         let _ = fs::remove_dir_all(&data);
+    }
+
+    /// STORE 压缩的 zip：数据区即原文，方便精准翻一个字节制造 CRC 损坏
+    fn stored_zip(path: &Path, entries: Vec<(String, Vec<u8>)>) {
+        let file = fs::File::create(path).expect("建 zip");
+        let mut writer = zip::ZipWriter::new(file);
+        let options =
+            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, data) in &entries {
+            writer.start_file(name.as_str(), options).expect("写条目");
+            std::io::Write::write_all(&mut writer, data).expect("写内容");
+        }
+        writer.finish().expect("收尾");
+    }
+
+    fn flip_byte(zip_path: &Path, content: &[u8]) {
+        let mut raw = fs::read(zip_path).expect("读包");
+        let pos = raw
+            .windows(content.len())
+            .position(|window| window == content)
+            .expect("包里能找到目标原文");
+        raw[pos] ^= 0xFF;
+        fs::write(zip_path, raw).expect("写回");
+    }
+
+    #[test]
+    fn 损坏条目的整包恢复拒绝并点名撤销() {
+        let (data, _guard) = sandbox("corrupt-import");
+        paths::ensure_dir(&data.join("backups")).expect("建备份目录");
+        let good_id = "55555555-5555-4555-8555-555555555555";
+        let bad_id = "44444444-4444-4444-8444-444444444444";
+        let bad_arrow = b"bad-theme-cursor-content".to_vec();
+        stored_zip(
+            &data.join("backups").join("cursorstudio-backup-broken.zip"),
+            vec![
+                (
+                    format!("themes/{good_id}/theme.json"),
+                    format!(r#"{{"id":"{good_id}","name":"好主题","cursors":[{{"registry_key":"Arrow","file_path":"cursors/arrow.cur"}}]}}"#).into_bytes(),
+                ),
+                (
+                    format!("themes/{good_id}/cursors/arrow.cur"),
+                    b"good-cursor".to_vec(),
+                ),
+                (
+                    format!("themes/{bad_id}/theme.json"),
+                    format!(r#"{{"id":"{bad_id}","name":"坏主题","cursors":[{{"registry_key":"Arrow","file_path":"cursors/arrow.cur"}}]}}"#).into_bytes(),
+                ),
+                (format!("themes/{bad_id}/cursors/arrow.cur"), bad_arrow.clone()),
+            ],
+        );
+        flip_byte(
+            &data.join("backups").join("cursorstudio-backup-broken.zip"),
+            &bad_arrow,
+        );
+
+        let err = import_from(
+            &data.join("backups").join("cursorstudio-backup-broken.zip"),
+            &data.join("themes"),
+            &data.join("history.json"),
+        )
+        .expect_err("损坏备份应拒绝");
+        assert!(
+            err.contains("数据损坏") && err.contains("撤销") && err.contains("体检"),
+            "要点名损坏并给指引：{err}"
+        );
+        assert!(
+            err.contains(&format!("themes/{bad_id}/cursors/arrow.cur")),
+            "要点名坏条目：{err}"
+        );
+        // 恢复已撤销：好主题也不能半途留下（要么全好要么全不动）
+        assert!(
+            !data.join("themes").join(good_id).exists(),
+            "撤销后不应残留任何主题目录"
+        );
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn 损坏条目的单主题恢复拒绝并点名主题() {
+        let (data, _guard) = sandbox("corrupt-restore");
+        paths::ensure_dir(&data.join("backups")).expect("建备份目录");
+        let bad_id = "33333333-3333-4333-8333-333333333333";
+        let bad_arrow = b"single-restore-cursor".to_vec();
+        stored_zip(
+            &data.join("backups").join("cursorstudio-backup-single.zip"),
+            vec![
+                (
+                    format!("themes/{bad_id}/theme.json"),
+                    format!(r#"{{"id":"{bad_id}","name":"坏主题","cursors":[{{"registry_key":"Arrow","file_path":"cursors/arrow.cur"}}]}}"#).into_bytes(),
+                ),
+                (format!("themes/{bad_id}/cursors/arrow.cur"), bad_arrow.clone()),
+            ],
+        );
+        flip_byte(
+            &data.join("backups").join("cursorstudio-backup-single.zip"),
+            &bad_arrow,
+        );
+
+        let err = restore_theme_from_backup_in(
+            &data.join("backups").join("cursorstudio-backup-single.zip"),
+            bad_id,
+            &data.join("themes"),
+        )
+        .expect_err("损坏主题应拒绝");
+        assert!(
+            err.contains("数据损坏") && err.contains(bad_id) && err.contains("体检"),
+            "要点名主题与指引：{err}"
+        );
+        assert!(
+            !data.join("themes").join(bad_id).exists(),
+            "失败要清理本次新建目录"
+        );
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn 超限错误原样透传不被二次包装() {
+        let wrapped = corrupt_entry_error("备份里有文件解压后超过上限（单文件 64MB、总计 1GB），已停止导入", "x", None);
+        assert!(wrapped.starts_with("备份里有文件"), "超限有自己的话术：{wrapped}");
+        let corrupt = corrupt_entry_error("读取内容失败（Invalid checksum）", "themes/x/cursors/arrow.cur", Some("abc"));
+        assert!(corrupt.contains("数据损坏") && corrupt.contains("abc"), "{corrupt}");
     }
 }
