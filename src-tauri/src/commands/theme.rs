@@ -49,47 +49,75 @@ fn merge_sources(
     (themes, warnings)
 }
 
-/// 路径比较口径：Windows 路径不区分大小写，正反斜杠等价
+/// 剥掉 canonicalize 产生的扩展长度前缀
 ///
-/// `\\?\` 是 canonicalize 产生的扩展长度前缀：应用系统方案时写入注册表的是
-/// canonicalize 后的路径，而方案列表读出来的是普通路径（环境变量已展开），
-/// 不剥掉前缀同一套光标会被判成两套——状态卡误报「被系统设置修改」。
-fn normalize_path(path: &str) -> String {
-    let trimmed = path.trim().replace('/', "\\");
-    let stripped = trimmed
-        .strip_prefix(r"\\?\UNC\")
+/// `\\?\` 会让 Win32 按字面量处理路径，反而挡住后面的短名展开；`\\?\UNC\` 要
+/// 还原成 `\\server\share` 才能和普通写法对上。
+fn strip_device_prefix(path: &str) -> String {
+    path.strip_prefix(r"\\?\UNC\")
         .map(|rest| format!(r"\\{rest}"))
-        .unwrap_or_else(|| trimmed.strip_prefix(r"\\?\").unwrap_or(&trimmed).to_string());
-    stripped.to_lowercase()
+        .unwrap_or_else(|| path.strip_prefix(r"\\?\").unwrap_or(path).to_string())
+}
+
+/// 路径比较口径：两侧都落到同一个规范空间，而不是逐条补命名差异
+///
+/// 应用主题时写进注册表的是 `fs::canonicalize` 之后的路径，主题侧存的是拼接出来
+/// 的普通写法。只剥前缀加转小写挡不住这两类差异：Windows 的 8.3 短名（CI runner
+/// 的临时目录是 `C:\Users\RUNNER~1\...`，canonical 之后是 `...\runneradmin\...`，
+/// 同一个目录两种写法）和 reparse 点展开。所以普通写法也走一次 canonicalize。
+/// 展不动（文件已删）或本来就是相对路径（不该拿进程 CWD 去猜）时退回原写法，
+/// 与改动前行为一致。
+fn normalize_path(path: &str) -> String {
+    let plain = strip_device_prefix(&path.trim().replace('/', "\\"));
+    if plain.is_empty() || !Path::new(&plain).is_absolute() {
+        return plain.to_lowercase();
+    }
+    match fs::canonicalize(&plain) {
+        Ok(resolved) => strip_device_prefix(&resolved.to_string_lossy()).to_lowercase(),
+        Err(_) => plain.to_lowercase(),
+    }
 }
 
 /// 主题与注册表里当前生效的光标是否为同一套
 ///
 /// 双向覆盖：主题定义的槽位都要能在注册表里对上，注册表里的非空槽位也要都能
 /// 在主题里找到。只查单向会把「某主题是当前方案的子集」误判成正在使用。
+///
+/// 先比非空槽位数再归一化：`normalize_path` 现在会开文件句柄，绝大多数主题与
+/// 当前方案的槽位数不同，让它们白付这批系统调用不值。
 fn theme_matches_current(theme: &CursorTheme, current: &[(String, String)]) -> bool {
     if current.is_empty() {
         return false;
     }
 
-    let theme_slots: Vec<&CursorSlot> = theme
+    let non_empty = theme
         .cursors
         .iter()
         .filter(|slot| !slot.file_path.trim().is_empty())
-        .collect();
-
-    if theme_slots.len() != current.len() {
+        .count();
+    if non_empty != current.len() {
         return false;
     }
 
-    theme_slots.iter().all(|slot| {
-        current.iter().any(|(key, path)| {
-            *key == slot.registry_key && normalize_path(path) == normalize_path(&slot.file_path)
-        })
-    }) && current.iter().all(|(key, path)| {
-        theme_slots.iter().any(|slot| {
-            slot.registry_key == *key && normalize_path(&slot.file_path) == normalize_path(path)
-        })
+    let theme_slots: Vec<(&str, String)> = theme
+        .cursors
+        .iter()
+        .filter(|slot| !slot.file_path.trim().is_empty())
+        .map(|slot| (slot.registry_key.as_str(), normalize_path(&slot.file_path)))
+        .collect();
+    let current_slots: Vec<(&str, String)> = current
+        .iter()
+        .map(|(key, path)| (key.as_str(), normalize_path(path)))
+        .collect();
+
+    theme_slots.iter().all(|(key, path)| {
+        current_slots
+            .iter()
+            .any(|(other_key, other_path)| other_key == key && other_path == path)
+    }) && current_slots.iter().all(|(key, path)| {
+        theme_slots
+            .iter()
+            .any(|(other_key, other_path)| other_key == key && other_path == path)
     })
 }
 
@@ -872,6 +900,66 @@ mod tests {
         );
         assert_eq!(themes.len(), 2);
         assert_eq!(warnings.len(), 1, "用户来源的警告不能被吞掉");
+    }
+
+    /// 回归测试：同一文件的 8.3 短名写法与 canonical 写法必须归一到同一个值
+    ///
+    /// CI runner 的临时目录是 `C:\Users\RUNNER~1\AppData\Local\Temp\...`，注册表里
+    /// 存的却是 canonicalize 之后的 `...\runneradmin\...`。本机用户名不超过 8 个字符
+    /// 时两种写法重合，所以这条只有 CI 能真正跑出差异——它钉的是"当场的临时目录"，
+    /// 不再依赖某台机器碰巧看不出来。
+    #[test]
+    fn 短名写法与规范写法归一后必须相同() {
+        let root = TempDir::new("norm-83");
+        let _guard = root.isolate_paths();
+
+        let file = root.join("arrow.cur");
+        fs::write(&file, fixture_cur()).expect("写 fixture");
+        let canonical = fs::canonicalize(&file).expect("canonicalize fixture");
+
+        assert_eq!(
+            normalize_path(&file.to_string_lossy()),
+            normalize_path(&canonical.to_string_lossy()),
+            "同一套光标不能因写法不同被判成两套"
+        );
+    }
+
+    /// 回归测试：经重解析点到达的路径与真实路径必须归一到同一个值
+    ///
+    /// 与上一条是同一个坑的两面。本机用户名不够长所以短名那条是空转的，重解析点
+    /// 这条在两台机器上都能真的跑出差异。建不出 junction（权限或文件系统限制）
+    /// 就跳过，不给 CI 添环境性假红。
+    #[test]
+    fn 重解析点写法与真实写法归一后必须相同() {
+        use std::process::Command;
+        let root = TempDir::new("junction");
+        let real = root.path().join("real");
+        fs::create_dir_all(&real).expect("建 real");
+        let file = real.join("arrow.cur");
+        fs::write(&file, fixture_cur()).expect("写 fixture");
+
+        let link = root.path().join("link");
+        let link_arg = link.to_string_lossy().into_owned();
+        let real_arg = real.to_string_lossy().into_owned();
+        let created = Command::new("cmd")
+            .args(["/C", "mklink", "/J", link_arg.as_str(), real_arg.as_str()])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !created {
+            eprintln!("跳过：本机建不出 junction，这条断言跑不了");
+            return;
+        }
+
+        let via_link = link.join("arrow.cur");
+        let canonical = fs::canonicalize(&file).expect("canonicalize fixture");
+        let normalized_link = normalize_path(&via_link.to_string_lossy());
+        let normalized_real = normalize_path(&canonical.to_string_lossy());
+        fs::remove_dir(&link).expect("删 junction");
+        assert_eq!(
+            normalized_link, normalized_real,
+            "junction 写法与真实写法不能被判成两套光标"
+        );
     }
 
     fn theme_with_slots(id: &str, name: &str, slots: &[(&str, &str)]) -> CursorTheme {
