@@ -22,7 +22,7 @@
 | 安装包格式 | **NSIS**（`.exe`）为主，MSI 同轮产出备用 | MSI 曾因中文 `productName` 与代码页 1252 冲突构建失败，已用 `wix.language: "zh-CN"` 修复，见 §2.2 坑 ⑧ |
 | 代码签名 | **暂无证书，产物未签名** | 当前状态；用户装机会遇到 SmartScreen 提示，§3.4 有应对话术 |
 | 上传方式 | **GitHub 网页手动拖拽** | 你已选定；`gh` CLI 作为备选写在 §7.2 |
-| 版本号 | 首版 **v0.1.0**，下文示例沿用 | 当前值以 §1.2 的「四处一致」为准（现为 `0.3.0`），示例命令里的 `0.1.0` 按当次版本替换 |
+| 版本号 | 首版 **v0.1.0**，下文示例沿用 | 当前值以 §1.2 的「五处一致」为准（现为 `0.3.0`），示例命令里的 `0.1.0` 按当次版本替换 |
 | 自动更新 | **不做** | 项目未接入 `tauri-plugin-updater`，无需 `.sig` / `latest.json` |
 
 > **关于版本号的讲究**（如果你之前问过这个）：SemVer 的 `主.次.修订` 三段是一句**兼容性承诺**——
@@ -58,9 +58,9 @@ git log --oneline main..origin/main
 - ① 输出为空 → 通过。非空说明有未提交改动，先 `git add` + `git commit`。
 - ③ 输出为空 → 通过。非空说明远端有别人的新提交，先 `git pull --rebase`。
 
-### 1.2 版本号四处一致
+### 1.2 版本号五处一致
 
-本项目版本号写在**四个地方**，必须同步：
+本项目版本号写在**五个地方**，必须同步：
 
 | 文件 | 字段 | 当前值 |
 |---|---|---|
@@ -68,6 +68,7 @@ git log --oneline main..origin/main
 | `src-tauri/Cargo.toml` | `[package] version` | `0.3.0` |
 | `src-tauri/tauri.conf.json` | `version` | `0.3.0` |
 | `src/lib/app-meta.ts` | `APP_VERSION` | `0.3.0` |
+| `package-lock.json` | 根 `version`（两处：顶层 + `packages[""]`） | `0.3.0` |
 
 检查命令：
 
@@ -76,6 +77,7 @@ node -e "console.log('package.json =', require('./package.json').version)"
 Select-String -Path src-tauri\Cargo.toml -Pattern '^version'
 Select-String -Path src-tauri\tauri.conf.json -Pattern '"version"'
 Select-String -Path src\lib\app-meta.ts -Pattern 'APP_VERSION ='
+Select-String -Path package-lock.json -Pattern '"version": "0\.' | Select-Object -First 4
 ```
 
 > **坑 ①：只改了 `package.json` 忘了改 `Cargo.toml`。**
@@ -87,6 +89,10 @@ Select-String -Path src\lib\app-meta.ts -Pattern 'APP_VERSION ='
 > 正式跑 Tauri 时界面版本号来自 `getVersion()`，所以漏改不影响已打包用户；
 > 但浏览器验收、检查更新失败退回的比较基准都读它——2026-10-29 发现升 0.2.0 时漏改了它，
 > 开发模式里应用自报 `v0.1.0`、检查更新误判「发现新版本」。上表因此从三处扩成四处。
+
+> **坑 ③：`package-lock.json` 的根版本是第五处，2026-10-30 升 0.3.0 时发现它还停在 0.1.0**
+> （0.2.0 那轮就漏了）。锁文件的根版本只是元数据、不影响构建，但 `npm install --package-lock-only`
+> 一条命令就能同步，升版收尾顺手跑一下；上表因此从四处扩成五处。
 
 ### 1.3 Tauri 版本一致性（**最容易踩，且会让构建直接失败**）
 
