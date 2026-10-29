@@ -6,7 +6,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::models::{CursorSlot, CursorTheme};
-use crate::utils::{inf_parse, limits, paths, progress, registry, theme_paths, validation};
+use crate::utils::{inf_parse, limits, paths, progress, registry, theme_file, theme_paths, validation};
 
 /// 导入结果：新主题 + 扫描时跳过的非致命问题（典型：链接 / 目录联接）
 #[derive(Debug, Serialize)]
@@ -333,17 +333,16 @@ fn import_source_as(
         return import_dir_as(source, theme_id, progress_fn);
     }
 
-    // 文件只认 .zip：拖进来一张图片之类的要一句人话，而不是「不是有效的 ZIP」
-    let is_zip = source
+    // 文件只认 .zip 与 .theme：拖进来一张图片之类的要一句人话，而不是「不是有效的 ZIP」
+    let ext = source
         .extension()
         .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("zip"))
-        .unwrap_or(false);
-    if !is_zip {
-        return Err("只支持 .zip 主题包或整个主题文件夹".to_string());
+        .map(|ext| ext.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("zip") => import_zip_as(path, theme_id, progress_fn),
+        Some("theme") => import_scheme_as(source, theme_id, progress_fn),
+        _ => Err("只支持 .zip 主题包、.theme 光标方案或整个主题文件夹".to_string()),
     }
-
-    import_zip_as(path, theme_id, progress_fn)
 }
 
 /// 兼容旧名：zip 导入入口（示例 `import_demo` 与「导出 → 再导入」闭环测试在用）
@@ -426,6 +425,140 @@ fn import_dir_as(
     )
     .map_err(|err| discard_partial(theme_id, err))?;
     Ok(ImportReport { theme, warnings })
+}
+
+/// 导入一个 `.theme` 光标方案文件（决策 36：Windows 主题方案收编）
+///
+/// `.theme` 只描述方案——每个槽位指向一个磁盘上的光标文件（`%SystemRoot%`
+/// 展开的系统光标，或主题包解开后与方案文件同目录的相对路径）。收编 = 按槽位
+/// 把引用的文件复制进新主题目录，语义与「保存当前光标」一致：源文件留在原地。
+/// 引用的文件缺失 / 不是光标格式只跳过该槽位并说明；一个可用槽位都没有才失败。
+fn import_scheme_as(
+    source: &Path,
+    theme_id: &str,
+    progress_fn: &mut dyn FnMut(progress::TaskProgress),
+) -> Result<ImportReport, String> {
+    progress_fn(progress::TaskProgress::new("scan", 0, 0, "正在读取光标方案…"));
+    // .theme 是文本，1MB 上限与 .inf 同口径（超限说明不是正经方案文件）
+    let bytes = limits::read_bytes_bounded(source, limits::MAX_INF_BYTES)
+        .map_err(|err| format!("读不了这个方案文件（{err}）"))?;
+    let parsed = theme_file::parse_theme_file(&bytes);
+    // .themepack 解开后光标与 .theme 同目录：相对路径以方案文件所在目录为基准
+    let base = source.parent().unwrap_or(Path::new(".")).to_path_buf();
+
+    let mut warnings: Vec<String> = Vec::new();
+    let outcome = (|| -> Result<CursorTheme, String> {
+        let mut picked: Vec<(&'static str, PathBuf)> = Vec::new();
+        for (slot, raw) in &parsed.slots {
+            let (display, _) = slot_names(slot);
+            match resolve_scheme_file(raw, &base) {
+                None => warnings.push(format!(
+                    "方案引用的光标文件找不到，「{display}」槽位已跳过：{raw}"
+                )),
+                Some(path) => {
+                    let ext = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e.to_ascii_lowercase())
+                        .unwrap_or_default();
+                    if !validation::is_cursor_extension(&ext) {
+                        warnings.push(format!(
+                            "方案引用的不是 .cur/.ani 光标文件，「{display}」槽位已跳过：{raw}"
+                        ));
+                        continue;
+                    }
+                    // 链接 / 目录联接不收：跟过去可能把主题目录外的真身复制走
+                    if limits::is_reparse_path(&path) {
+                        warnings.push(format!(
+                            "方案引用的是链接或目录联接，「{display}」槽位已跳过：{raw}"
+                        ));
+                        continue;
+                    }
+                    picked.push((slot, path));
+                }
+            }
+        }
+        if picked.is_empty() {
+            return Err(
+                "方案文件里没有可用的光标条目：引用的文件都找不到，或值都是空（系统默认）"
+                    .to_string(),
+            );
+        }
+
+        let slots = copy_slots(picked, theme_id, progress_fn)?;
+        let mut theme = build_theme(theme_id, source, slots);
+        if let Some(name) = parsed.display_name.clone() {
+            theme.name = name;
+        }
+        // 磁盘只存相对主题目录的路径；返回给调用方的仍是绝对路径（预览/应用直接用）
+        theme_paths::write_theme_json(&paths::theme_dir(theme_id)?, &theme)?;
+        progress_fn(progress::TaskProgress::new(
+            "done",
+            theme.cursors.len(),
+            theme.cursors.len(),
+            "导入完成",
+        ));
+        Ok(theme)
+    })()
+    .map_err(|err| discard_partial(theme_id, err));
+    outcome.map(|theme| ImportReport { theme, warnings })
+}
+
+/// 展开方案路径里的 `%Var%` 环境变量（大小写不敏感；找不到的变量原样保留）
+fn expand_env_vars(value: &str) -> String {
+    if !value.contains('%') {
+        return value.to_string();
+    }
+    let vars: Vec<(String, String)> = std::env::vars().collect();
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        match after.find('%') {
+            Some(end) => {
+                let name = &after[..end];
+                match vars
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                    .map(|(_, val)| val.clone())
+                {
+                    Some(val) => out.push_str(&val),
+                    // 展不开的变量原样保留：路径按「不存在」走，警告里看得见原文
+                    None => out.push_str(&rest[start..start + end + 2]),
+                }
+                rest = &after[end + 1..];
+            }
+            None => {
+                out.push('%');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 把方案里的路径值解析到磁盘上的真实文件；找不到返回 None（由调用方警告）
+///
+/// 顺序：环境变量展开 → 绝对路径直接用 → 相对路径按方案文件所在目录拼。
+fn resolve_scheme_file(raw: &str, base: &Path) -> Option<PathBuf> {
+    let expanded = expand_env_vars(raw);
+    if expanded.contains('%') {
+        // 还有展不开的变量：路径肯定不成立，别让它碰巧拼进主题目录
+        return None;
+    }
+    let candidate = PathBuf::from(&expanded);
+    let path = if candidate.is_absolute() {
+        candidate
+    } else {
+        base.join(candidate)
+    };
+    if path.is_file() {
+        Some(path)
+    } else {
+        None
+    }
 }
 
 /// 失败时清掉半成品主题目录，返回原始错误
@@ -1214,5 +1347,146 @@ mod tests {
             warnings.iter().any(|w| w.contains("上限")),
             "警告要说明尺寸超限：{warnings:?}"
         );
+    }
+
+    fn write_scheme(path: &Path, body: &str) {
+        fs::write(path, body).expect("写方案文件");
+    }
+
+    #[test]
+    fn 能导入_theme_方案文件() {
+        let temp = TempDir::new("theme-scheme");
+        let _guard = temp.isolate_paths();
+        let pack = temp.join("pack");
+        fs::create_dir_all(&pack).expect("建包目录");
+        fs::write(pack.join("arrow.cur"), fixture_cur()).expect("写箭头");
+        fs::write(pack.join("busy.ani"), fixture_ani()).expect("写忙碌");
+        let scheme = pack.join("sports.theme");
+        write_scheme(
+            &scheme,
+            "[Theme]\r\nDisplayName=Sports\r\n[Control Panel\\Cursors]\r\nArrow=arrow.cur\r\nWait=busy.ani\r\nNWPen=missing.cur\r\n",
+        );
+
+        let report =
+            import_source_report(scheme.to_str().unwrap(), &mut |_| {}).expect("导入方案");
+        assert_eq!(report.theme.name, "Sports", "DisplayName 优先于文件名");
+        let keys: Vec<&str> = report
+            .theme
+            .cursors
+            .iter()
+            .map(|slot| slot.registry_key.as_str())
+            .collect();
+        assert_eq!(keys, vec!["Arrow", "Wait"], "缺失引用的槽位不出现");
+        assert!(
+            report.warnings.iter().any(|w| w.contains("已跳过") && w.contains("missing.cur")),
+            "缺文件要进警告：{:?}",
+            report.warnings
+        );
+        // 返回给前端的槽位是运行时绝对路径，落盘的 theme.json 是相对路径
+        assert!(
+            Path::new(&report.theme.cursors[0].file_path).is_absolute(),
+            "返回路径应为绝对：{}",
+            report.theme.cursors[0].file_path
+        );
+        let raw = fs::read_to_string(
+            paths::theme_dir(&report.theme.id)
+                .expect("主题目录")
+                .join("theme.json"),
+        )
+        .expect("读 theme.json");
+        assert!(raw.contains("arrow.cur"), "落盘应是相对路径：{raw}");
+        assert!(!raw.contains(&pack.to_string_lossy().to_string()), "不能落绝对路径：{raw}");
+    }
+
+    #[test]
+    fn 方案没有显示名时用文件名stem() {
+        let temp = TempDir::new("theme-scheme-stem");
+        let _guard = temp.isolate_paths();
+        fs::write(temp.join("arrow.cur"), fixture_cur()).expect("写箭头");
+        let scheme = temp.join("夜航.theme");
+        write_scheme(
+            &scheme,
+            "[Control Panel\\Cursors]\r\nArrow=arrow.cur\r\n",
+        );
+
+        let report =
+            import_source_report(scheme.to_str().unwrap(), &mut |_| {}).expect("导入方案");
+        assert_eq!(report.theme.name, "夜航");
+    }
+
+    #[test]
+    fn 方案引用全缺时报错且不残留目录() {
+        let temp = TempDir::new("theme-scheme-missing");
+        let _guard = temp.isolate_paths();
+        let scheme = temp.join("ghost.theme");
+        write_scheme(
+            &scheme,
+            "[Control Panel\\Cursors]\r\nArrow=nowhere.cur\r\n",
+        );
+
+        let err = import_source_report(scheme.to_str().unwrap(), &mut |_| {}).unwrap_err();
+        assert!(err.contains("没有可用的光标条目"), "实际：{err}");
+        // 半成品目录不能留下：下次启动会多一条「跳过主题目录」的警告
+        let themes_root = paths::themes_dir().expect("主题根");
+        let leftovers = fs::read_dir(&themes_root)
+            .expect("读主题根")
+            .count();
+        assert_eq!(leftovers, 0, "不应残留主题目录");
+    }
+
+    #[test]
+    fn 方案里非光标文件被跳过并说明() {
+        let temp = TempDir::new("theme-scheme-ico");
+        let _guard = temp.isolate_paths();
+        fs::write(temp.join("arrow.cur"), fixture_cur()).expect("写箭头");
+        fs::write(temp.join("brand.png"), b"png").expect("写图标");
+        let scheme = temp.join("mixed.theme");
+        write_scheme(
+            &scheme,
+            "[Control Panel\\Cursors]\r\nArrow=arrow.cur\r\nHand=brand.png\r\n",
+        );
+
+        let report =
+            import_source_report(scheme.to_str().unwrap(), &mut |_| {}).expect("导入方案");
+        assert_eq!(report.theme.cursors.len(), 1);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.contains(".cur/.ani") && w.contains("brand.png")),
+            "非光标文件要进警告：{:?}",
+            report.warnings
+        );
+    }
+
+    #[test]
+    fn 环境变量展开与未知变量保留() {
+        std::env::var("SystemRoot").map_or_else(
+            |_| {} /* 非 Windows 环境没有 SystemRoot，跳过展开断言 */,
+            |root| {
+                assert_eq!(
+                    expand_env_vars("%SystemRoot%\\a.cur"),
+                    format!("{root}\\a.cur")
+                );
+            },
+        );
+        assert_eq!(expand_env_vars("plain.cur"), "plain.cur");
+        let kept = expand_env_vars("%CursorStudioNoSuchVar9%\\a.cur");
+        assert!(kept.contains("%CursorStudioNoSuchVar9%"), "展不开的变量原样保留：{kept}");
+        // 展不开就解析不出文件：不给路径碰巧成立的机会
+        assert_eq!(resolve_scheme_file("%CursorStudioNoSuchVar9%\\a.cur", Path::new(".")), None);
+    }
+
+    #[test]
+    fn 相对路径按方案文件所在目录解析() {
+        let temp = TempDir::new("theme-scheme-relative");
+        fs::write(temp.join("arrow.cur"), fixture_cur()).expect("写箭头");
+        let resolved = resolve_scheme_file("arrow.cur", temp.path());
+        assert_eq!(
+            resolved.expect("应解析到"),
+            temp.join("arrow.cur"),
+            "相对路径以方案文件目录为基准"
+        );
+        assert_eq!(resolve_scheme_file("missing.cur", temp.path()), None);
     }
 }

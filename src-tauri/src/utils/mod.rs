@@ -14,6 +14,7 @@ pub mod registry;
 pub mod settings;
 #[cfg(test)]
 pub mod test_support;
+pub mod theme_file;
 pub mod theme_paths;
 pub mod themes_dir;
 pub mod trash;

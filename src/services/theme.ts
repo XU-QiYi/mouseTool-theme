@@ -284,7 +284,7 @@ export function saveCurrentTheme(): Promise<SaveCurrentOutcome> {
   return invoke<SaveCurrentOutcome>("save_current_theme");
 }
 
-/** 对应 Rust 命令 `import_theme`：导入 .zip 包或整个文件夹（决策 16），返回新主题与跳过项 */
+/** 对应 Rust 命令 `import_theme`：导入 .zip 包、.theme 光标方案（决策 36）或整个文件夹，返回新主题与跳过项 */
 export async function importTheme(
   sourcePath: string,
   onProgress?: (progress: TaskProgress) => void,
@@ -292,9 +292,9 @@ export async function importTheme(
   if (!inTauri) {
     // 浏览器里没有文件系统：用示例槽位生成一份新主题，
     // 让「导入 → 列表新增 → 检查器选中」这条链路在开发与自动化验收里能走通。
-    // 名称取自文件名（含 zip 后缀也兜得住），与后端「文件名 stem 作主题名」的口径一致
+    // 名称取自文件名（含 zip/theme 后缀也兜得住），与后端「文件名 stem 作主题名」的口径一致
     const fileName = sourcePath.split(/[\\/]/).pop() ?? "theme.zip";
-    const name = fileName.replace(/\.zip$/i, "") || "未命名主题";
+    const name = fileName.replace(/\.(zip|theme)$/i, "") || "未命名主题";
     const sample = MOCK_THEMES.find((t) => !t.is_built_in) ?? MOCK_THEMES[0];
     const now = stamp();
     onProgress?.({

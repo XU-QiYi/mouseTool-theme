@@ -65,7 +65,7 @@ mouseTool-theme/
 │           ├── theme_paths.rs      ← 槽位路径相对/绝对转换与 theme.json 重写（决策 17）
 │           ├── registry.rs         ← SLOT_DEFS、注册表读写、SPI 刷新
 │           ├── cursor.rs           ← .cur/.ico/.ani 解析与缩放
-│           ├── importer.rs         ← zip / 文件夹导入、槽位推断（决策 15/16）
+│           ├── importer.rs         ← zip / .theme 方案 / 文件夹导入、槽位推断（决策 15/16/36）
 │           ├── inf_export.rs       ← 导出 zip 附带的通用 .inf 安装文件（决策 13）
 │           ├── inf_parse.rs        ← 导入时解析 .inf 槽位映射（决策 15）
 │           ├── history.rs          ← 使用事件流 + 派生最近主题（含备份合并 / 版本兼容）
@@ -144,7 +144,7 @@ App.tsx
 | `get_all_themes` | — | `ThemesResult` | 只有聚合本身崩溃才 `Err`；单个来源失败走 `warnings` |
 | `get_active_state` | — | `ActiveState` | 注册表读失败返回 `Err`（前端聚焦钩子静默忽略、保留旧状态）；只比对注册表与主题清单反推当前三态，不读历史（决策 24） |
 | `get_cursor_preview` | `filePath` | `CursorPreview` | **不失败**，解析不出来返回空帧 |
-| `import_theme` | `sourcePath` | `ImportReport`（`theme` + `warnings`） | 不是 .zip 也不是文件夹、超限额（50MB 总量 / 20MB 单文件 / 512 条目 / 8 层，`.inf` 与光标共用额度）、条目名不合法、无光标文件、认不出槽位（且 .inf 无映射）、写盘失败；链接 / 目录联接跳过并进 `warnings`；失败清理临时目录与半成品主题目录 |
+| `import_theme` | `sourcePath` | `ImportReport`（`theme` + `warnings`） | 不是 .zip / .theme / 文件夹、超限额（50MB 总量 / 20MB 单文件 / 512 条目 / 8 层，`.inf` 与光标共用额度；`.theme` 走 1MB 文本上限）、条目名不合法、无光标文件、认不出槽位（且 .inf 无映射 / 方案引用全部落空）、写盘失败；链接 / 目录联接跳过并进 `warnings`；失败清理临时目录与半成品主题目录 |
 | `apply_theme` | `theme`（整个对象） | `ApplyOutcome` | 注册表写失败；历史写失败只进 `warning` |
 | `restore_default` | — | `void` | 清空注册表失败（清 15 槽位 + `SchemeName` + 键默认值，并清空已存在的 `Pin`/`Person` 新指针键残留，决策 24） |
 | `save_current_theme` | — | `SaveCurrentOutcome`（`theme` + `warnings` + `file_count` + `applied` + `recent` + `warning`） | 系统默认（无槽位）、当前已是已知主题、复制失败 / 超限（单文件 20MB / 总量 50MB）、写注册表或刷新失败；有槽位没抄全时只保存不自动应用；执行期取 `ops` 锁（决策 28） |
@@ -237,7 +237,7 @@ App.tsx
 
 **光标守护**（决策 29，默认关闭）：`lib/cursor-guard.ts` 订阅 `settingsStore` / `themeStore`，启动且设置与主题列表都就绪后做一次检查；运行期只在 `active_external` 为真时按「一轮」恢复（失败不重试）。目标优先取自动切换的当前深浅色配对，否则取 `recent[0]`，且必须仍在主题库里。应用复用 `applyTheme`（`silent` 只压成功 toast）；注册表读取失败、主题列表读取失败、`activeThemeId` 非空时都不动作；运行期不碰系统默认，手动还原默认不会被立刻抢回。不新增命令、不轮询、不写 `Schemes`。
 
-**导入**：对话框选 `.zip`（对话框只收 zip），或把 `.zip` / 整个主题文件夹拖进窗口（Tauri drag-drop 事件给完整路径；拖入 1 个走原单文件链路，拖入 2–20 个进导入中心队列（决策 23），zip / 文件夹 / 其它文件由后端权威校验，拖入时有全窗遮罩反馈）→ `import_theme` 在 `spawn_blocking` 中取 `ops` 锁（`importer::import_source` 分发：文件夹直接用，zip 流式解压到临时目录，两者走同一条落盘流程，决策 16）→ 每个条目先过名称白名单与 `THEME_LIMITS` 预算（决策 18），超限立即失败并清理解压临时目录 → 扫 `.cur/.ani/.ico` 与 `.inf`（共用 `ScanBudget`，链接 / 目录联接跳过并记 warning）→ 包里带 `.inf` 时先按说明书映射槽位（决策 15），剩余槽位退回文件名推断 → 落盘 `themes/<uuid>/`（失败时连半成品目录一起清理）→ `theme.json` 只写相对槽位路径（决策 17）→ 返回 `ImportReport`（主题已 resolve 成绝对路径 + warnings）→ store 追加并选中；执行期按阶段发 `import-progress`，侧栏显示进度文案。
+**导入**：对话框选 `.zip` / `.theme`（决策 36），或把 `.zip` / `.theme` / 整个主题文件夹拖进窗口（Tauri drag-drop 事件给完整路径；拖入 1 个走原单文件链路，拖入 2–20 个进导入中心队列（决策 23），zip / 方案 / 文件夹 / 其它文件由后端权威校验，拖入时有全窗遮罩反馈）→ `import_theme` 在 `spawn_blocking` 中取 `ops` 锁（`importer::import_source` 分发：文件夹直接用，zip 流式解压到临时目录，两者走同一条落盘流程，决策 16；`.theme` 方案按 1MB 文本上限读取（BOM 识别编码）后解析 `[Control Panel\Cursors]` 段——键名与注册表槽位同名直接映射，`%Var%` 展开后按槽位复制引用的光标文件，相对路径以方案文件目录为基准，引用缺失只跳过并 warning，决策 36）→ 每个条目先过名称白名单与 `THEME_LIMITS` 预算（决策 18），超限立即失败并清理解压临时目录 → 扫 `.cur/.ani/.ico` 与 `.inf`（共用 `ScanBudget`，链接 / 目录联接跳过并记 warning）→ 包里带 `.inf` 时先按说明书映射槽位（决策 15），剩余槽位退回文件名推断 → 落盘 `themes/<uuid>/`（失败时连半成品目录一起清理）→ `theme.json` 只写相对槽位路径（决策 17）→ 返回 `ImportReport`（主题已 resolve 成绝对路径 + warnings）→ store 追加并选中；执行期按阶段发 `import-progress`，侧栏显示进度文案。
 
 **迁移主题目录**：设置里选目录 → `preview_themes_dir` 做 canonicalize 与统计，返回源 / 目标 / 主题数 / 文件数 / 体积 / warnings → 确认框展示，确认后锁操作 → `set_themes_dir` 在 `spawn_blocking` 中执行：暂存复制并改写相对路径 → 逐文件校验 → 原子切换 → 重绑注册表槽位 → 写设置 → 删源目录，阶段经 `themes-dir-progress` 推给前端进度条 → 成功刷新设置与主题列表；失败保留对话框，可重试或关闭，源目录与设置不变。源目录里的链接 / 目录联接不复制、逐条进 warnings，避免把外部目录搬进主题库。
 
@@ -315,3 +315,4 @@ App.tsx
 | 2026-10-29 | 决策 33：定时切换主题——`settings.json` 新增 `schedule_switch_enabled` / `schedule_start` / `schedule_end` / `schedule_in_id` / `schedule_out_id`（HH:MM 半开区间，跨零点合法），前端 `lib/schedule-switch.ts` 按边界 `setTimeout` 评估不轮询，时间段内且期间主题已设时深浅色自动切换（决策 25）让位；命令数保持 32，验收 `scripts/schedule_check.mjs` |
 | 2026-10-29 | 决策 34：备份内容浏览与单主题恢复——新增 `list_backup_themes` / `restore_theme_from_backup`（命令契约 32 → 34）与 `BackupThemeListing` / `RestoreBackupThemeOutcome`；备份历史行内「查看内容」任务层弹窗，只解压选中一套、目标已存在拒绝、不合并历史；`missing_files` 标出包内缺文件，部分缺文件恢复提示、全缺拒绝；前端 `BackupContentDialog`，验收 `scripts/backup_content_check.mjs` |
 | 2026-10-29 | 决策 35：维护工具箱——新增 `get_storage_stats`（数据目录分区只读统计）/ `export_all_themes`（批量导出「我的主题」，部分成功 + `export-all-progress`，取 `ops` 锁）/ `clear_history`（清空使用记录，轻量原子重写），命令契约 34 → 37；UI 全部长在既有页面内（设置 → 数据两张卡、我的主题工具条「导出全部」），不新增导航；原型的备份内容预览 `peek_backup` 让位决策 34 的 `list_backup_themes`，合入时未采用；验收 `scripts/maintenance_check.mjs` |
+| 2026-10-30 | 决策 36：`.theme` 光标方案导入——`import_theme` 分发新增第三类来源：解析 `[Control Panel\Cursors]` 段（键名与注册表槽位同名，直接映射；UTF-16LE/BE 与 UTF-8 按 BOM 识别，1MB 文本上限），`%Var%` 大小写不敏感展开后按槽位复制引用的光标文件（相对路径以方案文件目录为基准，链接 / 目录联接拒收），`[Theme] DisplayName` 作主题名（本地化引用退回文件名 stem）；引用缺失 / 非光标格式跳过并 warning、全部落空才拒绝；命令数保持 37；对话框 filter 与拖拽白名单放开 `.theme`，浏览器 mock 按 stem 命名；新增 `utils/theme_file.rs` 纯解析器，验收 `scripts/scheme_import_check.mjs` |

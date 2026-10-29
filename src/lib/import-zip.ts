@@ -6,10 +6,11 @@ import { useImportStore } from "@/stores/importStore";
 import { useThemeStore } from "@/stores/themeStore";
 
 /**
- * 选 zip 并导入 —— 不带任何按钮状态的独立入口
+ * 选文件并导入 —— 不带任何按钮状态的独立入口
  *
  * 侧栏 / 空状态按钮（经 `useImportTheme`）与 Ctrl+O 快捷键共用这里，
  * 文件对话框的 filters、浏览器降级提示只写一遍。
+ * `.zip` 主题包与 `.theme` 光标方案（决策 36）都走后端同一条 `import_theme`。
  */
 export async function pickAndImportZip(): Promise<boolean> {
   if (!inTauri) {
@@ -27,7 +28,7 @@ export async function pickAndImportZip(): Promise<boolean> {
     const selected = await open({
       multiple: false,
       directory: false,
-      filters: [{ name: "主题包", extensions: ["zip"] }],
+      filters: [{ name: "主题包 / 光标方案", extensions: ["zip", "theme"] }],
     });
     if (typeof selected === "string") {
       await useThemeStore.getState().importTheme(selected);
@@ -60,7 +61,7 @@ export async function pickAndQueueThemes(): Promise<void> {
     const selected = await open({
       multiple: true,
       directory: false,
-      filters: [{ name: "主题包", extensions: ["zip"] }],
+      filters: [{ name: "主题包 / 光标方案", extensions: ["zip", "theme"] }],
     });
     if (Array.isArray(selected) && selected.length > 0) {
       useImportStore.getState().enqueue(selected);

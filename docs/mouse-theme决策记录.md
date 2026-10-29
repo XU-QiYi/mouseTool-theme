@@ -825,6 +825,25 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 
 ---
 
+## 决策 36：`.theme` 光标方案导入——Windows 主题方案收编为我的主题
+
+**结论**（2026-10-30，随「`.theme` 光标方案导入」实现）
+
+- **入口**：`import_theme` 的 `sourcePath` 分发新增第三类（决策 16 的 zip / 文件夹之外）：`.theme` 文件。侧栏 / Ctrl+O 的文件对话框 filter 放开 `.theme`，拖拽通路的浏览器白名单同步放开（完整路径本就交给后端权威校验）。
+- **解析**（`utils/theme_file.rs`，纯函数）：`.theme` 是 INI 文本，光标方案在 `[Control Panel\Cursors]` 段——**键名与 `HKCU\Control Panel\Cursors` 的槽位值名同名**（Arrow / Help / AppStarting / Wait / NWPen / No / SizeNS / SizeWE / SizeNWSE / SizeNESW / SizeAll / UpArrow / Hand / Crosshair / IBeam），直接映射到 15 槽位白名单，不做翻译表；空值 = 槽位保持系统默认（不出现）。`[Theme]` 段的 `DisplayName` 作主题名，`@dll,-id` 本地化引用读不出真名、退回文件名 stem。编码与 `.inf` 同一套 BOM 识别（UTF-16LE/BE、UTF-8、无 BOM 宽松 UTF-8），1MB 文本上限（`read_bytes_bounded`），禁止先按 UTF-8 解码。值清理：去成对引号、去尾部 `,index` 后缀（防御注册表方案串写法）。
+- **收编 = 复制**（语义同决策 28 的「保存当前光标」）：每个引用按 `%Var%` 环境变量展开（大小写不敏感；展不开的变量原样保留、按文件不存在处理）→ 绝对路径直接用 / 相对路径以方案文件所在目录为基准（`.themepack` 解开后光标与 `.theme` 同目录）→ 通过光标扩展名白名单与重解析点检查后，按槽位复制进新主题目录（复用 `copy_slots`：单文件 20MB 上限、按槽位重命名落盘）。源文件留在原地，不写 `Schemes`、不碰注册表。
+- **部分成功**：引用缺失 / 展不开 / 非光标格式 / 链接联接只跳过该槽位并进 `warnings`（点名槽位中文名与原值）；**全部槽位落空才拒绝**（「方案文件里没有可用的光标条目」），失败清理半成品目录。落盘走决策 17 的相对路径口径。
+- **不新增命令、不新增依赖**：命令数保持 37；INI 解析手写（`.inf` 已有同类解析器与 BOM 识别，`.theme` 复用 `decode_text`）。`.themepack`（CAB 容器）**暂不收**——CAB 解档需要引入新依赖（如 `cab` crate），按硬约束 9 需单独决策，当前先覆盖「`.theme` + 同目录光标」这一最常见形态（Windows 个性化「保存」出的方案、主题包解压后的目录都长这样）。
+- **验收**：`theme_file.rs` 单测覆盖 UTF-16LE / ANSI、大小写不敏感键映射、空值、未知段键、本地化 DisplayName、引号与逗号后缀、注释；`importer.rs` 单测覆盖端到端导入（DisplayName 优先、缺文件警告、全缺拒绝且不残留、非光标文件跳过、环境变量展开、相对路径基准）；`scripts/scheme_import_check.mjs` 走浏览器 mock 验收 store 直导（stem 命名 + 检查器选中）、拖拽白名单放行 / 白名单外拒绝（新文案）、`.theme` 与 `.zip` 混拖进导入中心串行成功；`dnd_check.mjs` 增补 `.theme` 放行断言。
+
+**为什么**：主题来源目前只有「别人打包好的 zip / 文件夹」与「注册表当前态收编」两条路，而 Windows 生态里现成的第三类资产被漏掉了——个性化设置保存的 `.theme`、微软商店 / 主题站分发的方案文件、`.themepack` 解开后的目录，都是「槽位 → 文件」的现成映射。`.theme` 的段键与注册表槽位名完全同名，收编成本几乎为零；收编成**普通用户主题**（复制文件）而不是运行时引用，与决策 17 的相对路径口径、决策 26 的回收站 / 备份语义天然自洽——方案原文件在哪、以后还在不在，都不影响主题库。
+
+**为什么收编而不是安装**：`.theme` 里的引用大多是 `%SystemRoot%\cursors\` 的系统光标，直接「应用方案」等于把系统光标注册成当前值——用户拿不到可管理、可备份、可删除的主题实体。先收编为我的主题，用户再决定应用与否，与「保存当前光标」（决策 28）的心智一致。
+
+**边界**：不做 `.themepack`（CAB 解档需新依赖，另行决策）；不做壁纸 / 声明 / 图标等非光标段的任何处理（不是本工具的业务）；不做方案文件预览（收编后主题检查器就是预览）；引用解析失败不做「同名猜测」兜底（方案里的文件名是权威映射，猜出来的映射错得悄无声息，比缺槽位更糟）。
+
+---
+
 ## 附录 A：技术栈定格
 
 **Tauri 2 + React 19 + TypeScript + Vite + Tailwind CSS 4 + shadcn/ui（base-nova / `@base-ui/react`）+ zustand + Rust**。

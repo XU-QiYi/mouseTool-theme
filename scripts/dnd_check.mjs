@@ -152,19 +152,22 @@ try {
   // 3. 类型校验
   await drag("drop", ["arrow.cur"]);
   const curText = await waitToast("只支持");
-  check("非 zip 文件被拒绝", curText.includes("只支持 .zip 主题包") && !curText.includes("文件夹"), curText);
+  check("白名单外文件被拒绝", curText.includes("只支持 .zip 主题包或 .theme 光标方案"), curText);
 
-  // 文件夹导入（决策 16）：完整路径不再按扩展名拦，交给后端权威校验。
+  // 文件夹导入（决策 16）与 .theme 方案（决策 36）：完整路径不再按扩展名拦，
+  // 交给后端 `import_theme` 权威校验，各自给出精准文案。
   // 浏览器 mock 拿不到路径、File.name 里也塞不进反斜杠，这里直接问校验函数，
-  // 否则会把「浏览器通路只收 zip」误当成「文件夹不支持」。
+  // 否则会把「浏览器通路只收白名单」误当成「文件夹不支持」。
   const verdicts = await evaluate(`import('/src/hooks/useDragDropImport.ts').then((m) => ({
     folder: m.validateDrop([{ name: "光标合集", path: "D:\\\\Themes\\\\光标合集" }]),
     zip: m.validateDrop([{ name: "主题.zip", path: "D:\\\\Themes\\\\主题.zip" }]),
+    theme: m.validateDrop([{ name: "方案.theme", path: "D:\\\\Themes\\\\方案.theme" }]),
     browser: m.validateDrop([{ name: "arrow.cur", path: "arrow.cur" }]),
   }))`);
   check("完整路径的文件夹放行（后端校验）", verdicts.folder === null, String(verdicts.folder));
   check("完整路径的 zip 放行", verdicts.zip === null, String(verdicts.zip));
-  check("浏览器文件名通路仍只收 zip", verdicts.browser === "只支持 .zip 主题包", String(verdicts.browser));
+  check("完整路径的 .theme 放行（后端校验）", verdicts.theme === null, String(verdicts.theme));
+  check("浏览器文件名通路白名单外拒绝", verdicts.browser === "只支持 .zip 主题包或 .theme 光标方案", String(verdicts.browser));
 
   // 4. 多文件：不再报「一次只能导入一个」，而是进导入中心队列
   await drag("drop", ["a.zip", "b.zip"]);
