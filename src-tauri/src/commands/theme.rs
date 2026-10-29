@@ -989,6 +989,195 @@ pub async fn export_all_themes(
     .map_err(|err| format!("批量导出任务异常退出（{err}）"))?
 }
 
+/// 内容重复的一组主题（决策 38）
+#[derive(Debug, Serialize)]
+pub struct DuplicateGroup {
+    pub theme_ids: Vec<String>,
+    pub theme_names: Vec<String>,
+    /// 单套主题非空槽位文件的总字节（组内各套一致才成组）
+    pub bytes: u64,
+    /// 非空槽位数
+    pub slots_filled: usize,
+}
+
+/// 主题内容查重结果（决策 38）
+#[derive(Debug, Serialize)]
+pub struct DuplicateReport {
+    /// 内容完全一致的组（≥2 套），按可省字节降序
+    pub groups: Vec<DuplicateGroup>,
+    /// 参与比对的主题数（缺文件 / 无可用槽位的不参与）
+    pub scanned: usize,
+    /// 因槽位文件缺失而未参与比对的主题数（在证据里说明）
+    pub skipped_missing: usize,
+    /// 每组删到剩一套合计能省的字节
+    pub wasted_bytes: u64,
+    pub warnings: Vec<String>,
+}
+
+/// 主题内容查重（决策 38）：找出槽位文件内容完全一致的「我的主题」组
+///
+/// 与决策 35 的存储统计配对：统计告诉你占了多少，查重告诉你哪些是重复的。
+/// 两步走——先按「槽位键 + 扩展名 + 字节数」指纹预分组（绝大多数不同包在
+/// 这一步就分开），指纹相同的组内再逐字节比对确认，只报**证实**的重复，
+/// 不猜。只读命令，不取 `ops` 锁、不发事件。
+#[tauri::command]
+pub async fn find_duplicate_themes() -> Result<DuplicateReport, String> {
+    tauri::async_runtime::spawn_blocking(find_duplicate_themes_in)
+        .await
+        .map_err(|err| format!("查重任务异常退出（{err}）"))?
+}
+
+/// 槽位指纹：排序后相同的才进同一预分组
+type SlotFingerprint = Vec<(String, String, u64)>;
+
+fn find_duplicate_themes_in() -> Result<DuplicateReport, String> {
+    let (themes, mut warnings) = importer::read_user_themes();
+
+    struct Candidate {
+        id: String,
+        name: String,
+        bytes: u64,
+        slots_filled: usize,
+        /// 注册表键 → 槽位文件绝对路径
+        files: std::collections::BTreeMap<String, std::path::PathBuf>,
+        fingerprint: SlotFingerprint,
+    }
+
+    let mut candidates: Vec<Candidate> = Vec::new();
+    let mut skipped_missing = 0usize;
+    for theme in themes {
+        let mut files = std::collections::BTreeMap::new();
+        let mut fingerprint: SlotFingerprint = Vec::new();
+        let mut bytes = 0u64;
+        let mut complete = true;
+        for slot in &theme.cursors {
+            if slot.file_path.trim().is_empty() {
+                continue;
+            }
+            let path = std::path::PathBuf::from(&slot.file_path);
+            let meta = match fs::metadata(&path) {
+                Ok(meta) if meta.is_file() => meta,
+                _ => {
+                    // 缺文件的主题没法证实内容，不参与比对（完整性体检另有提示）
+                    complete = false;
+                    break;
+                }
+            };
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            bytes += meta.len();
+            fingerprint.push((
+                slot.registry_key.clone(),
+                ext.clone(),
+                meta.len(),
+            ));
+            files.insert(slot.registry_key.clone(), path);
+        }
+        if !complete || files.is_empty() {
+            skipped_missing += 1;
+            continue;
+        }
+        fingerprint.sort();
+        candidates.push(Candidate {
+            id: theme.id,
+            name: theme.name,
+            bytes,
+            slots_filled: files.len(),
+            files,
+            fingerprint,
+        });
+    }
+
+    // 指纹相同的进同一预分组；组内两两与首套逐字节比对，全部一致才算重复
+    let mut pregroups: std::collections::HashMap<SlotFingerprint, Vec<Candidate>> =
+        std::collections::HashMap::new();
+    for candidate in candidates {
+        pregroups.entry(candidate.fingerprint.clone()).or_default().push(candidate);
+    }
+
+    let mut groups = Vec::new();
+    let mut wasted_bytes = 0u64;
+    let scanned = pregroups.values().map(Vec::len).sum::<usize>();
+    for members in pregroups.into_values() {
+        if members.len() < 2 {
+            continue;
+        }
+        let base = &members[0];
+        let mut confirmed: Vec<&Candidate> = vec![base];
+        for member in &members[1..] {
+            let identical = member.files.iter().all(|(key, path)| {
+                base.files
+                    .get(key)
+                    .is_some_and(|base_path| files_equal(base_path, path))
+            });
+            if identical {
+                confirmed.push(member);
+            }
+        }
+        if confirmed.len() < 2 {
+            continue;
+        }
+        let mut names: Vec<String> = confirmed.iter().map(|c| c.name.clone()).collect();
+        let mut ids: Vec<String> = confirmed.iter().map(|c| c.id.clone()).collect();
+        // 与「最近使用」一致：最早导入的排前面，删重复时默认留最老的一套
+        let mut order: Vec<usize> = (0..ids.len()).collect();
+        order.sort_by(|a, b| ids[*a].cmp(&ids[*b]));
+        ids = order.iter().map(|i| ids[*i].clone()).collect();
+        names = order.iter().map(|i| names[*i].clone()).collect();
+        let group_wasted = base.bytes * (confirmed.len() as u64 - 1);
+        wasted_bytes += group_wasted;
+        groups.push((group_wasted, DuplicateGroup {
+            theme_ids: ids,
+            theme_names: names,
+            bytes: base.bytes,
+            slots_filled: base.slots_filled,
+        }));
+    }
+    groups.sort_by_key(|(wasted, _)| std::cmp::Reverse(*wasted));
+    let groups: Vec<DuplicateGroup> = groups.into_iter().map(|(_, group)| group).collect();
+
+    Ok(DuplicateReport {
+        groups,
+        scanned,
+        skipped_missing,
+        wasted_bytes,
+        warnings: std::mem::take(&mut warnings),
+    })
+}
+
+/// 两个文件逐块（64KB）比对内容；读不出的一律按「不一致」处理——
+/// 查重只报证实过的重复，错杀比漏报更招人烦
+fn files_equal(a: &Path, b: &Path) -> bool {
+    use std::io::Read;
+    let (Ok(mut left), Ok(mut right)) = (fs::File::open(a), fs::File::open(b)) else {
+        return false;
+    };
+    let mut buf_left = [0u8; 64 * 1024];
+    let mut buf_right = [0u8; 64 * 1024];
+    loop {
+        let na = match left.read(&mut buf_left) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        let nb = match right.read(&mut buf_right) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        if na != nb {
+            return false;
+        }
+        if na == 0 {
+            return true;
+        }
+        if buf_left[..na] != buf_right[..nb] {
+            return false;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1981,6 +2170,87 @@ mod tests {
         assert!(
             registry::read_current_slots().expect("读回注册表").is_empty(),
             "还原后不应残留槽位"
+        );
+    }
+
+    #[test]
+    fn 查重把内容一致的主题分成一组() {
+        let temp = TempDir::new("dedupe-same");
+        let _guard = temp.isolate_paths();
+        let arrow = fixture_cur();
+        let (a, _) = seed_exportable_theme(
+            "甲",
+            &[("Arrow", "arrow.cur", arrow.clone()), ("Wait", "wait.cur", fixture_cur())],
+        );
+        let (b, _) = seed_exportable_theme(
+            "乙",
+            &[("Arrow", "arrow.cur", arrow), ("Wait", "wait.cur", fixture_cur())],
+        );
+        let (_c, _) = seed_exportable_theme("丙", &[("Arrow", "arrow.cur", fixture_cur())]);
+
+        let report = find_duplicate_themes_in().expect("查重");
+        assert_eq!(report.scanned, 3, "{report:?}");
+        assert_eq!(report.groups.len(), 1, "{report:?}");
+        let group = &report.groups[0];
+        assert_eq!(group.theme_ids.len(), 2, "{group:?}");
+        assert!(
+            group.theme_ids.contains(&a.id) && group.theme_ids.contains(&b.id),
+            "重复组只含甲乙：{group:?}"
+        );
+        assert_eq!(group.slots_filled, 2);
+        assert!(report.wasted_bytes > 0, "可省字节要算出来");
+        assert_eq!(report.skipped_missing, 0);
+    }
+
+    #[test]
+    fn 同尺寸不同内容不算重复() {
+        let temp = TempDir::new("dedupe-diff");
+        let _guard = temp.isolate_paths();
+        let (_a, _) = seed_exportable_theme("甲", &[("Arrow", "arrow.cur", b"AAAA".to_vec())]);
+        let (_b, _) = seed_exportable_theme("乙", &[("Arrow", "arrow.cur", b"AAAB".to_vec())]);
+
+        let report = find_duplicate_themes_in().expect("查重");
+        assert!(report.groups.is_empty(), "指纹相同也要靠字节比对拦住：{report:?}");
+        assert_eq!(report.scanned, 2);
+    }
+
+    #[test]
+    fn 缺文件的主题不参与比对() {
+        let temp = TempDir::new("dedupe-missing");
+        let _guard = temp.isolate_paths();
+        let arrow = fixture_cur();
+        let (_a, _) = seed_exportable_theme("甲", &[("Arrow", "arrow.cur", arrow.clone())]);
+        let (_b, bdir) = seed_exportable_theme("乙", &[("Arrow", "arrow.cur", arrow)]);
+        fs::remove_file(bdir.join("cursors").join("arrow.cur")).expect("删槽位文件");
+
+        let report = find_duplicate_themes_in().expect("查重");
+        assert_eq!(report.scanned, 1, "缺文件的「乙」不该参与：{report:?}");
+        assert_eq!(report.skipped_missing, 1);
+        assert!(report.groups.is_empty(), "内容不完整不能断言重复：{report:?}");
+    }
+
+    #[test]
+    fn 三套完全一致只报一组且按可省字节排序() {
+        let temp = TempDir::new("dedupe-triple");
+        let _guard = temp.isolate_paths();
+        let big = {
+            let mut bytes = fixture_cur();
+            bytes.extend_from_slice(&vec![0xABu8; 4096]);
+            bytes
+        };
+        for name in ["甲", "乙", "丙"] {
+            let (_theme, _) = seed_exportable_theme(name, &[("Arrow", "arrow.cur", big.clone())]);
+        }
+        let (_solo, _) = seed_exportable_theme("丁", &[("Arrow", "arrow.cur", fixture_cur())]);
+
+        let report = find_duplicate_themes_in().expect("查重");
+        assert_eq!(report.groups.len(), 1);
+        assert_eq!(report.groups[0].theme_ids.len(), 3);
+        // 一套 big 的字节 × 2（三套删到剩一套）
+        assert_eq!(
+            report.wasted_bytes,
+            (4096 + 22 + (32 * 32 * 4 + (32 / 8) * 32 + 40)) as u64 * 2,
+            "可省字节按「套数 - 1」累计：{report:?}"
         );
     }
 }

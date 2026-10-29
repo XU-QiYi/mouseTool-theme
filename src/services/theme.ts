@@ -187,6 +187,57 @@ export function getAllThemes(): Promise<ThemesResult> {
   return invoke<ThemesResult>("get_all_themes");
 }
 
+/** 内容重复的一组主题（决策 38），字段与 Rust `DuplicateGroup` 一一对应 */
+export interface DuplicateGroup {
+  theme_ids: string[];
+  theme_names: string[];
+  /** 单套主题非空槽位文件的总字节 */
+  bytes: number;
+  slots_filled: number;
+}
+
+/** 对应 Rust 命令 `find_duplicate_themes`：主题内容查重（决策 38） */
+export interface DuplicateReport {
+  /** 内容完全一致的组（≥2 套），按可省字节降序 */
+  groups: DuplicateGroup[];
+  /** 参与比对的主题数（缺文件 / 无可用槽位的不参与） */
+  scanned: number;
+  /** 因槽位文件缺失而未参与比对的主题数 */
+  skipped_missing: number;
+  /** 每组删到剩一套合计能省的字节 */
+  wasted_bytes: number;
+  warnings: string[];
+}
+
+/** 浏览器里的查重模拟：`?mock-duplicates=1` 时把前两套「我的主题」编成一组 */
+function mockDuplicateThemes(): DuplicateReport {
+  const mine = MOCK_THEMES.filter((theme) => !theme.is_built_in);
+  if (new URLSearchParams(window.location.search).get("mock-duplicates") === "1" && mine.length >= 2) {
+    const [first, second] = mine;
+    return {
+      groups: [
+        {
+          theme_ids: [first.id, second.id],
+          theme_names: [first.name, second.name],
+          bytes: 1_887_436,
+          slots_filled: 4,
+        },
+      ],
+      scanned: mine.length,
+      skipped_missing: 0,
+      wasted_bytes: 1_887_436,
+      warnings: [],
+    };
+  }
+  return { groups: [], scanned: mine.length, skipped_missing: 0, wasted_bytes: 0, warnings: [] };
+}
+
+/** 查重（决策 38）：只读比对，与存储统计（决策 35）配对——统计说占多少，查重说哪些重复 */
+export function findDuplicateThemes(): Promise<DuplicateReport> {
+  if (!inTauri) return Promise.resolve(mockDuplicateThemes());
+  return invoke<DuplicateReport>("find_duplicate_themes");
+}
+
 /** 对应 Rust 命令 `get_active_state`：聚焦时轻量重查「当前使用」（决策 24） */
 export function getActiveState(): Promise<ActiveState> {
   if (!inTauri) {

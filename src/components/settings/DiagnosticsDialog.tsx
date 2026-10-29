@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { CircleAlert, CircleCheck, Copy, RefreshCw, Stethoscope, TriangleAlert } from "lucide-react";
 
@@ -12,9 +12,11 @@ import {
 import { StatusBadge } from "@/components/ui/status-badge";
 import { SettingCard } from "@/components/settings/SettingCard";
 import { useAppVersion } from "@/hooks/use-app-version";
-import { toast } from "@/lib/toast";
+import { toast, readableError } from "@/lib/toast";
 import { appliedAtMachine } from "@/lib/themes";
+import { formatBytes } from "@/lib/utils";
 import { getWindowsVersion } from "@/services/system";
+import { findDuplicateThemes, type DuplicateReport } from "@/services/theme";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useThemeStore } from "@/stores/themeStore";
 import { cn } from "@/lib/utils";
@@ -104,6 +106,12 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
   const [scannedAt, setScannedAt] = useState<string>(localStamp);
   const [scanning, setScanning] = useState(false);
   const [windows, setWindows] = useState<string>("…");
+  /** 查重（决策 38）是诊断里唯一的按需命令：重 I/O（逐字节比对），打开 / 重扫时跑一次 */
+  const [dupScan, setDupScan] = useState<{
+    loading: boolean;
+    report: DuplicateReport | null;
+    error: string | null;
+  }>({ loading: false, report: null, error: null });
 
   // 打开时刷新一次系统版本（只读静态信息，失败保留「未知」）
   useEffect(() => {
@@ -113,11 +121,28 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
       .catch(() => setWindows("未知"));
   }, [open]);
 
+  const runDedupScan = useCallback(async () => {
+    setDupScan({ loading: true, report: null, error: null });
+    try {
+      const report = await findDuplicateThemes();
+      setDupScan({ loading: false, report, error: null });
+    } catch (err) {
+      console.error("主题查重失败：", err);
+      setDupScan({ loading: false, report: null, error: readableError(err) });
+    }
+  }, []);
+
+  // 打开 / 重新扫描时跑查重；结果只在弹窗会话内有效（库随时会变）
+  useEffect(() => {
+    if (open) void runDedupScan();
+  }, [open, runDedupScan]);
+
   const checks = useMemo<DiagnosticCheck[]>(() => {
     const builtIn = themes.filter((theme) => theme.is_built_in).length;
     const mine = themes.length - builtIn;
     const activeTheme = themes.find((theme) => theme.id === activeThemeId) ?? null;
     const activeMissing = Boolean(activeThemeId) && !activeTheme;
+    const dupGroups = dupScan.report?.groups ?? [];
 
     return [
       {
@@ -240,8 +265,57 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
               }
             : undefined,
       },
+      {
+        id: "duplicates",
+        title: "重复主题",
+        severity: dupScan.error ? "error" : dupGroups.length > 0 ? "warning" : "ok",
+        summary: dupScan.loading
+          ? "正在比对…"
+          : dupScan.error
+            ? "查重失败"
+            : dupGroups.length > 0
+              ? `${dupGroups.length} 组内容重复`
+              : "没有内容重复的主题",
+        evidence: dupScan.loading
+          ? ["正在逐套比对光标文件内容（先按槽位指纹预分组，组内逐字节确认）…"]
+          : dupScan.error
+            ? [dupScan.error]
+            : dupGroups.length === 0
+              ? [
+                  `已比对 ${dupScan.report?.scanned ?? 0} 套「我的主题」，没有内容完全一致的组`,
+                  ...(dupScan.report && dupScan.report.skipped_missing > 0
+                    ? [`${dupScan.report.skipped_missing} 套因槽位文件缺失未参与比对（见「文件完整性」）`]
+                    : []),
+                  "口径：非空槽位文件逐字节一致才算重复；只比内容，不看名字与导入时间",
+                ]
+              : [
+                  ...dupGroups.slice(0, 6).map((group) => {
+                    const names = group.theme_names.map((name) => `「${name}」`).join("");
+                    return `${names} 内容相同（${group.slots_filled} 个槽位 · 各 ${formatBytes(group.bytes)}）`;
+                  }),
+                  ...(dupGroups.length > 6 ? [`还有 ${dupGroups.length - 6} 组重复`] : []),
+                  `删到每组剩一套，可省 ${formatBytes(dupScan.report?.wasted_bytes ?? 0)}`,
+                ],
+        advice: dupScan.loading
+          ? null
+          : dupScan.error
+            ? "点「重新扫描」重试；查重只读文件，不影响任何数据"
+            : dupGroups.length > 0
+              ? "每组删到剩一套即可：到「我的主题」找到多余的那套删除（删除会先进回收站，可反悔）"
+              : null,
+        action:
+          dupGroups.length > 0
+            ? {
+                label: "去「我的主题」",
+                run: () => {
+                  onOpenChange(false);
+                  useThemeStore.getState().setCurrentPage("mine");
+                },
+              }
+            : undefined,
+      },
     ];
-  }, [themes, fileGaps, loadError, warnings, activeThemeId, activeExternal, currentSlotsFilled, dataDir, dataDirError, settings, settingsError, autostart, autostartError, onOpenChange]);
+  }, [themes, fileGaps, loadError, warnings, activeThemeId, activeExternal, currentSlotsFilled, dataDir, dataDirError, settings, settingsError, autostart, autostartError, dupScan, onOpenChange]);
 
   const overall = checks.reduce<Severity>(
     (worst, check) =>
@@ -254,12 +328,13 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
     if (scanning) return;
     setScanning(true);
     try {
-      // 只读重扫：四个来源并行重读，完成后更新扫描时间
+      // 只读重扫：五个来源并行重读，完成后更新扫描时间
       await Promise.all([
         useThemeStore.getState().loadThemes(),
         useThemeStore.getState().loadDataDir(),
         loadSettings(),
         loadAutostart(),
+        runDedupScan(),
       ]);
       setScannedAt(localStamp());
     } finally {
@@ -298,7 +373,7 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
             <div className="min-w-0">
               <DialogTitle>诊断中心</DialogTitle>
               <DialogDescription>
-                检查数据目录、主题、当前使用与设置；只读，不修改任何文件
+                检查数据目录、主题、当前使用、设置与重复内容；只读，不修改任何文件
               </DialogDescription>
             </div>
             <span className="pt-1 shrink-0">
@@ -308,8 +383,8 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
             </span>
           </div>
 
-          {/* 顶部摘要：四项各一块，严重度图标 + 标题 + 一行结论 */}
-          <div className="mt-4 grid grid-cols-4 gap-2">
+          {/* 顶部摘要：六项各一块，严重度图标 + 标题 + 一行结论 */}
+          <div className="mt-4 grid grid-cols-3 gap-2">
             {checks.map((check) => (
               <button
                 key={check.id}
@@ -432,7 +507,7 @@ export function DiagnosticsCard() {
     <>
       <SettingCard
         title="诊断中心"
-        description="检查数据目录、主题数据、当前使用与应用设置；只读，不修改任何文件"
+        description="检查数据目录、主题数据、当前使用、应用设置与重复内容；只读，不修改任何文件"
         action={
           <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
             <Stethoscope data-icon="inline-start" />

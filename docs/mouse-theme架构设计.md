@@ -137,7 +137,7 @@ App.tsx
 
 ---
 
-## 5. 命令契约（当前共 38 个）
+## 5. 命令契约（当前共 39 个）
 
 | Command | 入参（前端写法） | 返回 | 失败场景 |
 |---|---|---|---|
@@ -173,6 +173,7 @@ App.tsx
 | `restore_theme_from_backup` | `zipPath`, `themeId` | `RestoreBackupThemeOutcome`（`theme` + `warnings`） | 非规范 UUID、目标 ID 已存在、备份里没有该主题 / theme.json 损坏、零槽位、全部槽位缺文件、写盘失败；只解压请求的一套，旧绝对路径按主题 id / 文件名映射后落相对路径，失败清理本次新建目录；部分缺文件仍恢复并进 `warnings`；取 `ops` 锁，不发进度事件（决策 34） |
 | `delete_backup` | `fileName`（只收文件名） | `void` | 空名、含 `/` `` `..`、非 `.zip`、拼接后越出 `backups`、链接 / 目录联接、文件不存在——一律中文错误拒绝；删除前二次确认在前端 |
 | `verify_backup` | `fileName`（只收文件名） | `BackupVerifyReport`（`entries_checked` / `bytes` / `corrupt`（≤20 条）/ `corrupt_total`） | 同 `delete_backup` 的文件名校验；整包打不开（坏 zip）返回中文错误；坏条目逐个点名（流式读进 sink 触发 CRC，不落盘），不取锁、不发事件，结果是快照（决策 37） |
+| `find_duplicate_themes` | — | `DuplicateReport`（`groups`（`theme_ids` / `theme_names` / `bytes` / `slots_filled`）+ `scanned` / `skipped_missing` / `wasted_bytes` / `warnings`） | 只有聚合本身崩溃才 `Err`；槽位指纹（键 + 扩展名 + 字节）预分组后组内逐字节确认，缺文件的主题不参与；只读、不取锁、不发事件（决策 38） |
 | `restore_theme_from_backup` | `zipPath`、`themeId` | `RestoreBackupThemeOutcome`（`theme` + `warnings`） | 目标 ID 已存在直接拒绝（不碰原目录）；备份里没有该主题、`theme.json` 损坏 / ID 不一致、零槽位、全部槽位缺文件都报中文错误并清理本次新建目录；部分缺文件恢复成功但 `warnings` 点名缺失槽位；取 `ops` 锁、刷新托盘、不发进度事件（决策 34） |
 | `run_auto_backup` | `keep`（保留份数） | `AutoBackupSummary`（`created` / `skipped` / `file_name` / `pruned`） | 当天已有自动备份则跳过并顺带清理过期（`created=false`）；空库返回「还没有可备份的内容」；与手动备份共用 `ops` 锁，冲突立即失败（决策 32）；不发 `backup-progress` |
 | `import_backup` | `zipPath` | `ImportBackupSummary` | 不是有效 zip、超限额（1GiB 总量 / 64MB 单文件 / 4096 条目 / 10 层）、条目名不合法、写盘失败（清掉本次新建主题目录）；恢复后按新根重写相对路径，失败项进 `warnings`；执行期发 `backup-progress` |
@@ -218,6 +219,7 @@ App.tsx
 | `RestoreBackupThemeOutcome` | `theme`、`warnings` | 从备份恢复单套主题的结果；`theme.cursors[].file_path` 为运行时绝对路径，落盘仍是相对路径（决策 34） |
 | `StorageStats` / `StorageDirStats` | `themes` / `backups` / `trash`（`count` + `bytes`）、`history_bytes`、`settings_bytes`、`total_bytes` | `get_storage_stats` 的返回值（决策 35）；字节数是快照概数，孤儿文件计入字节但不计入条目数 |
 | `BackupVerifyReport` | `file_name`、`entries_checked`、`bytes`、`corrupt`（≤20 条）、`corrupt_total` | `verify_backup` 的返回值（决策 37）；坏条目点名 + 总数，结果是快照不落盘 |
+| `DuplicateReport` / `DuplicateGroup` | `groups[]`（`theme_ids` / `theme_names` / `bytes` / `slots_filled`）、`scanned`、`skipped_missing`、`wasted_bytes`、`warnings` | `find_duplicate_themes` 的返回值（决策 38）；组内内容逐字节一致，`wasted_bytes` 按每组 n−1 套累计 |
 | `ExportAllOutcome` / `ExportAllItem` / `ExportAllFailure` | `dir`、`exported[]`（`file_name` / `bytes` / `file_count`）、`failed[]`（`error`）、`total_bytes`、`warnings` | `export_all_themes` 的返回值（决策 35）；部分成功：单套失败进 `failed`，其余照常落盘 |
 | `ThemesDirPlan` | `source`、`target`、`is_default`、`theme_count`、`file_count`、`total_bytes`、`warnings` | 迁移确认框的数据源，只读不搬 |
 | `ThemesDirChangeResult` | `settings`、`report` | `report` 含 `rebound_slots` 与 `warnings` |
@@ -319,3 +321,4 @@ App.tsx
 | 2026-10-29 | 决策 35：维护工具箱——新增 `get_storage_stats`（数据目录分区只读统计）/ `export_all_themes`（批量导出「我的主题」，部分成功 + `export-all-progress`，取 `ops` 锁）/ `clear_history`（清空使用记录，轻量原子重写），命令契约 34 → 37；UI 全部长在既有页面内（设置 → 数据两张卡、我的主题工具条「导出全部」），不新增导航；原型的备份内容预览 `peek_backup` 让位决策 34 的 `list_backup_themes`，合入时未采用；验收 `scripts/maintenance_check.mjs` |
 | 2026-10-30 | 决策 36：`.theme` 光标方案导入——`import_theme` 分发新增第三类来源：解析 `[Control Panel\Cursors]` 段（键名与注册表槽位同名，直接映射；UTF-16LE/BE 与 UTF-8 按 BOM 识别，1MB 文本上限），`%Var%` 大小写不敏感展开后按槽位复制引用的光标文件（相对路径以方案文件目录为基准，链接 / 目录联接拒收），`[Theme] DisplayName` 作主题名（本地化引用退回文件名 stem）；引用缺失 / 非光标格式跳过并 warning、全部落空才拒绝；命令数保持 37；对话框 filter 与拖拽白名单放开 `.theme`，浏览器 mock 按 stem 命名；新增 `utils/theme_file.rs` 纯解析器，验收 `scripts/scheme_import_check.mjs` |
 | 2026-10-30 | 决策 37：备份完整性体检——新增 `verify_backup`（命令契约 37 → 38）与 `BackupVerifyReport`；流式读每个条目进 sink 触发 CRC，静默损坏当场点名（≤20 条 + 总数）；只读不取锁、结果为快照；备份历史行内「体检」按钮 + 「体检损坏 N 处」徽标（`?mock-backup-corrupt=1` 注入），验收 `scripts/backup_verify_check.mjs` |
+| 2026-10-30 | 决策 38：主题去重诊断——新增 `find_duplicate_themes`（命令契约 38 → 39）与 `DuplicateReport` / `DuplicateGroup`；槽位指纹预分组 + 组内逐字节确认，只报证实的重复，缺文件主题不参与；诊断中心第六项「重复主题」（摘要格改 3 列），首个按需命令（打开 / 重扫时跑一次、会话内快照）；`?mock-duplicates=1` 注入，验收 `scripts/duplicate_check.mjs` |
