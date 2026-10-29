@@ -6,7 +6,7 @@
  * 正式版本以 `getVersion()`（tauri.conf.json / package.json 的 version）为准；
  * 发版改版本号时记得同步这里（发布指南 §1.2 的「版本号四处一致」清单会覆盖）。
  */
-export const APP_VERSION = "0.2.0";
+export const APP_VERSION = "0.3.0";
 
 /** 开源仓库地址（决策 13 的发布通道，也是「关于」页的反馈入口） */
 export const REPO_URL = "https://github.com/XU-QiYi/mouseTool-theme";
