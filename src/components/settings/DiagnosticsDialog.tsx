@@ -101,6 +101,7 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
   const settingsError = useSettingsStore((s) => s.settingsError);
   const autostart = useSettingsStore((s) => s.autostart);
   const autostartError = useSettingsStore((s) => s.autostartError);
+  const verifyReports = useSettingsStore((s) => s.backupVerifyReports);
 
   const [selectedId, setSelectedId] = useState<string>("data-dir");
   const [scannedAt, setScannedAt] = useState<string>(localStamp);
@@ -343,6 +344,9 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
   };
 
   const copyReport = async () => {
+    // 备份体检快照（决策 37/42 修订）：store 里会话内的体检结果随报告走，
+    // 报障时对方能看到「哪份备份体检过、结果如何」；没跑过体检就没有这一段
+    const verifyEntries = Object.values(verifyReports);
     const lines = [
       `鼠标主题工具 v${version}`,
       `系统：${windows}`,
@@ -352,6 +356,19 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
         `[${SEVERITY_LABEL[check.severity]}] ${check.title}：${check.summary}`,
         ...check.evidence.map((line) => `  ${line}`),
       ]),
+      ...(verifyEntries.length > 0
+        ? [
+            "",
+            "备份体检快照（本次会话内手动体检的结果）：",
+            ...verifyEntries.map((report) => {
+              const verdict =
+                report.corrupt_total > 0
+                  ? `损坏 ${report.corrupt_total} 处（${report.corrupt[0]}）`
+                  : `通过（${report.entries_checked} 个条目）`;
+              return `  ${report.file_name}：${verdict}`;
+            }),
+          ]
+        : []),
     ];
     try {
       await navigator.clipboard.writeText(lines.join("\n"));

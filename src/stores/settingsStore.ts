@@ -11,6 +11,7 @@ import {
   exportBackup as apiExportBackup,
   importBackup as apiImportBackup,
   type AutostartStatus,
+  type BackupVerifyReport,
   type SettingsPatch,
   type SettingsSnapshot,
   type ThemesDirPlan,
@@ -72,6 +73,17 @@ interface SettingsStore {
   backupProgress: TaskProgress | null;
   /** 上次备份或恢复的结果说明 */
   backupNote: string;
+  /**
+   * 备份体检快照（决策 37/42）：文件名 → 体检结果，按文件名记一份。
+   * 会话内有效、不落盘——备份列表随时可能被自动备份改写，持久化反而骗人。
+   * 诊断中心「复制报告」会带上这份快照（修订决策 37 的「不进报告」边界：
+   * 上提到 store 后它就是「打开即得的 store 数据」）
+   */
+  backupVerifyReports: Record<string, BackupVerifyReport>;
+  /** 记一份体检结果；同文件重跑覆盖 */
+  setBackupVerifyReport: (report: BackupVerifyReport) => void;
+  /** 删除备份后清掉对应快照，别让报告引用一份已不存在的备份 */
+  dropBackupVerifyReport: (fileName: string) => void;
 
   loadSettings: () => Promise<void>;
   loadAutostart: () => Promise<void>;
@@ -108,6 +120,19 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   backupBusy: null,
   backupProgress: null,
   backupNote: DEFAULT_BACKUP_NOTE,
+  backupVerifyReports: {},
+
+  setBackupVerifyReport: (report) =>
+    set((state) => ({
+      backupVerifyReports: { ...state.backupVerifyReports, [report.file_name]: report },
+    })),
+  dropBackupVerifyReport: (fileName) =>
+    set((state) => {
+      if (!(fileName in state.backupVerifyReports)) return state;
+      const next = { ...state.backupVerifyReports };
+      delete next[fileName];
+      return { backupVerifyReports: next };
+    }),
 
   loadSettings: async () => {
     try {

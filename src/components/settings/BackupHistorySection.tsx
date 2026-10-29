@@ -25,7 +25,6 @@ import {
   listBackups,
   verifyBackup,
   type BackupEntry,
-  type BackupVerifyReport,
 } from "@/services/settings";
 import { useSettingsStore } from "@/stores/settingsStore";
 
@@ -45,6 +44,10 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
   const backupProgress = useSettingsStore((s) => s.backupProgress);
   const exportBackupTo = useSettingsStore((s) => s.exportBackupTo);
   const restoreBackupFrom = useSettingsStore((s) => s.restoreBackupFrom);
+  /** 体检快照在 store 里（会话内有效）：诊断中心「复制报告」要带上它（决策 42） */
+  const verifyReports = useSettingsStore((s) => s.backupVerifyReports);
+  const setBackupVerifyReport = useSettingsStore((s) => s.setBackupVerifyReport);
+  const dropBackupVerifyReport = useSettingsStore((s) => s.dropBackupVerifyReport);
 
   const [entries, setEntries] = useState<BackupEntry[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -54,11 +57,6 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
   const [pendingDelete, setPendingDelete] = useState<BackupEntry | null>(null);
   /** 正在查看内容的备份；null = 弹窗关闭 */
   const [contentEntry, setContentEntry] = useState<BackupEntry | null>(null);
-  /**
-   * 体检结果（决策 37）：按文件名记一份快照，损坏的行内出徽标。
-   * 不缓存完好结论——列表随时可能被自动备份改写，重新体检再看。
-   */
-  const [verifyReports, setVerifyReports] = useState<Record<string, BackupVerifyReport>>({});
 
   const setBusyFlag = (key: string, value: boolean) =>
     setBusy((prev) => {
@@ -151,6 +149,8 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
     setBusyFlag(key, true);
     try {
       await deleteBackup(entry.file_name);
+      // 快照跟着备份走：删了备份就别让诊断报告再引用它
+      dropBackupVerifyReport(entry.file_name);
       toast.success("备份已删除", entry.file_name);
       await refresh();
     } catch (err) {
@@ -168,7 +168,7 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
     setBusyFlag(key, true);
     try {
       const report = await verifyBackup(entry.file_name);
-      setVerifyReports((prev) => ({ ...prev, [entry.file_name]: report }));
+      setBackupVerifyReport(report);
       if (report.corrupt_total > 0) {
         toast.warning(
           `体检发现 ${report.corrupt_total} 处损坏`,

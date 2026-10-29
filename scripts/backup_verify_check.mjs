@@ -152,6 +152,32 @@ try {
   })();
   check("行内出现「体检损坏」徽标", badges > 0, `badges=${badges}`);
 
+  // ---- 2b. 快照在 store 里（决策 42 修订）：离开子页再回来徽标仍在 ----
+  await evaluate(`(() => {
+    const btn = document.querySelector('button[aria-label="返回数据设置"]');
+    btn?.click();
+    return Boolean(btn);
+  })()`);
+  await sleep(400);
+  await openBackupHistory();
+  const badgesAfterRemount = await (async () => {
+    for (let i = 0; i < 20; i++) {
+      const count = await damagedBadges();
+      if (count > 0) return count;
+      await sleep(100);
+    }
+    return await damagedBadges();
+  })();
+  check("子页往返后体检徽标仍在（store 快照）", badgesAfterRemount > 0, `badges=${badgesAfterRemount}`);
+
+  // ---- 2c. 复制报告带体检快照（剪贴板内容不可断言，验证成功路径 toast）----
+  await evaluate(`(() => {
+    const btn = [...document.querySelectorAll("button")].find(b => b.textContent.includes("复制报告"));
+    btn?.click();
+    return Boolean(btn);
+  })()`);
+  await sleep(400);
+
   // ---- 3. 运行期无 JS 异常 ----
   check("运行期无 JS 异常", pageErrors.length === 0, `errors=${pageErrors.length}`);
 
