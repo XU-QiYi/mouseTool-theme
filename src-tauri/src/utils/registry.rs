@@ -91,8 +91,10 @@ fn expand_env(raw: &str) -> String {
 /// 注册表字符串值是 UTF-16LE 编码，需按两字节一组解码
 fn decode_utf16(bytes: &[u8]) -> String {
     let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
         .collect();
     String::from_utf16_lossy(&units)
         .trim_end_matches('\0')

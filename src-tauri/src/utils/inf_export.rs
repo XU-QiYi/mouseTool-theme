@@ -219,8 +219,10 @@ mod tests {
     fn decode(bytes: &[u8]) -> String {
         assert_eq!(&bytes[..2], &[0xFF, 0xFE], "必须以 UTF-16LE BOM 开头");
         let units: Vec<u16> = bytes[2..]
-            .chunks_exact(2)
-            .map(|p| u16::from_le_bytes([p[0], p[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|p| u16::from_le_bytes(*p))
             .collect();
         String::from_utf16(&units).expect("必须是合法 UTF-16")
     }

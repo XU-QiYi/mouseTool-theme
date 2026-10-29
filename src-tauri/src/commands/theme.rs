@@ -1206,8 +1206,10 @@ mod tests {
         // .inf 字节层面：UTF-16LE BOM；内容层面：方案串与槽位路径齐全
         assert_eq!(&inf_bytes[..2], &[0xFF, 0xFE], "必须是 UTF-16LE BOM 开头");
         let units: Vec<u16> = inf_bytes[2..]
-            .chunks_exact(2)
-            .map(|p| u16::from_le_bytes([p[0], p[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|p| u16::from_le_bytes(*p))
             .collect();
         let inf_text = String::from_utf16(&units).expect(".inf 必须是合法 UTF-16");
         assert!(inf_text.contains("signature=\"$CHICAGO$\""));
