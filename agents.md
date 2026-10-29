@@ -152,6 +152,18 @@ node scripts/dev_bg.mjs start; node scripts/nav_check.mjs; node scripts/design_c
 `design_audit.mjs` / `ui_ratio.mjs` 只扫源码；`nav_check` / `design_check` / `recent_check` / `ui_check` / `dnd_check` / `migration_check` / `future_check` / `auto_switch_check` / `trash_check` / `capture_check` / `guard_check` / `integrity_check` / `auto_backup_check` / `schedule_check` / `backup_content_check` / `backup_verify_check` / `duplicate_check` / `maintenance_check` / `scheme_import_check` 走交互链路。`future_check` 验收三个维护界面：诊断中心（设置 → 数据 → 运行诊断）、备份历史（mock 至少 2 行、往返切换）、导入中心（`__importStore.enqueue` 两条 → 串行成功 → 主题数 +2）。`trash_check` 验收回收站：删除 → 条目出现 → 恢复回列表 → 彻底删除 → 清空 → 损坏条目禁用恢复（`?mock-trash-damaged`）。`capture_check` 验收保存当前光标：`?mock-external=1` 外部改写态 → 保存并应用 → 收编为当前主题（普通态不出现入口）。`guard_check` 验收光标守护：默认关 → 开启即恢复 → 重载启动恢复 → 外部改写恢复 → 还原不抢 → 关开关不动 → 手动恢复 → 自动切换优先 → 主题被删不恢复 → 读取失败不动作。`integrity_check` 验收主题文件完整性（决策 31）：正常态行内无提示、诊断「正常」→ `?mock-broken-files=1` 行内「缺 N 个文件」→ 检查器警示条点名槽位中文名与后果 → 诊断「注意」并给出证据 → 无 JS 异常。`auto_backup_check` 验收自动备份（决策 32）：默认关 → 开启即出当天「自动」条目 → 当日去重 → 重载启动触发 → `?mock-backup-old=6` 注入旧备份后清理到保留份数且手动备份不牵连 → 关闭落盘。`schedule_check` 验收定时切换（决策 33）：默认关 → 全日窗口命中期间内主题 → 空串清空 → 还原不抢 → 跨零点窗口按当前时刻判定 → 时间段内深浅色让位 → 关掉后深浅色接管。`backup_content_check` 验收备份内容浏览与单主题恢复（决策 34）：备份历史 → 查看内容 → 已有主题禁用恢复 → 缺文件主题标出缺口（`?mock-backup-partial=1`）→ 恢复一套并提示缺口 → 列表重读并选中 → 重新打开仍显示已在库 → 无 JS 异常。`migration_check` 用浏览器 mock 注入预检失败与设置写入失败（`?mock-migrate-error` / `?mock-migrate-fail=settings`），断言确认框信息、执行期锁、进度、失败回滚与恢复默认。`maintenance_check` 验收维护工具箱（决策 35）：存储占用卡五个区域 + 总占用与「重新统计」→ 导入两条后「我的主题」点「导出全部」→ 提示「已导出 2 套主题」且列表不变 → 「清空使用记录」确认后 `recent` 清空、「最近使用」页变空。`scheme_import_check` 验收 `.theme` 光标方案导入（决策 36）：store 直导（stem 命名 + 检查器选中）→ 拖入 `.theme` 走通 → 白名单外拒绝（新文案）→ `validateDrop` 放行 `.theme`、拒绝白名单外 → `.theme` 与 `.zip` 混拖进导入中心串行成功 → 无 JS 异常。`backup_verify_check` 验收备份完整性体检（决策 37）：备份历史行内「体检」→ 完好包通过无徽标 → `?mock-backup-corrupt=1` 注入损坏报告 → 「体检损坏 N 处」徽标 + 警告 toast → 无 JS 异常。`duplicate_check` 验收主题去重诊断（决策 38）：诊断中心六项齐全 → 默认「没有内容重复的主题」→ 重扫不变 → `?mock-duplicates=1` 摘要「1 组内容重复」+ 注意徽标 → 详情点名成员与可省字节 → 无 JS 异常。`nav_check` 逐页断言**结构签名**（网格 / 表格 / 时间轴 / 设置面板、有无检查器与搜索框），页面间同构会直接失败——这是防止"切页看不出变化"回潮的那道闸。
 碰注册表的测试只写隔离键（`Software\CursorStudio.Tests\...`；自启动 / 右键菜单用各自的 `TEST_KEY`），数据根指向临时目录，不备份 / 还原用户设置；隔离键让用例可以并行，只有共享同一个键的用例才需自行串行（防中毒取回锁：`unwrap_or_else(|e| e.into_inner())`）。
 
+## 真机验证（浏览器 mock 覆盖不到的路径）
+
+`scripts/real_machine/` 下的脚本对**真实 Tauri 窗口**验证（说明见该目录 README）：
+隔离 LOCALAPPDATA 数据根 + `cargo run` + CDP 直连 `__TAURI_INTERNALS__.invoke`，
+每条消息带 15 秒超时，结束后**按 PID 结束进程**（先 `tasklist /FO CSV /NH` 取
+PID，绝不通配杀）并清理临时目录。**前置：应用未在运行**（单实例互斥会让验证
+实例退出转交）、vite 已在 1420。`verify_theme_scheme.mjs`（决策 36：UTF-16LE
+方案、`%SystemRoot%` 展开到真实系统光标、相对路径收编、真机查重成组）与
+`verify_themepack.mjs`（决策 39：`makecab.exe` 打包的 MSZIP 真实 CAB、包内
+`.theme` 映射、DisplayName 优先）。**不进 CI、不入 AGENTS 验证链**——它们碰
+真实文件系统，改动导入链路（决策 15/16/36/39 涉及的文件）后手动跑一遍。
+
 动了文档、尤其是本文件的 `§x` / `决策 N` 引用，跑 `node scripts/doc_ref_check.mjs`：指空会列出 `文件:行号` 并以退出码 1 失败（不需要 dev server）。`node scripts/design_audit.mjs` 发现违规同样以退出码 1 失败。
 
 CI 在 `.github/workflows/ci.yml`：`windows-latest` 上跑 `npm ci` → `npm run build` → `cargo test` → `cargo clippy --all-targets -- -D warnings` → `design_audit` → `doc_ref_check`。

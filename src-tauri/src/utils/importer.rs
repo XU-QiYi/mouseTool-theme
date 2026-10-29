@@ -673,10 +673,13 @@ fn import_scheme_as(
             }
         }
         if picked.is_empty() {
-            return Err(
-                "方案文件里没有可用的光标条目：引用的文件都找不到，或值都是空（系统默认）"
-                    .to_string(),
-            );
+            // 两种「空」要分开说：Windows 自带的 aero.theme 一类方案全是
+            // 空值（用系统默认光标），与引用落空是不同的问题、不同的建议
+            return Err(if parsed.slots.is_empty() {
+                "这个方案用的是系统默认光标（所有槽位值都是空），没有可收编的内容。请换一个自定义了光标的方案文件".to_string()
+            } else {
+                "方案引用的光标文件都找不到或不是 .cur/.ani 格式，没有可收编的内容。若方案来自别的机器，请把它引用的光标文件与方案放在同一目录再导入".to_string()
+            });
         }
 
         let slots = copy_slots(picked, theme_id, progress_fn)?;
@@ -1632,7 +1635,7 @@ mod tests {
     }
 
     #[test]
-    fn 方案引用全缺时报错且不残留目录() {
+    fn 方案引用全缺时报错且不残留() {
         let temp = TempDir::new("theme-scheme-missing");
         let _guard = temp.isolate_paths();
         let scheme = temp.join("ghost.theme");
@@ -1642,13 +1645,36 @@ mod tests {
         );
 
         let err = import_source_report(scheme.to_str().unwrap(), &mut |_| {}).unwrap_err();
-        assert!(err.contains("没有可用的光标条目"), "实际：{err}");
+        assert!(
+            err.contains("引用的光标文件都找不到"),
+            "引用落空要点破：{err}"
+        );
         // 半成品目录不能留下：下次启动会多一条「跳过主题目录」的警告
         let themes_root = paths::themes_dir().expect("主题根");
         let leftovers = fs::read_dir(&themes_root)
             .expect("读主题根")
             .count();
         assert_eq!(leftovers, 0, "不应残留主题目录");
+    }
+
+    #[test]
+    fn 全空方案报系统默认并给指引() {
+        // Windows 自带的 aero.theme 一类方案光标段全是空值：不是坏包，是不用换
+        let temp = TempDir::new("theme-scheme-empty");
+        let _guard = temp.isolate_paths();
+        let scheme = temp.join("aero.theme");
+        write_scheme(
+            &scheme,
+            "[Control Panel\\Cursors]\r\nArrow=\r\nWait=\r\nDefaultValue=Windows default\r\n",
+        );
+
+        let err = import_source_report(scheme.to_str().unwrap(), &mut |_| {}).unwrap_err();
+        assert!(
+            err.contains("系统默认光标") && err.contains("没有可收编的内容"),
+            "全空方案要说明是用系统默认：{err}"
+        );
+        let themes_root = paths::themes_dir().expect("主题根");
+        assert_eq!(fs::read_dir(&themes_root).expect("读主题根").count(), 0);
     }
 
     #[test]
