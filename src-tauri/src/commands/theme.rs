@@ -810,6 +810,45 @@ mod tests {
         }
     }
 
+    /// 比对失败时把两侧路径的原始值与归一值一起打出来
+    ///
+    /// 注册表存的是 `fs::canonicalize` 之后的路径，主题侧是拼接出来的普通路径，
+    /// `normalize_path` 只兜平前缀和大小写。两者若差在别的维度（重解析点展开、
+    /// 8.3 短名）只会表现为「本机绿、CI 红」，光看布尔结果定位不了，必须看到
+    /// 两台机器上各自的真实字符串。
+    fn path_diff_report(theme: &CursorTheme, current: &[(String, String)]) -> String {
+        let mut out = String::new();
+        let theme_slots: Vec<&CursorSlot> = theme
+            .cursors
+            .iter()
+            .filter(|slot| !slot.file_path.trim().is_empty())
+            .collect();
+        out.push_str(&format!(
+            "  主题「{}」非空槽位 {} 个（声明 {} 个）：\n",
+            theme.name,
+            theme_slots.len(),
+            theme.cursors.len()
+        ));
+        for slot in &theme_slots {
+            out.push_str(&format!(
+                "    {:<10} 原始={:?}\n             归一={:?}\n",
+                slot.registry_key,
+                slot.file_path,
+                normalize_path(&slot.file_path)
+            ));
+        }
+        out.push_str(&format!("  注册表非空槽位 {} 个：\n", current.len()));
+        for (key, path) in current {
+            out.push_str(&format!(
+                "    {:<10} 原始={:?}\n             归一={:?}\n",
+                key,
+                path,
+                normalize_path(path)
+            ));
+        }
+        out
+    }
+
     /// 回归测试：注册表读失败时，用户主题不该跟着消失
     ///
     /// 修之前的行为是 `read_system_schemes()?` 一错全错，用户主题读都没读。
@@ -1304,7 +1343,8 @@ mod tests {
         assert_eq!(current.len(), 2);
         assert!(
             theme_matches_current(&outcome.theme, &current),
-            "接管后注册表应与新主题一致"
+            "接管后注册表应与新主题一致\n{}",
+            path_diff_report(&outcome.theme, &current)
         );
         assert_eq!(
             outcome.recent.first().map(|entry| entry.theme_id.as_str()),
@@ -1441,7 +1481,8 @@ mod tests {
         let current = registry::read_current_slots().expect("读回注册表");
         assert!(
             theme_matches_current(&theme, &current),
-            "注册表应切到该主题"
+            "注册表应切到该主题\n{}",
+            path_diff_report(&theme, &current)
         );
         let history_path = paths::history_file().expect("解析历史文件");
         let events = history::read_events_from(&history_path).events;
