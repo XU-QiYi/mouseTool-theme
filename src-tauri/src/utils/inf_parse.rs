@@ -100,12 +100,12 @@ fn parse_text(text: &str) -> Vec<(&'static str, String)> {
 fn decode_text(bytes: &[u8]) -> String {
     if bytes.starts_with(&[0xFF, 0xFE]) {
         return utf16_to_string(
-            bytes[2..].chunks_exact(2).map(|p| u16::from_le_bytes([p[0], p[1]])),
+            bytes[2..].as_chunks::<2>().0.iter().map(|p| u16::from_le_bytes(*p)),
         );
     }
     if bytes.starts_with(&[0xFE, 0xFF]) {
         return utf16_to_string(
-            bytes[2..].chunks_exact(2).map(|p| u16::from_be_bytes([p[0], p[1]])),
+            bytes[2..].as_chunks::<2>().0.iter().map(|p| u16::from_be_bytes(*p)),
         );
     }
     let rest = bytes
