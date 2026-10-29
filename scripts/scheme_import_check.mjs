@@ -141,27 +141,41 @@ try {
   check("拖入 .theme 走通导入", dropText.includes("已导入") && dropText.includes("手工方案"), dropText);
   check("拖入后主题列表新增一条", await waitThemeCount(before + 2));
 
+  // ---- 2b. .themepack（决策 39）同一白名单与 mock 命名口径 ----
+  await evaluate(
+    `window.__themeStore.getState().importTheme("C:\\\\Downloads\\\\方案包.themepack")`,
+  );
+  const packToast = await waitToast("已导入");
+  check(
+    "导入 .themepack 走通且 stem 命名",
+    packToast.includes("已导入") && packToast.includes("方案包"),
+    packToast,
+  );
+  check("themepack 导入后主题列表新增一条", await waitThemeCount(before + 3));
+
   // ---- 3. 白名单外仍拒绝（新文案）----
   await drop(["arrow.png"]);
   const rejectText = await waitToast("只支持");
   check(
     "浏览器通路白名单外拒绝",
-    rejectText.includes("只支持 .zip 主题包或 .theme 光标方案"),
+    rejectText.includes("只支持 .zip/.themepack 主题包或 .theme 光标方案"),
     rejectText,
   );
-  // 校验函数直接断言：.theme 放行、完整路径照旧交给后端
+  // 校验函数直接断言：.theme / .themepack 放行、完整路径照旧交给后端
   const verdicts = await evaluate(
     `import('/src/hooks/useDragDropImport.ts').then((m) => ({
       themeName: m.validateDrop([{ name: "夜航.theme", path: "夜航.theme" }]),
       themePath: m.validateDrop([{ name: "夜航.theme", path: "D:\\\\Themes\\\\夜航.theme" }]),
+      packName: m.validateDrop([{ name: "夜航包.themepack", path: "夜航包.themepack" }]),
       png: m.validateDrop([{ name: "arrow.png", path: "arrow.png" }]),
     }))`,
   );
   check("validateDrop 放行 .theme 文件名", verdicts.themeName === null, String(verdicts.themeName));
   check("validateDrop 放行 .theme 完整路径", verdicts.themePath === null, String(verdicts.themePath));
+  check("validateDrop 放行 .themepack", verdicts.packName === null, String(verdicts.packName));
   check(
     "validateDrop 拒绝白名单外文件",
-    verdicts.png === "只支持 .zip 主题包或 .theme 光标方案",
+    verdicts.png === "只支持 .zip/.themepack 主题包或 .theme 光标方案",
     String(verdicts.png),
   );
 
@@ -197,7 +211,7 @@ try {
     done && jobs.every(j => j.status === "success"),
     JSON.stringify(jobs),
   );
-  check("批量导入后主题数 +2", await waitThemeCount(before + 4), `${before + 2} -> ${await themeCount()}`);
+  check("批量导入后主题数 +2", await waitThemeCount(before + 5), `${before + 3} -> ${await themeCount()}`);
   await evaluate(`window.__importStore.getState().closeCenter()`);
 
   // ---- 5. 运行期无 JS 异常 ----

@@ -14,7 +14,7 @@ interface DropItem {
   path: string;
 }
 
-const IMPORTABLE_EXT = /\.(zip|theme)$/i;
+const IMPORTABLE_EXT = /\.(zip|theme|themepack)$/i;
 
 /** 一次拖入能进队列的上限：防误拖整个下载目录把界面塞爆 */
 const MAX_DROP_ITEMS = 20;
@@ -30,8 +30,8 @@ function fileNameOf(path: string): string {
  *
  * 文件夹导入（决策 16）后，完整路径不再按扩展名拦：文件夹名可能带点
  * （「我的主题.v2」），前端也判不了路径是不是目录——zip / .theme 方案 /
- * 文件夹 / 其它文件交给后端 `import_theme` 权威校验，各自给出精准文案。
- * 只有浏览器通路（拿到的只有文件名、没有路径）维持白名单：.zip 与 .theme。
+ * .themepack / 文件夹 / 其它文件交给后端 `import_theme` 权威校验，各自给出
+ * 精准文案。只有浏览器通路（拿到的只有文件名、没有路径）维持白名单。
  * 多项（2–20 个）放行进导入中心；单项保持原导入链路。
  */
 export function validateDrop(items: DropItem[]): string | null {
@@ -42,7 +42,7 @@ export function validateDrop(items: DropItem[]): string | null {
   for (const item of items) {
     const isFullPath = /[\\/]/.test(item.path);
     if (!isFullPath && !IMPORTABLE_EXT.test(item.name)) {
-      return "只支持 .zip 主题包或 .theme 光标方案";
+      return "只支持 .zip/.themepack 主题包或 .theme 光标方案";
     }
   }
   return null;

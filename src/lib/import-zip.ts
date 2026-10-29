@@ -10,7 +10,8 @@ import { useThemeStore } from "@/stores/themeStore";
  *
  * 侧栏 / 空状态按钮（经 `useImportTheme`）与 Ctrl+O 快捷键共用这里，
  * 文件对话框的 filters、浏览器降级提示只写一遍。
- * `.zip` 主题包与 `.theme` 光标方案（决策 36）都走后端同一条 `import_theme`。
+ * `.zip` / `.themepack` 主题包与 `.theme` 光标方案（决策 36/39）
+ * 都走后端同一条 `import_theme`。
  */
 export async function pickAndImportZip(): Promise<boolean> {
   if (!inTauri) {
@@ -28,7 +29,7 @@ export async function pickAndImportZip(): Promise<boolean> {
     const selected = await open({
       multiple: false,
       directory: false,
-      filters: [{ name: "主题包 / 光标方案", extensions: ["zip", "theme"] }],
+      filters: [{ name: "主题包 / 光标方案", extensions: ["zip", "theme", "themepack"] }],
     });
     if (typeof selected === "string") {
       await useThemeStore.getState().importTheme(selected);
@@ -61,7 +62,7 @@ export async function pickAndQueueThemes(): Promise<void> {
     const selected = await open({
       multiple: true,
       directory: false,
-      filters: [{ name: "主题包 / 光标方案", extensions: ["zip", "theme"] }],
+      filters: [{ name: "主题包 / 光标方案", extensions: ["zip", "theme", "themepack"] }],
     });
     if (Array.isArray(selected) && selected.length > 0) {
       useImportStore.getState().enqueue(selected);

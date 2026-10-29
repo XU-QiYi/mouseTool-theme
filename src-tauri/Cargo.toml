@@ -27,6 +27,9 @@ winreg = "0.55"
 image = "0.25"
 base64 = "0.22"
 zip = "2"
+# .themepack 是 CAB 容器（决策 39）：cab 是纯 Rust 读取器，手写 CAB + MSZIP
+# 解档的成本与安全面都不划算，理由见决策记录「决策 39」
+cab = "0.6"
 uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
 tauri-plugin-dialog = "2"

@@ -881,6 +881,25 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 
 ---
 
+## 决策 39：`.themepack` 主题包导入——CAB 容器接入既有导入链路
+
+**结论**（2026-10-30，随「`.themepack` 主题包导入」实现）
+
+- **入口**：`import_theme` 的 `sourcePath` 分发新增第四类：`.themepack`（Windows 主题分发的官方格式，CAB 容器）。对话框 filter 与拖拽白名单同步放开；命令数保持 39。
+- **链路**：与 zip 同构——`extract_themepack` 把 CAB 解到临时目录（`cab` crate 读，`THEME_LIMITS` 全生效：50MB 总量 / 单文件 20MB / 512 条目 / 条目名白名单，声明大小先卡上限再解压），然后走同一条落盘流程；主题名取 `.themepack` 文件名 stem。
+- **`.theme` 映射升级为说明书（决策 36 的解析器复用）**：包内 / 文件夹内带 `.theme` 时，槽位按 `[Control Panel\Cursors]` 段映射，优先级仅次于 `.inf`（决策 15 的同款语义）；引用可指向包外（`%SystemRoot%` 系统光标），解析成功的直接收编，解析不出的槽位退回文件名推断。**附带一条口径收紧：被 `.inf` / `.theme` 映射认领的文件不再参与文件名推断**——映射是作者的权威声明，同一文件再被推断进别的槽位多半是巧合撞名。
+- **依赖决策（硬约束 9）**：新增 `cab = "0.6"`。理由——`.themepack` 是 CAB 容器，条目结构（CFHEADER / CFFOLDER / CFFILE）加 MSZIP 解压手写成本高，且解档是攻击面（畸形容器、解压炸弹），自研等于把 `limits.rs` 之外再造一套边界；`cab` crate 纯 Rust、无系统依赖、无常驻进程，编译进产物只增加约 100KB 量级，供应链上它是单作者维护的成熟小库（crates.io 0.6，无传递依赖膨胀）。替代方案：不支持 `.themepack`（用户得先手动解 CAB，7-Zip 才能开，体验断裂）或调系统 API（`SetupIterateCabinet` 需要 shell32 回调，且在非交互场景有对话框弹出的风险）。
+- **压缩格式边界**：Windows 自带的 `.themepack` 用 MSZIP（`cab` crate 支持）；LZX / Quantum 压缩的罕见老包不支持，报「不是有效的 .themepack（CAB）主题包」——错误可读、不静默吞。
+- **验收**：`importer.rs` 单测覆盖 `.themepack` 导入（UTF-16LE `.theme` 映射优先于推断、映射文件不被二次认领、壁纸 / 说明文件不进槽位）、方案引用缺失退回推断、非 CAB 垃圾报人话且不残留；`scheme_import_check.mjs` 增补 `.themepack` 白名单与 mock 导入步骤（16 项）；`dnd_check.mjs` 增补 `.themepack` 放行断言（18 项）。
+
+**为什么**：决策 36 只收了「裸 `.theme`」，但微软官方与主题站分发的都是 `.themepack`——`.theme` + 光标 + 壁纸打成一个 CAB。用户拿到 `.themepack` 后得手动解 CAB、再把文件夹拖进来，两步断裂且解压出来的壁纸 / 声音等无关文件全混在光标扫描里。直接收 `.themepack` 让「Windows 主题资产」这条来源线闭环：`.theme`（方案引用）→ `.themepack`（官方分装）→ zip / 文件夹（社区打包）→ 当前注册表态（收编）。
+
+**为什么走临时目录而不是流式挑选**：包里光标散在任意层级、`.theme` 映射要与文件对应，解到临时目录后整条链路（扫描、推断、落盘、清理）与 zip 完全共用，边界只写一遍；挑选式解压（只解光标条目）省的是壁纸那几 MB，代价是复制一套解析逻辑。
+
+**边界**：LZX / Quantum 压缩不支持（`cab` crate 的读取面，报错说明）；`.themepack` 里的壁纸 / 声音 / 视觉样式不做任何处理（只收光标，与本工具业务一致）；包内 `.theme` 与 `.inf` 并存时 `.inf` 优先（决策 15 的既有顺序）；文件夹里只放 `.theme` 没有光标文件仍走「没有光标文件」报错（`.theme` 映射是映射增强，独立来源是决策 36 的单文件入口）。
+
+---
+
 ## 附录 A：技术栈定格
 
 **Tauri 2 + React 19 + TypeScript + Vite + Tailwind CSS 4 + shadcn/ui（base-nova / `@base-ui/react`）+ zustand + Rust**。

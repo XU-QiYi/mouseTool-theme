@@ -345,7 +345,8 @@ export async function importTheme(
     // 让「导入 → 列表新增 → 检查器选中」这条链路在开发与自动化验收里能走通。
     // 名称取自文件名（含 zip/theme 后缀也兜得住），与后端「文件名 stem 作主题名」的口径一致
     const fileName = sourcePath.split(/[\\/]/).pop() ?? "theme.zip";
-    const name = fileName.replace(/\.(zip|theme)$/i, "") || "未命名主题";
+    const name =
+      fileName.replace(/\.(zip|theme|themepack)$/i, "") || "未命名主题";
     const sample = MOCK_THEMES.find((t) => !t.is_built_in) ?? MOCK_THEMES[0];
     const now = stamp();
     onProgress?.({

@@ -65,7 +65,7 @@ mouseTool-theme/
 │           ├── theme_paths.rs      ← 槽位路径相对/绝对转换与 theme.json 重写（决策 17）
 │           ├── registry.rs         ← SLOT_DEFS、注册表读写、SPI 刷新
 │           ├── cursor.rs           ← .cur/.ico/.ani 解析与缩放
-│           ├── importer.rs         ← zip / .theme 方案 / 文件夹导入、槽位推断（决策 15/16/36）
+│           ├── importer.rs         ← zip / .themepack / .theme 方案 / 文件夹导入、槽位推断（决策 15/16/36/39）
 │           ├── inf_export.rs       ← 导出 zip 附带的通用 .inf 安装文件（决策 13）
 │           ├── inf_parse.rs        ← 导入时解析 .inf 槽位映射（决策 15）
 │           ├── history.rs          ← 使用事件流 + 派生最近主题（含备份合并 / 版本兼容）
@@ -144,7 +144,7 @@ App.tsx
 | `get_all_themes` | — | `ThemesResult` | 只有聚合本身崩溃才 `Err`；单个来源失败走 `warnings` |
 | `get_active_state` | — | `ActiveState` | 注册表读失败返回 `Err`（前端聚焦钩子静默忽略、保留旧状态）；只比对注册表与主题清单反推当前三态，不读历史（决策 24） |
 | `get_cursor_preview` | `filePath` | `CursorPreview` | **不失败**，解析不出来返回空帧 |
-| `import_theme` | `sourcePath` | `ImportReport`（`theme` + `warnings`） | 不是 .zip / .theme / 文件夹、超限额（50MB 总量 / 20MB 单文件 / 512 条目 / 8 层，`.inf` 与光标共用额度；`.theme` 走 1MB 文本上限）、条目名不合法、无光标文件、认不出槽位（且 .inf 无映射 / 方案引用全部落空）、写盘失败；链接 / 目录联接跳过并进 `warnings`；失败清理临时目录与半成品主题目录 |
+| `import_theme` | `sourcePath` | `ImportReport`（`theme` + `warnings`） | 不是 .zip / .theme / .themepack / 文件夹、超限额（50MB 总量 / 20MB 单文件 / 512 条目 / 8 层，`.inf`/`.theme` 与光标共用额度；`.theme` 与 CAB 均走 1MB 文本上限之外各自解档）、条目名不合法、无光标文件、认不出槽位（且 .inf/.theme 无映射 / 方案引用全部落空）、写盘失败；链接 / 目录联接跳过并进 `warnings`；失败清理临时目录与半成品主题目录 |
 | `apply_theme` | `theme`（整个对象） | `ApplyOutcome` | 注册表写失败；历史写失败只进 `warning` |
 | `restore_default` | — | `void` | 清空注册表失败（清 15 槽位 + `SchemeName` + 键默认值，并清空已存在的 `Pin`/`Person` 新指针键残留，决策 24） |
 | `save_current_theme` | — | `SaveCurrentOutcome`（`theme` + `warnings` + `file_count` + `applied` + `recent` + `warning`） | 系统默认（无槽位）、当前已是已知主题、复制失败 / 超限（单文件 20MB / 总量 50MB）、写注册表或刷新失败；有槽位没抄全时只保存不自动应用；执行期取 `ops` 锁（决策 28） |
@@ -322,3 +322,4 @@ App.tsx
 | 2026-10-30 | 决策 36：`.theme` 光标方案导入——`import_theme` 分发新增第三类来源：解析 `[Control Panel\Cursors]` 段（键名与注册表槽位同名，直接映射；UTF-16LE/BE 与 UTF-8 按 BOM 识别，1MB 文本上限），`%Var%` 大小写不敏感展开后按槽位复制引用的光标文件（相对路径以方案文件目录为基准，链接 / 目录联接拒收），`[Theme] DisplayName` 作主题名（本地化引用退回文件名 stem）；引用缺失 / 非光标格式跳过并 warning、全部落空才拒绝；命令数保持 37；对话框 filter 与拖拽白名单放开 `.theme`，浏览器 mock 按 stem 命名；新增 `utils/theme_file.rs` 纯解析器，验收 `scripts/scheme_import_check.mjs` |
 | 2026-10-30 | 决策 37：备份完整性体检——新增 `verify_backup`（命令契约 37 → 38）与 `BackupVerifyReport`；流式读每个条目进 sink 触发 CRC，静默损坏当场点名（≤20 条 + 总数）；只读不取锁、结果为快照；备份历史行内「体检」按钮 + 「体检损坏 N 处」徽标（`?mock-backup-corrupt=1` 注入），验收 `scripts/backup_verify_check.mjs` |
 | 2026-10-30 | 决策 38：主题去重诊断——新增 `find_duplicate_themes`（命令契约 38 → 39）与 `DuplicateReport` / `DuplicateGroup`；槽位指纹预分组 + 组内逐字节确认，只报证实的重复，缺文件主题不参与；诊断中心第六项「重复主题」（摘要格改 3 列），首个按需命令（打开 / 重扫时跑一次、会话内快照）；`?mock-duplicates=1` 注入，验收 `scripts/duplicate_check.mjs` |
+| 2026-10-30 | 决策 39：`.themepack` 主题包导入——`import_theme` 分发新增 CAB 容器来源（命令数保持 39），新增依赖 `cab = "0.6"`（纯 Rust CAB / MSZIP 读取，硬约束 9 论证见决策记录）；解档走 `THEME_LIMITS` 全套限额后与 zip 同一条落盘链路；包内 `.theme` 升级为说明书级映射（决策 36 解析器复用，优先级仅次于 `.inf`，引用可指向包外系统光标），被映射认领的文件不再参与文件名推断；LZX / Quantum 压缩不支持（报错说明）；验收并入 `scripts/scheme_import_check.mjs`（16 项）与 `dnd_check.mjs`（18 项） |
