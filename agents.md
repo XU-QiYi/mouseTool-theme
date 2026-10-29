@@ -4,7 +4,7 @@
 > 原则：**事实以代码为准**。本文件与代码不一致时改本文件，不要改代码迁就文档；更不要把没实现的东西写成已支持。
 
 **技术栈**：Tauri 2 + React 19 + TypeScript + Vite 7 + Tailwind 4 + shadcn/ui（base-nova / `@base-ui/react`）+ zustand 5 + Rust。
-**现状**：功能已跑通，32 个 Tauri 命令全部实现并注册；除纯路径计算的 `get_data_dir` 外，I/O 命令都是 `async` + `spawn_blocking`。不是脚手架（没有 `greet` 示例）。
+**现状**：功能已跑通，34 个 Tauri 命令全部实现并注册；除纯路径计算的 `get_data_dir` 外，I/O 命令都是 `async` + `spawn_blocking`。不是脚手架（没有 `greet` 示例）。
 
 ## 先读哪份（冲突时从上往下取）
 
@@ -45,10 +45,10 @@
 - 前三页是**内容三视图**，互不重叠；设置页是**管理面板**（行为设置 + 维护锚点），不是第四个列表页。
 - 三页的选中项**各记一份**：`selection: Partial<Record<Page, string | null>>`。切页回来还是原来的上下文，又不会把别的页的选择带过来；页面上不写这个键就等于没有选中（比如将来的市场页，选中的是远程条目，不是本地主题）。设置页没有选中概念，不写这个键。
 - 切页只清搜索词，不清选中；重载只清「已经不存在的主题」，不清还在列表里的。
-- **诊断与批量导入是任务层弹窗、备份历史与回收站是「数据」子页，都不是第五个页面**（决策 23/26）：不进 `PAGE_META` / `VIEWS`，不加导航、不加设置分组。单文件导入（侧栏按钮 / Ctrl+O / 拖 1 个）保持原链路不动；拖 2–20 个进 `importStore` 队列，串行执行、失败可单独重试。外部改写态下「保存并应用」只出现在侧栏当前使用卡，也不新开页面（决策 28）。
+- **诊断、批量导入与备份内容都是任务层弹窗；备份历史与回收站是「数据」子页**（决策 23/26/34）：不进 `PAGE_META` / `VIEWS`，不加导航、不加设置分组（备份内容从备份历史的行内「查看内容」打开）。单文件导入（侧栏按钮 / Ctrl+O / 拖 1 个）保持原链路不动；拖 2–20 个进 `importStore` 队列，串行执行、失败可单独重试。外部改写态下「保存并应用」只出现在侧栏当前使用卡，也不新开页面（决策 28）。
 - **加页面只改两处**：`lib/pages.ts` 的 `PAGE_META` 加一条（导航文案/页头文案/搜索框/计数口径/有无检查器）+ `App.tsx` 的 `VIEWS` 加一行视图组件。两处都是 `Record<Page, …>`，漏了编译不过 —— 加了页面却忘了视图分支导致中间区域白屏的坑已经堵上。**加设置分组同规**：`lib/settings-sections.ts` + `SettingsView.tsx` 的 `SECTIONS`。
 - **设置页 `dependsOnThemes: false`**：整体读取失败时照常渲染——「打开数据目录」正是加载失败时的排查入口，不能被 LoadErrorState 顶掉。
-- **设置五分组**（决策 14）：通用 = 应用主题三态（从侧栏迁入）/ 跟随系统切换主题（浅/深配对，决策 25）/ 定时切换主题（时间段内/外配对，默认关闭，决策 33）/ 光标守护（启动或系统改写后自动恢复上次主题，默认关闭，决策 29）/ 开机自启动 / 关闭行为（直接退出·最小化到托盘）/ 主题存储目录 / 自动检查更新；快捷键 = 应用内快捷键一览 + 开关；数据 = 数据目录 + 数据备份（导出/合并恢复）+ 自动备份（每天一份进备份历史，默认关闭，决策 32）+ 回收站（恢复 / 彻底删除 / 清空，决策 26）+ 诊断信息；系统集成 = 鼠标属性面板直达 + 右键菜单开关（试点）；关于 = 版本 / 开源地址 / 检查更新（GitHub Releases）。进设置后侧栏整体切成「返回 + 分组」，页头跟随分组标题。
+- **设置五分组**（决策 14）：通用 = 应用主题三态（从侧栏迁入）/ 跟随系统切换主题（浅/深配对，决策 25）/ 定时切换主题（时间段内/外配对，默认关闭，决策 33）/ 光标守护（启动或系统改写后自动恢复上次主题，默认关闭，决策 29）/ 开机自启动 / 关闭行为（直接退出·最小化到托盘）/ 主题存储目录 / 自动检查更新；快捷键 = 应用内快捷键一览 + 开关；数据 = 数据目录 + 数据备份（导出/合并恢复）+ 自动备份（每天一份进备份历史，默认关闭，决策 32）+ 备份历史（含内容浏览与单主题恢复，决策 34）+ 回收站（恢复 / 彻底删除 / 清空，决策 26）+ 诊断信息；系统集成 = 鼠标属性面板直达 + 右键菜单开关（试点）；关于 = 版本 / 开源地址 / 检查更新（GitHub Releases）。进设置后侧栏整体切成「返回 + 分组」，页头跟随分组标题。
 - 「主题图库」包含「我的主题」的集合——重复是**任务不同**（逛 vs 管），不是数据不同；别为了去重把两页合成一个列表加过滤条件，那正是重构前的毛病。
 - 改名只做在 `ThemeNameField` 一处（检查器头部）；表格行内的操作只有导出与删除。槽位统计口径在 `lib/slots.ts`（`SYSTEM_SLOT_TOTAL = 15` 是 `SLOT_DEFS` 的镜像，后端改槽位必须同步改它）。
 - **文件缺口**（声明了的槽位文件读不到，决策 31）只在三处提示：「我的主题」槽位列「缺 N 个文件」、检查器头部警示条（点名槽位中文名 + 「应用后写成空」的后果）、诊断中心第五项「文件完整性」；图库卡与最近使用不背管理信息。缺口**只展示不拦截**——应用 / 导出等命令行为不变，别给它加确认弹窗或自动修复。
@@ -60,8 +60,8 @@
 **① 槽位 15 个，顺序固定**
 唯一来源 `utils/registry.rs::SLOT_DEFS`，完整表见决策记录「决策 3」。键名别照系统设置里的显示名猜：是 `Crosshair`（不是 Cross），另有 `NWPen`、`UpArrow`。短名（`no` / `ns` / `we` / `up`）只能做**精确匹配**，放进包含匹配会撞 `normal`、`upload`。
 
-**② 32 个命令**
-主题类 `get_all_themes` / `get_active_state` / `get_cursor_preview` / `import_theme` / `apply_theme` / `restore_default` / `save_current_theme` / `delete_theme` / `rename_theme` / `export_theme`；回收站 `list_trash` / `restore_from_trash` / `delete_from_trash` / `empty_trash`；数据与系统类 `get_data_dir` / `open_data_dir` / `get_windows_version` / `open_mouse_panel` / `get_zip_menu_registered` / `set_zip_menu` / `take_pending_import`；设置类 `get_settings` / `update_settings` / `get_autostart` / `set_autostart` / `preview_themes_dir` / `set_themes_dir` / `export_backup` / `import_backup` / `list_backups` / `delete_backup` / `run_auto_backup`。契约见架构设计 §5。几条容易记错：
+**② 34 个命令**
+主题类 `get_all_themes` / `get_active_state` / `get_cursor_preview` / `import_theme` / `apply_theme` / `restore_default` / `save_current_theme` / `delete_theme` / `rename_theme` / `export_theme`；回收站 `list_trash` / `restore_from_trash` / `delete_from_trash` / `empty_trash`；数据与系统类 `get_data_dir` / `open_data_dir` / `get_windows_version` / `open_mouse_panel` / `get_zip_menu_registered` / `set_zip_menu` / `take_pending_import`；设置类 `get_settings` / `update_settings` / `get_autostart` / `set_autostart` / `preview_themes_dir` / `set_themes_dir` / `export_backup` / `import_backup` / `list_backups` / `list_backup_themes` / `restore_theme_from_backup` / `delete_backup` / `run_auto_backup`。契约见架构设计 §5。几条容易记错：
 - `apply_theme` / `export_theme` 收**整个 `CursorTheme`**，不是 ID——系统方案只存在于注册表，没有磁盘目录，只给 ID 拿不到它的文件。
 - `import_theme` 收 `sourcePath`（**zip 或整个主题文件夹**，决策 16，后端权威校验），返回 `{ theme, warnings }`——目录里的链接 / 目录联接会被跳过并说明原因；包内带 `.inf` 时槽位按说明书映射、**优先于文件名推断**，没带或解析失败退回文件名推断、不缺槽位（决策 15，`utils/inf_parse.rs`），`.inf` 与光标文件共用 `ScanBudget`。
 - `get_active_state` 是聚焦用的轻量重查（决策 24）：只读注册表 + 主题清单比对，不读历史、不取 `ops` 锁；失败直接 `Err`，前端静默保留旧状态。`get_all_themes` 的 `ThemesResult` 相应多出 `current_slots_filled` / `active_external`（槽位非空但匹配不到任何主题 = 被系统设置改写）与 `file_gaps`（文件缺口清单，决策 31：托盘与聚焦重查不做这一步）。
@@ -69,10 +69,11 @@
 - `delete_theme` 是**软删除**（决策 26）：整目录移入 `trash\`，返回 `{ auto_purged, warning }`；回收站上限 20 套 / 512 MB，超出自动清最早。`restore_from_trash` 会复核快照 / `theme.json` / 目标目录（同 ID 已存在就拒绝），`delete_from_trash` / `empty_trash` 才真正删文件；损坏条目列出但不可恢复。`list_trash` 返回条目 + 限额，前端不硬编码。
 - `save_current_theme` 无入参（决策 28）：只在当前光标被外部改写时有意义；把注册表当前非空槽位复制为我的主题，全部抄全才自动应用，**有槽位没抄全绝不自动应用**（否则会把那些非空槽位写成空）；当前已是已知主题时返回「无需再保存」。返回 `SaveCurrentOutcome`，前端用 `applied` 区分「已保存并应用」与「只保存」。
 - `export_backup` 的 `destPath` 可空：空 = 写入数据目录 backups 目录自动命名（进「备份历史」），传路径 = 导出到任意位置（不受历史管理）；返回含 `saved_path` / `bytes`。`list_backups` 只读 zip 中央目录列应用内备份（时间倒序、上限 200），`kind` 按文件名前缀判定 auto / manual（决策 32），`delete_backup` 只收文件名、拒绝越出备份目录。`run_auto_backup` 是自动备份的命令（决策 32）：收 `keep`，当日去重、按 keep 清理过期 auto 备份（手动备份不碰）、与手动备份共用 ops 锁且不发 `backup-progress`；前端 `lib/auto-backup.ts` 只管触发。
+- `list_backup_themes` 只读备份内容（中央目录 + theme.json，不解压光标），返回能完整恢复的主题与 `warnings`；`restore_theme_from_backup` 收 `zipPath` + `themeId`，**只追加一套主题**：目标 ID 已存在直接拒绝、不合并使用记录、不碰其它主题（决策 34）。恢复的是完整主题文件，落盘仍写相对路径，旧备份的绝对路径按主题 id / 文件名重新映射；失败清理本次新建目录，执行期取 `ops` 锁并刷新托盘。
 - `get_data_dir` 只读不建目录；`open_data_dir` 才 `ensure_dir` + 调 opener。前端**禁止**用 `localDataDir()` 自己拼 `CursorStudio`（硬约束 1）。
 - `take_pending_import` 领取即删除（右键菜单 `--import` 转交通路），App 在启动与聚焦两个时机调用；`take_pending_import` 损坏返回 null 不报错。
 - `update_settings` 是**补丁语义**（只传要改的字段）；关闭行为变更会同步托盘有无。`preview_themes_dir` 只校验与统计、不碰文件；`set_themes_dir` 返回 `{ settings, report }`，执行中通过 `themes-dir-progress` 事件报阶段，整体成功前不改设置；`import_backup` 是合并恢复，不覆盖已有。
-- 除纯路径计算的 `get_data_dir` 外，所有命令都是 `async` + `spawn_blocking`；`import_theme` / `export_backup` / `import_backup` / `run_auto_backup` / `set_themes_dir` / 删除主题 / 回收站恢复 / 彻底删除 / 清空 / 保存当前光标额外取 `ops::try_begin` 锁，并分别发 `import-progress` / `backup-progress` / `themes-dir-progress`（自动备份不发事件，避免顶掉手动备份的进度展示）。第二个重操作会立刻失败，不要改成排队。
+- 除纯路径计算的 `get_data_dir` 外，所有命令都是 `async` + `spawn_blocking`；`import_theme` / `export_backup` / `import_backup` / `restore_theme_from_backup` / `run_auto_backup` / `set_themes_dir` / 删除主题 / 回收站恢复 / 彻底删除 / 清空 / 保存当前光标额外取 `ops::try_begin` 锁，并分别发 `import-progress` / `backup-progress` / `themes-dir-progress`（自动备份与单主题恢复不发事件）。第二个重操作会立刻失败，不要改成排队。
 
 **③ 注册表写入范围**
 只写 `Cursors` 下 15 个槽位值 + `SchemeName`（+ 键默认值），未提供的槽位写**空字符串**；「还原默认」会顺带清空 Win11 新指针键 `Pin` / `Person` 的残留（值已存在才清，不凭空创建，决策 24）。**不写** `Cursors\Schemes`（那是系统"已保存方案"列表，写进去会让用户的下拉框多出条目；经典面板对本应用主题恒显「(无)」就是这个原因，别当 bug 修）。光标文件留在 `%LOCALAPPDATA%` 原地，**不复制进 `C:\Windows\Cursors`**。
@@ -109,6 +110,7 @@
 26. 回收站与主题库分开：条目目录名是**回收站条目 UUID**（不是主题 ID），命令只收规范 UUID；恢复前复核快照、`theme.json` 与当前主题目录；`trash\` 不参与主题扫描、备份与迁移（决策 26）。
 27. 保存当前光标是**复制**：只读注册表当前值、复制到新的主题目录并写相对路径，不改系统光标目录、不写 `Schemes`；有槽位没抄全时不得自动应用（否则会把没抄到的非空槽位写成空字符串）（决策 28）。
 28. 光标守护只事件驱动：默认关闭；启动检查要等设置与主题列表就绪且注册表读取成功；运行期只处理 `active_external`，不抢已知主题与系统默认；目标必须仍在主题库里；复用 `applyTheme`，不轮询注册表、不写 `Schemes`、不做后台服务（决策 29）。
+29. 备份单主题恢复只做追加：目标 ID 已存在必须拒绝且不碰原目录；只解压请求的那套主题，不合并使用记录、不改设置；失败清理本次新建目录；旧绝对路径必须按主题 id / 文件名映射后再落相对路径（决策 34）。
 
 ---
 
@@ -141,10 +143,10 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy CARGO_HTTP_PROXY="
 界面/动效脚本跑在浏览器里、走 mock，不写系统光标；**必须与 dev server 同一条命令**：
 
 ```powershell
-node scripts/dev_bg.mjs start; node scripts/nav_check.mjs; node scripts/design_check.mjs; node scripts/motion_check.mjs; node scripts/migration_check.mjs; node scripts/recent_check.mjs; node scripts/ui_check.mjs; node scripts/dnd_check.mjs; node scripts/future_check.mjs; node scripts/auto_switch_check.mjs; node scripts/trash_check.mjs; node scripts/capture_check.mjs; node scripts/guard_check.mjs; node scripts/integrity_check.mjs; node scripts/auto_backup_check.mjs; node scripts/schedule_check.mjs; node scripts/dev_bg.mjs stop
+node scripts/dev_bg.mjs start; node scripts/nav_check.mjs; node scripts/design_check.mjs; node scripts/motion_check.mjs; node scripts/migration_check.mjs; node scripts/recent_check.mjs; node scripts/ui_check.mjs; node scripts/dnd_check.mjs; node scripts/future_check.mjs; node scripts/auto_switch_check.mjs; node scripts/trash_check.mjs; node scripts/capture_check.mjs; node scripts/guard_check.mjs; node scripts/integrity_check.mjs; node scripts/auto_backup_check.mjs; node scripts/schedule_check.mjs; node scripts/backup_content_check.mjs; node scripts/dev_bg.mjs stop
 ```
 
-`design_audit.mjs` / `ui_ratio.mjs` 只扫源码；`nav_check` / `design_check` / `recent_check` / `ui_check` / `dnd_check` / `migration_check` / `future_check` / `auto_switch_check` / `trash_check` / `capture_check` / `guard_check` / `integrity_check` / `auto_backup_check` / `schedule_check` 走交互链路。`future_check` 验收三个维护界面：诊断中心（设置 → 数据 → 运行诊断）、备份历史（mock 至少 2 行、往返切换）、导入中心（`__importStore.enqueue` 两条 → 串行成功 → 主题数 +2）。`trash_check` 验收回收站：删除 → 条目出现 → 恢复回列表 → 彻底删除 → 清空 → 损坏条目禁用恢复（`?mock-trash-damaged`）。`capture_check` 验收保存当前光标：`?mock-external=1` 外部改写态 → 保存并应用 → 收编为当前主题（普通态不出现入口）。`guard_check` 验收光标守护：默认关 → 开启即恢复 → 重载启动恢复 → 外部改写恢复 → 还原不抢 → 关开关不动 → 手动恢复 → 自动切换优先 → 主题被删不恢复 → 读取失败不动作。`integrity_check` 验收主题文件完整性（决策 31）：正常态行内无提示、诊断「正常」→ `?mock-broken-files=1` 行内「缺 N 个文件」→ 检查器警示条点名槽位中文名与后果 → 诊断「注意」并给出证据 → 无 JS 异常。`auto_backup_check` 验收自动备份（决策 32）：默认关 → 开启即出当天「自动」条目 → 当日去重 → 重载启动触发 → `?mock-backup-old=6` 注入旧备份后清理到保留份数且手动备份不牵连 → 关闭落盘。`schedule_check` 验收定时切换（决策 33）：默认关 → 全日窗口命中期间内主题 → 空串清空 → 还原不抢 → 跨零点窗口按当前时刻判定 → 时间段内深浅色让位 → 关掉后深浅色接管。`migration_check` 用浏览器 mock 注入预检失败与设置写入失败（`?mock-migrate-error` / `?mock-migrate-fail=settings`），断言确认框信息、执行期锁、进度、失败回滚与恢复默认。`nav_check` 逐页断言**结构签名**（网格 / 表格 / 时间轴 / 设置面板、有无检查器与搜索框），页面间同构会直接失败——这是防止"切页看不出变化"回潮的那道闸。
+`design_audit.mjs` / `ui_ratio.mjs` 只扫源码；`nav_check` / `design_check` / `recent_check` / `ui_check` / `dnd_check` / `migration_check` / `future_check` / `auto_switch_check` / `trash_check` / `capture_check` / `guard_check` / `integrity_check` / `auto_backup_check` / `schedule_check` / `backup_content_check` 走交互链路。`future_check` 验收三个维护界面：诊断中心（设置 → 数据 → 运行诊断）、备份历史（mock 至少 2 行、往返切换）、导入中心（`__importStore.enqueue` 两条 → 串行成功 → 主题数 +2）。`trash_check` 验收回收站：删除 → 条目出现 → 恢复回列表 → 彻底删除 → 清空 → 损坏条目禁用恢复（`?mock-trash-damaged`）。`capture_check` 验收保存当前光标：`?mock-external=1` 外部改写态 → 保存并应用 → 收编为当前主题（普通态不出现入口）。`guard_check` 验收光标守护：默认关 → 开启即恢复 → 重载启动恢复 → 外部改写恢复 → 还原不抢 → 关开关不动 → 手动恢复 → 自动切换优先 → 主题被删不恢复 → 读取失败不动作。`integrity_check` 验收主题文件完整性（决策 31）：正常态行内无提示、诊断「正常」→ `?mock-broken-files=1` 行内「缺 N 个文件」→ 检查器警示条点名槽位中文名与后果 → 诊断「注意」并给出证据 → 无 JS 异常。`auto_backup_check` 验收自动备份（决策 32）：默认关 → 开启即出当天「自动」条目 → 当日去重 → 重载启动触发 → `?mock-backup-old=6` 注入旧备份后清理到保留份数且手动备份不牵连 → 关闭落盘。`schedule_check` 验收定时切换（决策 33）：默认关 → 全日窗口命中期间内主题 → 空串清空 → 还原不抢 → 跨零点窗口按当前时刻判定 → 时间段内深浅色让位 → 关掉后深浅色接管。`backup_content_check` 验收备份内容浏览与单主题恢复（决策 34）：备份历史 → 查看内容 → 已有主题禁用恢复 → 恢复一套 → 列表重读并选中 → 重新打开仍显示已在库 → 无 JS 异常。`migration_check` 用浏览器 mock 注入预检失败与设置写入失败（`?mock-migrate-error` / `?mock-migrate-fail=settings`），断言确认框信息、执行期锁、进度、失败回滚与恢复默认。`nav_check` 逐页断言**结构签名**（网格 / 表格 / 时间轴 / 设置面板、有无检查器与搜索框），页面间同构会直接失败——这是防止"切页看不出变化"回潮的那道闸。
 碰注册表的测试只写隔离键（`Software\CursorStudio.Tests\...`；自启动 / 右键菜单用各自的 `TEST_KEY`），数据根指向临时目录，不备份 / 还原用户设置；隔离键让用例可以并行，只有共享同一个键的用例才需自行串行（防中毒取回锁：`unwrap_or_else(|e| e.into_inner())`）。
 
 动了文档、尤其是本文件的 `§x` / `决策 N` 引用，跑 `node scripts/doc_ref_check.mjs`：指空会列出 `文件:行号` 并以退出码 1 失败（不需要 dev server）。`node scripts/design_audit.mjs` 发现违规同样以退出码 1 失败。

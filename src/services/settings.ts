@@ -1,8 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-import { inTauri, type TaskProgress } from "@/services/theme";
-import { MOCK_THEMES } from "@/services/mock";
+import { addMockTheme, inTauri, type TaskProgress } from "@/services/theme";
+import { MOCK_ARCHIVED_THEMES, MOCK_THEMES } from "@/services/mock";
+import type { CursorTheme } from "@/types/theme";
 
 /**
  * 行为设置的 Rust 命令封装
@@ -400,6 +401,58 @@ export interface BackupEntry {
   error: string | null;
 }
 
+/** 备份里的一套主题摘要（`list_backup_themes`，只读，不解压光标） */
+export interface BackupThemeEntry {
+  id: string;
+  name: string;
+  description: string;
+  created_at: string;
+  updated_at: string;
+  slots: number;
+  /** 这套主题在包里的条目数（含 theme.json） */
+  files: number;
+  /** 这套主题在包里的解压后总字节数（按中央目录声明值） */
+  bytes: number;
+}
+
+/** `list_backup_themes` 的返回值 */
+export interface BackupThemeListing {
+  themes: BackupThemeEntry[];
+  /** 备份里被跳过或损坏的主题说明 */
+  warnings: string[];
+}
+
+/** `restore_theme_from_backup` 的返回值 */
+export interface RestoreBackupThemeOutcome {
+  /** 刚落盘的主题，槽位路径是运行时绝对路径 */
+  theme: CursorTheme;
+  /** 路径改写 / 槽位清洗等非致命提示 */
+  warnings: string[];
+}
+
+/**
+ * 只读备份内容：列出包里能完整恢复的主题
+ *
+ * 只读中央目录与 theme.json，不解压光标；用于「备份历史 → 内容」弹窗。
+ */
+export function listBackupThemes(path: string): Promise<BackupThemeListing> {
+  if (!inTauri) return Promise.resolve(mockBackupContent());
+  return invoke<BackupThemeListing>("list_backup_themes", { path });
+}
+
+/**
+ * 从备份里恢复一套主题（追加语义）
+ *
+ * 目标 ID 已存在时后端拒绝；不合并使用记录，也不影响备份里的其它主题。
+ */
+export function restoreThemeFromBackup(
+  zipPath: string,
+  themeId: string,
+): Promise<RestoreBackupThemeOutcome> {
+  if (!inTauri) return mockRestoreThemeFromBackup(themeId);
+  return invoke<RestoreBackupThemeOutcome>("restore_theme_from_backup", { zipPath, themeId });
+}
+
 /**
  * 导出全部主题与使用记录为备份 zip；进度来自 `backup-progress` 事件
  *
@@ -519,6 +572,36 @@ let mockBackups: BackupEntry[] = [
     error: null,
   },
 ];
+
+/** 浏览器里的备份内容：一套主题库里已有的（用于「已在主题库」）+ 一套只在备份里的 */
+function mockBackupContent(): BackupThemeListing {
+  const local = MOCK_THEMES.find((theme) => !theme.is_built_in);
+  const themes = [...(local ? [local] : []), ...MOCK_ARCHIVED_THEMES].map((theme) => ({
+    id: theme.id,
+    name: theme.name,
+    description: theme.description,
+    created_at: theme.created_at,
+    updated_at: theme.updated_at,
+    slots: theme.cursors.length,
+    files: theme.cursors.length + 1,
+    bytes: theme.cursors.length * 4096 + 512,
+  }));
+  return { themes, warnings: [] };
+}
+
+function mockRestoreThemeFromBackup(themeId: string): Promise<RestoreBackupThemeOutcome> {
+  const source = MOCK_ARCHIVED_THEMES.find((theme) => theme.id === themeId);
+  if (!source) {
+    return Promise.reject(
+      new Error("备份里没有这套主题，或它的 theme.json 已损坏（模拟）"),
+    );
+  }
+  const theme = { ...source, cursors: source.cursors.map((slot) => ({ ...slot })) };
+  if (!addMockTheme(theme)) {
+    return Promise.reject(new Error("主题库里已有同 ID 的主题，无需从备份恢复（模拟）"));
+  }
+  return Promise.resolve({ theme, warnings: [] });
+}
 
 function mockStamp(offsetMinutes = 0): string {
   const now = new Date(Date.now() - offsetMinutes * 60_000);

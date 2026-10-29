@@ -56,6 +56,20 @@ let devRecent: HistoryEntry[] = [...MOCK_RECENT];
 let devThemes: CursorTheme[] = [];
 
 /**
+ * 仅开发模式：备份恢复 mock 把主题补进内存主题库
+ *
+ * 真机上由 Rust 落盘后 `loadThemes` 读回；这里保持同样的「恢复 → 重读列表」
+ * 语义，避免备份弹窗只能靠本地状态假装成功。已存在的 ID 不重复加入。
+ */
+export function addMockTheme(theme: CursorTheme): boolean {
+  if (inTauri) return false;
+  if (MOCK_THEMES.some((item) => item.id === theme.id)) return false;
+  if (devThemes.some((item) => item.id === theme.id)) return false;
+  devThemes = [theme, ...devThemes];
+  return true;
+}
+
+/**
  * 浏览器里模拟的「当前使用」状态（决策 24）
  *
  * 真机上它由注册表反推；mock 里由 apply / restore 维护，

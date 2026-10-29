@@ -3,7 +3,8 @@ pub mod models;
 pub mod utils;
 
 use commands::backup::{
-    delete_backup, export_backup, import_backup, list_backups, run_auto_backup,
+    delete_backup, export_backup, import_backup, list_backup_themes, list_backups,
+    restore_theme_from_backup, run_auto_backup,
 };
 use commands::cursor::get_cursor_preview;
 use commands::data::{get_data_dir, open_data_dir};
@@ -73,6 +74,8 @@ pub fn run() {
             export_backup,
             import_backup,
             list_backups,
+            list_backup_themes,
+            restore_theme_from_backup,
             delete_backup,
             run_auto_backup,
             list_trash,
