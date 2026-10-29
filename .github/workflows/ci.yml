@@ -27,8 +27,15 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      # 工具链钉到具体版本，不用 @stable。下面 clippy 的口径是「警告基线为零」，
+      # 而 @stable 会随 Rust 发版漂移，于是 CI 红不红取决于哪天跑的、撞上哪个
+      # clippy，而不是这次改了什么 —— 2026-10-29 一个新 lint
+      # (chunks_exact_to_as_chunks) 就把 5 处早就在库里的代码全打成红，
+      # 把在途 PR 白白拦下。升级时主动改这里，一次把新 lint 结清。
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.1
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -41,7 +48,8 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
-      # clippy 警告基线是零：新 lint 引入的警告会在这里直接拦下
+      # clippy 警告基线是零：新 lint 仍然会拦，但因为工具链钉死了，只会在
+      # 主动升级上面那个版本时集中冒出来，不会挑在途 PR 动手的时候冒
       - name: Clippy deny warnings
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
