@@ -36,6 +36,12 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.99.1
+          # 必须显式声明 clippy：这个 action 用 `rustup toolchain install --profile
+          # minimal` 装工具链，minimal 不含 clippy。之前 @stable 能直接跑，是因为
+          # runner 镜像预装了带 clippy 的 stable（日志里是 "unchanged"，复用现成的）；
+          # 一旦钉成具体版本就得自己拉组件，否则下面那步会报
+          # "'cargo-clippy.exe' is not installed for the toolchain"。
+          components: clippy
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
