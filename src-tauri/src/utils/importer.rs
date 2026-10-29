@@ -483,6 +483,12 @@ fn extract_themepack(
     let mut cabinet = cab::Cabinet::new(file)
         .map_err(|err| format!("这不是有效的 .themepack（CAB）主题包（{err}）"))?;
 
+    // 压缩格式先卡一遍：LZX / Quantum 的文件夹在读第一个条目时才解压，
+    // 提前检查能在动任何文件之前给出「怎么办」说得清的错误（决策 39 边界）
+    for folder in cabinet.folder_entries() {
+        ensure_supported_compression(folder.compression_type())?;
+    }
+
     // 条目清单先取全（不可变借用阶段），再逐个读内容
     let entries: Vec<(String, u32)> = cabinet
         .folder_entries()
@@ -699,6 +705,17 @@ fn import_scheme_as(
     })()
     .map_err(|err| discard_partial(theme_id, err));
     outcome.map(|theme| ImportReport { theme, warnings })
+}
+
+/// 压缩格式白名单：`cab` crate 只能解 None / MSZIP；LZX / Quantum（老
+/// Windows 更新补丁常用的压缩）不支持，提前给出带出路的错误
+fn ensure_supported_compression(ctype: cab::CompressionType) -> Result<(), String> {
+    match ctype {
+        cab::CompressionType::None | cab::CompressionType::MsZip => Ok(()),
+        cab::CompressionType::Quantum(..) | cab::CompressionType::Lzx(..) => Err(
+            "这份 .themepack 用了 LZX / Quantum 压缩，暂不支持。请先用 7-Zip 等工具解包，把解出的文件夹整个拖进窗口导入".to_string(),
+        ),
+    }
 }
 
 /// 展开方案路径里的 `%Var%` 环境变量（大小写不敏感；找不到的变量原样保留）
@@ -1718,6 +1735,22 @@ mod tests {
         assert!(kept.contains("%CursorStudioNoSuchVar9%"), "展不开的变量原样保留：{kept}");
         // 展不开就解析不出文件：不给路径碰巧成立的机会
         assert_eq!(resolve_scheme_file("%CursorStudioNoSuchVar9%\\a.cur", Path::new(".")), None);
+    }
+
+    #[test]
+    fn 压缩格式白名单放行_mszip_拦下_lzx() {
+        assert!(ensure_supported_compression(cab::CompressionType::None).is_ok());
+        assert!(ensure_supported_compression(cab::CompressionType::MsZip).is_ok());
+
+        let err = ensure_supported_compression(cab::CompressionType::Lzx(cab::WindowSize::KB64))
+            .expect_err("LZX 应被拦下");
+        assert!(
+            err.contains("LZX") && err.contains("7-Zip"),
+            "要给出解包出路：{err}"
+        );
+        let err = ensure_supported_compression(cab::CompressionType::Quantum(1, 1))
+            .expect_err("Quantum 应被拦下");
+        assert!(err.contains("LZX / Quantum"), "{err}");
     }
 
     #[test]
