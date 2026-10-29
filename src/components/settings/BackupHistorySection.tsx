@@ -113,7 +113,8 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
     }
   };
 
-  // 从文件恢复：选任意备份 zip（不限于应用内目录），确认后走合并恢复
+  // 从文件恢复：选任意备份 zip（不限于应用内目录），先看内容再决定
+  // 单套恢复（决策 42：内容弹窗）或整包合并（内容弹窗里转确认框）
   const pickRestoreFile = async () => {
     if (!inTauri) {
       toast.info("开发模式无法恢复", "文件选择需要桌面环境，请用 npm run tauri dev 启动");
@@ -126,7 +127,7 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
         filters: [{ name: "备份包", extensions: ["zip"] }],
       });
       if (typeof selected === "string") {
-        setPendingRestore({
+        setContentEntry({
           file_name: selected.replace(/^.*[\\/]/, ""),
           path: selected,
           created_at: "",
@@ -416,7 +417,15 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
         这里只列出应用自己生成的备份（数据目录 backups\）；「导出到…」保存到其它位置的备份不在此列。行内「查看内容」可只恢复其中一套主题，不影响其它内容。
       </p>
 
-      <BackupContentDialog entry={contentEntry} onClose={() => setContentEntry(null)} />
+      <BackupContentDialog
+        entry={contentEntry}
+        onClose={() => setContentEntry(null)}
+        // 内容弹窗里的整包入口：转交既有合并确认框（决策 42）
+        onMergeRestore={(entry) => {
+          setContentEntry(null);
+          setPendingRestore(entry);
+        }}
+      />
 
       {/* 恢复确认：沿用合并语义说明 */}
       <AlertDialog

@@ -26,6 +26,11 @@ import { useThemeStore } from "@/stores/themeStore";
 interface BackupContentDialogProps {
   entry: BackupEntry | null;
   onClose: () => void;
+  /**
+   * 整包合并恢复的入口（决策 42）：外部「从文件恢复」的伪条目也会打开本弹窗，
+   * 看完内容后可以一键转去整包合并确认框；不传 = 不显示该按钮（内部行为）
+   */
+  onMergeRestore?: (entry: BackupEntry) => void;
 }
 
 /**
@@ -35,7 +40,7 @@ interface BackupContentDialogProps {
  * 也不碰主题库里已有的同 ID 主题（决策 34）。列表只读 theme.json 与
  * 中央目录，不预览光标——那需要解压整套主题，代价与风险都不该压在浏览上。
  */
-export function BackupContentDialog({ entry, onClose }: BackupContentDialogProps) {
+export function BackupContentDialog({ entry, onClose, onMergeRestore }: BackupContentDialogProps) {
   const themes = useThemeStore((s) => s.themes);
   const loadThemes = useThemeStore((s) => s.loadThemes);
   const entryPath = entry?.path ?? null;
@@ -300,9 +305,22 @@ export function BackupContentDialog({ entry, onClose }: BackupContentDialogProps
 
           <div className="mt-4 flex items-center justify-between gap-3 border-t pt-3">
             <p className="text-2xs text-muted-foreground">只读取主题信息，不解压光标文件</p>
-            <Button size="sm" variant="ghost" onClick={close} disabled={busy}>
-              关闭
-            </Button>
+            <span className="flex items-center gap-2">
+              {onMergeRestore && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => entry && onMergeRestore(entry)}
+                  disabled={busy}
+                  title="补回备份里的全部主题与使用记录（本地已有的同 ID 主题整套跳过）"
+                >
+                  整包合并恢复…
+                </Button>
+              )}
+              <Button size="sm" variant="ghost" onClick={close} disabled={busy}>
+                关闭
+              </Button>
+            </span>
           </div>
         </DialogContent>
       )}

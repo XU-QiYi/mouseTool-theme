@@ -238,6 +238,27 @@ try {
       `document.querySelector('[data-backup-theme-row="${restoreId}"]')?.getAttribute("data-backup-theme-state") ?? null`,
     );
     check("重新打开后恢复过的主题仍显示已在库", reopened && reopenedState === "local", String(reopenedState));
+
+    // ---- 决策 42：内容弹窗可转交整包合并确认框 ----
+    const mergeBtn = await evaluate(`(() => {
+      const btn = [...document.querySelectorAll("[data-backup-content] button") ?? []]
+        .find(b => b.textContent.includes("整包合并恢复"));
+      btn?.click();
+      return Boolean(btn);
+    })()`);
+    await sleep(400);
+    const mergeConfirm = await evaluate(
+      `Boolean(document.querySelector("[data-restore-source]")) && !Boolean(document.querySelector("[data-backup-content]"))`,
+    );
+    check("内容弹窗提供「整包合并恢复」转交入口", mergeBtn);
+    check("转交后打开合并确认框且内容弹窗关闭", mergeConfirm);
+    const mergeCancelled = await evaluate(`(() => {
+      const btn = [...document.querySelectorAll("button") ?? []].find(b => b.textContent.trim() === "取消");
+      btn?.click();
+      return Boolean(btn);
+    })()`);
+    await sleep(300);
+    check("取消合并确认框收起", mergeCancelled && !(await evaluate(`Boolean(document.querySelector("[data-restore-source]"))`)));
   }
 
   check("运行期无 JS 异常", pageErrors.length === 0, pageErrors.join(" | ").slice(0, 300));
