@@ -99,7 +99,8 @@ pub async fn set_zip_menu(register: bool) -> Result<(), String> {
     .map_err(|err| format!("右键菜单任务异常退出（{err}）"))?
 }
 
-/// 领取待导入的 zip 路径（右键菜单 / 二次启动转交），领取即消费
+/// 领取待导入的主题文件路径（右键菜单 / 二次启动转交；.zip / .themepack /
+/// .theme 按扩展名分发，决策 41），领取即消费
 #[tauri::command]
 pub async fn take_pending_import() -> Option<String> {
     tauri::async_runtime::spawn_blocking(integration::take_pending_import)

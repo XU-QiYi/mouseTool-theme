@@ -29,7 +29,8 @@ const MENU_LABEL: &str = "用鼠标主题工具导入";
 // 启动参数与单实例
 // ---------------------------------------------------------------------------
 
-/// 解析启动参数里的 `--import <zip 路径>`（右键菜单写入的命令长这样）
+/// 解析启动参数里的 `--import <主题文件路径>`（右键菜单写入的命令长这样；
+/// 路径可以是 .zip / .themepack / .theme，导入按扩展名分发，决策 41）
 pub fn startup_import_arg() -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
     args.iter()
