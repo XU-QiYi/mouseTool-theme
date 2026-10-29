@@ -985,6 +985,11 @@ fn cleanup(dirs: &[PathBuf]) {
 fn generate_backup_path(dir: &Path, prefix: &str) -> Result<PathBuf, String> {
     paths::ensure_dir(dir)?;
     let base = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+    generate_backup_path_at(dir, prefix, &base)
+}
+
+/// 显式时间戳版（测试用固定时间戳，不赌真实时钟跨秒）
+fn generate_backup_path_at(dir: &Path, prefix: &str, base: &str) -> Result<PathBuf, String> {
     for suffix in ["", "-2", "-3", "-4", "-5", "-6", "-7", "-8", "-9"] {
         let candidate = dir.join(format!("{prefix}{base}{suffix}.zip"));
         if !candidate.exists() {
@@ -1266,25 +1271,33 @@ fn console_fallback_warning(message: &str) {
     eprintln!("[list_backups] {message}");
 }
 
-/// 删除应用内备份：只收文件名，拒绝任何形式的路径穿越
-fn delete_backup_in(file_name: &str) -> Result<(), String> {
+/// 校验「应用内备份文件名」并拼出完整路径（删除 / 内容预览共用）
+///
+/// 只收文件名，拒绝任何形式的路径穿越。
+fn app_backup_file(file_name: &str, action: &str) -> Result<std::path::PathBuf, String> {
     let name = file_name.trim();
     if name.is_empty() {
-        return Err("只能删除应用内备份：文件名不能为空".to_string());
+        return Err(format!("只能{action}应用内备份：文件名不能为空"));
     }
     if name.contains('/') || name.contains('\\') || name.contains("..") {
-        return Err("只能删除应用内备份：请传备份文件名，不要带路径".to_string());
+        return Err(format!("只能{action}应用内备份：请传备份文件名，不要带路径"));
     }
     if !name.to_ascii_lowercase().ends_with(".zip") {
-        return Err("只能删除应用内备份（.zip 文件）".to_string());
+        return Err(format!("只能{action}应用内备份（.zip 文件）"));
     }
 
     let dir = paths::backups_dir()?;
     let target = dir.join(name);
     // 拼接后的最终位置必须仍落在备份目录内：文件名字符再怪也逃不出去
     if !target.starts_with(&dir) {
-        return Err("只能删除应用内备份".to_string());
+        return Err(format!("只能{action}应用内备份"));
     }
+    Ok(target)
+}
+
+/// 删除应用内备份：只收文件名，拒绝任何形式的路径穿越
+fn delete_backup_in(file_name: &str) -> Result<(), String> {
+    let target = app_backup_file(file_name, "删除")?;
     // 链接 / 目录联接不删：remove_file 跟随链接，可能删掉目录外的真身
     if limits::is_reparse_path(&target) {
         return Err("备份文件是链接或目录联接，已拒绝删除".to_string());
@@ -1924,10 +1937,11 @@ mod tests {
     #[test]
     fn 应用内备份自动命名并落在备份目录() {
         let (data, _guard) = sandbox("auto-name");
+        let backups = data.join("backups");
         let themes = data.join("themes");
         seed_theme(&themes, "88888888-8888-4888-8888-888888888888", "a");
 
-        let first = generate_backup_path(&data.join("backups"), MANUAL_BACKUP_PREFIX).expect("第一个名字");
+        let first = generate_backup_path(&backups, MANUAL_BACKUP_PREFIX).expect("第一个名字");
         assert!(
             first.to_string_lossy().contains("cursorstudio-backup-"),
             "命名要有统一前缀：{}",
@@ -1935,13 +1949,32 @@ mod tests {
         );
         assert!(first.extension().map(|ext| ext == "zip").unwrap_or(false));
         // 目录不存在时自动创建
-        assert!(data.join("backups").is_dir());
+        assert!(backups.is_dir());
 
-        // 同名文件占住后应退到 -2，而不是覆盖
-        fs::write(&first, b"occupied").expect("占住第一个名字");
-        let second = generate_backup_path(&data.join("backups"), MANUAL_BACKUP_PREFIX).expect("第二个名字");
-        assert_ne!(first, second, "同秒冲突必须换名字");
-        assert!(second.to_string_lossy().contains("-2.zip"), "加 -2 后缀：{}", second.display());
+        // 同秒冲突退避用固定时间戳验证，不赌真实时钟——两次调用跨过秒边界时
+        // 时间戳本来就不同，`-2` 断言会随机失败（2026-10-30 零点真挂在 CI 外的手跑里）
+        let stamp = "20261030-000214";
+        let occupied = backups.join(format!("{MANUAL_BACKUP_PREFIX}{stamp}.zip"));
+        fs::write(&occupied, b"occupied").expect("占住当前秒的名字");
+        let second =
+            generate_backup_path_at(&backups, MANUAL_BACKUP_PREFIX, stamp).expect("第二个名字");
+        assert_ne!(second, occupied, "同名冲突必须换名字");
+        assert!(
+            second.to_string_lossy().contains("-2.zip"),
+            "加 -2 后缀：{}",
+            second.display()
+        );
+
+        let third = {
+            // -2 也被占住（上一轮返回的名字落了盘），才会退到 -3
+            fs::write(&second, b"occupied").expect("占住 -2 名字");
+            generate_backup_path_at(&backups, MANUAL_BACKUP_PREFIX, stamp).expect("第三个名字")
+        };
+        assert!(
+            third.to_string_lossy().contains("-3.zip"),
+            "同一秒内继续退避：{}",
+            third.display()
+        );
 
         let _ = fs::remove_dir_all(&data);
     }

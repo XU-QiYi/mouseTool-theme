@@ -521,6 +521,28 @@ export function deleteBackup(fileName: string): Promise<void> {
   return invoke<void>("delete_backup", { fileName });
 }
 
+/** 一块区域的占用：条目数与字节数（`get_storage_stats`，决策 34） */
+export interface StorageDirStats {
+  count: number;
+  bytes: number;
+}
+
+/** 数据目录各区域的磁盘占用（只读统计） */
+export interface StorageStats {
+  themes: StorageDirStats;
+  backups: StorageDirStats;
+  trash: StorageDirStats;
+  history_bytes: number;
+  settings_bytes: number;
+  total_bytes: number;
+}
+
+/** 数据目录各区域的磁盘占用（决策 34）；统计期间其它操作照常跑 */
+export function getStorageStats(): Promise<StorageStats> {
+  if (!inTauri) return Promise.resolve(mockStorageStats());
+  return invoke<StorageStats>("get_storage_stats");
+}
+
 /** 自动备份的结果，字段与 Rust `AutoBackupSummary` 一一对应 */
 export interface AutoBackupOutcome {
   /** 本次是否真的创建了备份 */
@@ -772,3 +794,24 @@ async function mockRunAutoBackup(keep: number): Promise<AutoBackupOutcome> {
 
   return { created: created !== null, skipped: created === null, file_name: created, pruned };
 }
+
+// ---------------------------------------------------------------------------
+// 开发模式存储统计与备份内容预览模拟（决策 34）
+// ---------------------------------------------------------------------------
+
+/** 浏览器里的存储占用模拟：备份区随 mockBackups 走，其余编一个自洽的量级 */
+function mockStorageStats(): StorageStats {
+  const backupsBytes = mockBackups.reduce((sum, entry) => sum + entry.bytes, 0);
+  const themes = MOCK_THEMES.filter((theme) => !theme.is_built_in);
+  const themeBytes = 28_400_000;
+  const trashBytes = 18_700_000;
+  return {
+    themes: { count: themes.length, bytes: themeBytes },
+    backups: { count: mockBackups.length, bytes: backupsBytes },
+    trash: { count: 2, bytes: trashBytes },
+    history_bytes: 38_400,
+    settings_bytes: 1_120,
+    total_bytes: themeBytes + backupsBytes + trashBytes + 38_400 + 1_120,
+  };
+}
+

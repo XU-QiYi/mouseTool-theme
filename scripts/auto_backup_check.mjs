@@ -225,12 +225,14 @@ try {
   assert("当天自动备份在保留之列", rows.todayAuto, JSON.stringify(rows));
   // 修复回归：年龄按文件名时间戳算——被清的必须是文件名最旧的两天
   // （5/6 天前），最近 4 天的占位与当天都留下；mtime 排序会反过来删错
+  // 只扫自动备份行：mock 初始数据里的手动备份可能带任意日期（如 10-25），
+  // 混进来会在特定系统日期产生假阳性（2026-10-30 实际撞过一次）
   const seedStamps = [0, 1, 2, 3, 4, 5].map((i) => {
     const d = new Date(Date.now() - (i + 1) * 86_400_000);
     return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
   });
   const rowNames = await evaluate(
-    `[...document.querySelectorAll("[data-backup-row]")].map(r=>r.getAttribute("data-backup-row"))`,
+    `[...document.querySelectorAll("[data-backup-row]")].map(r=>r.getAttribute("data-backup-row")).filter(n=>n&&n.startsWith("cursorstudio-backup-auto-"))`,
   );
   const seedKept = seedStamps.map((stamp) =>
     rowNames.some((name) => name && name.includes(stamp)),
@@ -239,8 +241,7 @@ try {
     "清理删的是文件名最旧的（保最近 4 天 + 当天）",
     seedKept.slice(0, 4).every(Boolean) && !seedKept[4] && !seedKept[5],
     JSON.stringify(seedKept),
-  );
-  // 保留份数选择器在主视图：先返回再读
+  );  // 保留份数选择器在主视图：先返回再读
   await evaluate(`document.querySelector('button[aria-label="返回数据设置"]').click()`);
   await sleep(300);
   const keepValue = await evaluate(`document.querySelector('[data-auto-backup-keep]')?.value`);

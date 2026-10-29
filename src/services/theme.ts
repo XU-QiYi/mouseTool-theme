@@ -441,6 +441,66 @@ export function exportTheme(theme: CursorTheme, destPath: string): Promise<Expor
   return invoke<ExportSummary>("export_theme", { theme, destPath });
 }
 
+/** `export_all_themes` 结果里的一条成功项 */
+export interface ExportAllItem {
+  theme_id: string;
+  name: string;
+  /** 实际落盘的文件名；与目录里已有文件重名时后端自动加序号 */
+  file_name: string;
+  bytes: number;
+  file_count: number;
+}
+
+/** `export_all_themes` 结果里的一条失败项（部分成功语义，硬约束 8） */
+export interface ExportAllFailure {
+  theme_id: string;
+  name: string;
+  error: string;
+}
+
+/** `export_all_themes` 的返回值（决策 34） */
+export interface ExportAllOutcome {
+  dir: string;
+  exported: ExportAllItem[];
+  failed: ExportAllFailure[];
+  total_bytes: number;
+  warnings: string[];
+}
+
+/**
+ * 批量导出「我的主题」（决策 34）：进度来自 `export-all-progress` 事件
+ *
+ * 某一套导不出去只进 `failed`，其余照常落盘。
+ */
+export async function exportAllThemes(
+  destDir: string,
+  onProgress?: (progress: TaskProgress) => void,
+): Promise<ExportAllOutcome> {
+  if (!inTauri) return mockExportAll(destDir);
+
+  let unlisten: (() => void) | undefined;
+  if (onProgress) {
+    unlisten = await listen<TaskProgress>("export-all-progress", (event) => {
+      onProgress(event.payload);
+    });
+  }
+  try {
+    return await invoke<ExportAllOutcome>("export_all_themes", { destDir });
+  } finally {
+    unlisten?.();
+  }
+}
+
+/** 清空最近使用记录（决策 34）：返回清掉的条数 */
+export function clearHistory(): Promise<number> {
+  if (!inTauri) {
+    const count = devRecent.length;
+    devRecent.splice(0, devRecent.length);
+    return Promise.resolve(count);
+  }
+  return invoke<number>("clear_history");
+}
+
 /** 浏览器里演示用的数据目录路径（真实路径只有 Rust 侧知道，前端禁止自行拼接） */
 const MOCK_DATA_DIR = "C:\\Users\\demo\\AppData\\Local\\CursorStudio";
 
@@ -459,4 +519,23 @@ export function openDataDir(): Promise<string> {
     return Promise.resolve(MOCK_DATA_DIR);
   }
   return invoke<string>("open_data_dir");
+}
+
+/** 浏览器里的批量导出模拟：导出「已导入的 mock 主题」，数量随内存数据走 */
+function mockExportAll(destDir: string): Promise<ExportAllOutcome> {
+  const mine = devThemes.filter((theme) => !theme.is_built_in);
+  const exported = mine.map((theme, index) => ({
+    theme_id: theme.id,
+    name: theme.name,
+    file_name: `${theme.name}.zip`,
+    bytes: 180_000 + index * 45_123,
+    file_count: theme.cursors.length,
+  }));
+  return Promise.resolve({
+    dir: destDir || `${MOCK_DATA_DIR}\\exports`,
+    exported,
+    failed: [],
+    total_bytes: exported.reduce((sum, item) => sum + item.bytes, 0),
+    warnings: [],
+  });
 }
