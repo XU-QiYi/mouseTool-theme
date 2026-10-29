@@ -1362,6 +1362,84 @@ pub async fn delete_backup(file_name: String) -> Result<(), String> {
         .map_err(|err| format!("删除备份任务异常退出（{err}）"))?
 }
 
+/// 备份完整性体检结果（决策 37）
+#[derive(Debug, Serialize)]
+pub struct BackupVerifyReport {
+    pub file_name: String,
+    /// 实际做了 CRC 校验的文件条目数（目录条目不计）
+    pub entries_checked: usize,
+    /// 条目声明大小的累计值（概数，与 `list_backups` 同口径）
+    pub bytes: u64,
+    /// 损坏条目名（读不出来 / CRC 校验失败），最多列出 20 条
+    pub corrupt: Vec<String>,
+    /// 损坏条目总数（corrupt 可能被截断，界面用它报数）
+    pub corrupt_total: usize,
+}
+
+/// 体检一份应用内备份（决策 37）：流式解压进 sink，逐条目触发 CRC 校验
+///
+/// `list_backups` 只读中央目录，zip 数据区的静默损坏要等到恢复那天才会炸；
+/// 体检把每个条目完整读一遍（只写进 sink，不落盘），当场点名坏条目。
+/// 只读命令，不取 `ops` 锁、不发事件；结果是快照，不改变备份的任何状态。
+#[tauri::command]
+pub async fn verify_backup(file_name: String) -> Result<BackupVerifyReport, String> {
+    tauri::async_runtime::spawn_blocking(move || verify_backup_in(&file_name))
+        .await
+        .map_err(|err| format!("体检任务异常退出（{err}）"))?
+}
+
+fn verify_backup_in(file_name: &str) -> Result<BackupVerifyReport, String> {
+    let target = app_backup_file(file_name, "体检")?;
+    if limits::is_reparse_path(&target) {
+        return Err("备份文件是链接或目录联接，已拒绝读取".to_string());
+    }
+    if !target.is_file() {
+        return Err("备份文件不存在，可能已被删除".to_string());
+    }
+
+    let file = fs::File::open(&target).map_err(|err| format!("打不开备份文件（{err}）"))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|err| format!("备份文件不是有效的 zip（{err}）"))?;
+
+    const CORRUPT_CAP: usize = 20;
+    let mut report = BackupVerifyReport {
+        file_name: file_name.trim().to_string(),
+        entries_checked: 0,
+        bytes: 0,
+        corrupt: Vec::new(),
+        corrupt_total: 0,
+    };
+    for index in 0..archive.len() {
+        let mut entry = match archive.by_index(index) {
+            Ok(entry) => entry,
+            Err(err) => {
+                report.corrupt_total += 1;
+                if report.corrupt.len() < CORRUPT_CAP {
+                    report
+                        .corrupt
+                        .push(format!("<条目 {index}>（元数据读不出来：{err}）"));
+                }
+                continue;
+            }
+        };
+        if entry.is_dir() {
+            continue;
+        }
+        report.entries_checked += 1;
+        report.bytes += entry.size();
+        // 整条读进 sink：zip-rs 在读完时核对 CRC，坏数据在这里现形。
+        // 1GiB 上限内的流式读取，不整个驻留内存
+        let mut sink = std::io::sink();
+        if let Err(err) = std::io::copy(&mut entry, &mut sink) {
+            report.corrupt_total += 1;
+            if report.corrupt.len() < CORRUPT_CAP {
+                report.corrupt.push(format!("{}（{err}）", entry.name()));
+            }
+        }
+    }
+    Ok(report)
+}
+
 /// 只读备份内容：列出包里能完整恢复的主题（决策 34）
 ///
 /// 只读中央目录与 theme.json，不解压光标、不写任何文件；路径来自备份历史
@@ -1890,6 +1968,92 @@ mod tests {
         assert_eq!(entry.themes, 0);
         assert_eq!(entry.files, 0);
         assert!(entry.error.is_some(), "要说明打不开的原因");
+
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn 体检完好备份全部条目通过() {
+        let (data, _guard) = sandbox("verify-ok");
+        let themes = data.join("themes");
+        seed_theme(&themes, "77777777-7777-4777-8777-777777777777", "cursor-a");
+        seed_theme(&themes, "66666666-6666-4666-8666-666666666666", "cursor-b");
+
+        let dest = data.join("backups").join("cursorstudio-backup-verify-ok.zip");
+        paths::ensure_dir(dest.parent().unwrap()).expect("建备份目录");
+        export_to(&dest, &themes, &data.join("history.json")).expect("导出");
+
+        let report = verify_backup_in("cursorstudio-backup-verify-ok.zip").expect("体检");
+        assert!(report.corrupt.is_empty(), "完好包不该有坏条目：{:?}", report.corrupt);
+        assert_eq!(report.corrupt_total, 0);
+        // 两套主题 × (theme.json + arrow.cur)
+        assert_eq!(report.entries_checked, 4, "主题文件都该被点到：{report:?}");
+        assert!(report.bytes > 0);
+        assert_eq!(report.file_name, "cursorstudio-backup-verify-ok.zip");
+
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn 体检点名_crc_损坏的条目() {
+        let (data, _guard) = sandbox("verify-corrupt");
+        let backups = data.join("backups");
+        fs::create_dir_all(&backups).expect("建备份目录");
+
+        // 两个 STORE 条目：数据区即原文，方便精准翻一个字节制造 CRC 失败
+        let good = b"good-entry-content";
+        let bad = b"bad-entry-content-unique-marker";
+        let file = fs::File::create(backups.join("cursorstudio-backup-verify-corrupt.zip"))
+            .expect("建文件");
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        writer
+            .start_file("themes/x/cursors/arrow.cur", options)
+            .expect("写好条目");
+        std::io::Write::write_all(&mut writer, good).expect("写好内容");
+        writer
+            .start_file("themes/x/theme.json", options)
+            .expect("写坏条目");
+        std::io::Write::write_all(&mut writer, bad).expect("写坏内容");
+        writer.finish().expect("收尾");
+
+        // 翻坏条目原文的一个字节：zip 读到这条时 CRC 对不上
+        let mut raw = fs::read(backups.join("cursorstudio-backup-verify-corrupt.zip")).expect("读包");
+        let pos = raw
+            .windows(bad.len())
+            .position(|window| window == bad)
+            .expect("包里能找到坏条目的原文");
+        raw[pos] ^= 0xFF;
+        fs::write(backups.join("cursorstudio-backup-verify-corrupt.zip"), raw).expect("写回");
+
+        let report = verify_backup_in("cursorstudio-backup-verify-corrupt.zip").expect("体检");
+        assert_eq!(report.entries_checked, 2, "两个文件条目都被点过");
+        assert_eq!(report.corrupt_total, 1, "只有翻过字节的条目坏：{:?}", report.corrupt);
+        assert!(
+            report.corrupt[0].contains("theme.json"),
+            "要点名坏条目：{:?}",
+            report.corrupt
+        );
+
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn 体检拒绝穿越缺失与非_zip() {
+        let (data, _guard) = sandbox("verify-reject");
+        let backups = data.join("backups");
+        fs::create_dir_all(&backups).expect("建备份目录");
+        fs::write(backups.join("broken.zip"), b"not a zip").expect("写坏备份");
+
+        for evil in ["../evil.zip", "sub/evil.zip", "", "evil.txt"] {
+            let err = verify_backup_in(evil).expect_err(evil);
+            assert!(err.contains("只能体检"), "{evil} 应被拒绝：{err}");
+        }
+        let err = verify_backup_in("cursorstudio-backup-missing.zip").expect_err("缺失");
+        assert!(err.contains("不存在"), "{err}");
+        let err = verify_backup_in("broken.zip").expect_err("坏包");
+        assert!(err.contains("zip"), "要说明不是有效的 zip：{err}");
 
         let _ = fs::remove_dir_all(&data);
     }

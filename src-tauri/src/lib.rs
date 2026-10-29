@@ -4,7 +4,7 @@ pub mod utils;
 
 use commands::backup::{
     delete_backup, export_backup, import_backup, list_backup_themes, list_backups,
-    restore_theme_from_backup, run_auto_backup,
+    restore_theme_from_backup, run_auto_backup, verify_backup,
 };
 use commands::cursor::get_cursor_preview;
 use commands::data::{clear_history, get_data_dir, get_storage_stats, open_data_dir};
@@ -80,6 +80,7 @@ pub fn run() {
             list_backup_themes,
             restore_theme_from_backup,
             delete_backup,
+            verify_backup,
             run_auto_backup,
             list_trash,
             restore_from_trash,

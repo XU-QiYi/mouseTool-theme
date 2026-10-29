@@ -137,7 +137,7 @@ App.tsx
 
 ---
 
-## 5. 命令契约（当前共 37 个）
+## 5. 命令契约（当前共 38 个）
 
 | Command | 入参（前端写法） | 返回 | 失败场景 |
 |---|---|---|---|
@@ -172,6 +172,7 @@ App.tsx
 | `list_backup_themes` | `path` | `BackupThemeListing`（`themes` + `warnings`；每项含 `missing_files`） | 不是 `.zip`、超过 `BACKUP_LIMITS`、zip 损坏、条目名不合法；只读中央目录与 `theme.json`，**不解压光标**；`theme.json` 损坏或 ID 不一致的主题进 `warnings`；`missing_files` 按包内实际条目统计（决策 34） |
 | `restore_theme_from_backup` | `zipPath`, `themeId` | `RestoreBackupThemeOutcome`（`theme` + `warnings`） | 非规范 UUID、目标 ID 已存在、备份里没有该主题 / theme.json 损坏、零槽位、全部槽位缺文件、写盘失败；只解压请求的一套，旧绝对路径按主题 id / 文件名映射后落相对路径，失败清理本次新建目录；部分缺文件仍恢复并进 `warnings`；取 `ops` 锁，不发进度事件（决策 34） |
 | `delete_backup` | `fileName`（只收文件名） | `void` | 空名、含 `/` `` `..`、非 `.zip`、拼接后越出 `backups`、链接 / 目录联接、文件不存在——一律中文错误拒绝；删除前二次确认在前端 |
+| `verify_backup` | `fileName`（只收文件名） | `BackupVerifyReport`（`entries_checked` / `bytes` / `corrupt`（≤20 条）/ `corrupt_total`） | 同 `delete_backup` 的文件名校验；整包打不开（坏 zip）返回中文错误；坏条目逐个点名（流式读进 sink 触发 CRC，不落盘），不取锁、不发事件，结果是快照（决策 37） |
 | `restore_theme_from_backup` | `zipPath`、`themeId` | `RestoreBackupThemeOutcome`（`theme` + `warnings`） | 目标 ID 已存在直接拒绝（不碰原目录）；备份里没有该主题、`theme.json` 损坏 / ID 不一致、零槽位、全部槽位缺文件都报中文错误并清理本次新建目录；部分缺文件恢复成功但 `warnings` 点名缺失槽位；取 `ops` 锁、刷新托盘、不发进度事件（决策 34） |
 | `run_auto_backup` | `keep`（保留份数） | `AutoBackupSummary`（`created` / `skipped` / `file_name` / `pruned`） | 当天已有自动备份则跳过并顺带清理过期（`created=false`）；空库返回「还没有可备份的内容」；与手动备份共用 `ops` 锁，冲突立即失败（决策 32）；不发 `backup-progress` |
 | `import_backup` | `zipPath` | `ImportBackupSummary` | 不是有效 zip、超限额（1GiB 总量 / 64MB 单文件 / 4096 条目 / 10 层）、条目名不合法、写盘失败（清掉本次新建主题目录）；恢复后按新根重写相对路径，失败项进 `warnings`；执行期发 `backup-progress` |
@@ -182,7 +183,7 @@ App.tsx
 
 **为什么 `apply_theme` / `export_theme` 收整个 `CursorTheme` 而不是 ID**：系统方案只存在于注册表，没有磁盘目录，但同样有光标文件路径；只传 ID 就到不了它们的文件。
 
-**执行模型**（决策 19）：所有 I/O 命令都是 `async` + `spawn_blocking`，主线程不碰文件（`get_data_dir` 只算路径、不读盘，保持同步）；导入 / 备份 / 迁移 / 批量导出分别发 `import-progress` / `backup-progress` / `themes-dir-progress` / `export-all-progress`（自动备份与单主题恢复不发事件，避免顶掉手动备份的进度展示，决策 32/34），载荷是 `TaskProgress { stage, current, total, message }`。导入、备份导出 / 恢复、自动备份、单主题恢复、迁移、批量导出（决策 35）、删除主题 / 恢复 / 彻底删除 / 清空回收站（决策 26）与保存当前光标（决策 28）共用 `ops::try_begin` 的 `try_lock`，冲突立即返回中文错误，不排队；存储统计是只读命令，不取锁。
+**执行模型**（决策 19）：所有 I/O 命令都是 `async` + `spawn_blocking`，主线程不碰文件（`get_data_dir` 只算路径、不读盘，保持同步）；导入 / 备份 / 迁移 / 批量导出分别发 `import-progress` / `backup-progress` / `themes-dir-progress` / `export-all-progress`（自动备份与单主题恢复不发事件，避免顶掉手动备份的进度展示，决策 32/34），载荷是 `TaskProgress { stage, current, total, message }`。导入、备份导出 / 恢复、自动备份、单主题恢复、迁移、批量导出（决策 35）、删除主题 / 恢复 / 彻底删除 / 清空回收站（决策 26）与保存当前光标（决策 28）共用 `ops::try_begin` 的 `try_lock`，冲突立即返回中文错误，不排队；存储统计与备份体检是只读命令，不取锁。
 
 **输入边界**（决策 18）：命令入口先过 `validation`——`apply_theme` / `export_theme` 校验 15 槽位白名单与主题 ID 目录一致，预览路径卡 8MB 且必须在主题目录或系统光标目录内，`dest_path` 要求父目录存在且后缀正确，备份来源要求 `.zip` 文件，`restore_theme_from_backup` 的 `themeId` 必须是规范小写 UUID（决策 34）。解压 / 文件夹扫描统一走 `limits`，超限清理临时产物。
 
@@ -216,6 +217,7 @@ App.tsx
 | `BackupThemeEntry` / `BackupThemeListing` | `id`、`name`、`description`、`created_at`、`updated_at`、`slots`、`files`、`bytes`、`missing_files`；`themes`、`warnings` | 备份内容只读摘要（决策 34）；`files` 含 `theme.json`，`bytes` 按中央目录声明值累计；`missing_files` 是声明槽位里包内找不到文件的个数（空路径不算），损坏 / ID 不一致的主题不列出并进 `warnings` |
 | `RestoreBackupThemeOutcome` | `theme`、`warnings` | 从备份恢复单套主题的结果；`theme.cursors[].file_path` 为运行时绝对路径，落盘仍是相对路径（决策 34） |
 | `StorageStats` / `StorageDirStats` | `themes` / `backups` / `trash`（`count` + `bytes`）、`history_bytes`、`settings_bytes`、`total_bytes` | `get_storage_stats` 的返回值（决策 35）；字节数是快照概数，孤儿文件计入字节但不计入条目数 |
+| `BackupVerifyReport` | `file_name`、`entries_checked`、`bytes`、`corrupt`（≤20 条）、`corrupt_total` | `verify_backup` 的返回值（决策 37）；坏条目点名 + 总数，结果是快照不落盘 |
 | `ExportAllOutcome` / `ExportAllItem` / `ExportAllFailure` | `dir`、`exported[]`（`file_name` / `bytes` / `file_count`）、`failed[]`（`error`）、`total_bytes`、`warnings` | `export_all_themes` 的返回值（决策 35）；部分成功：单套失败进 `failed`，其余照常落盘 |
 | `ThemesDirPlan` | `source`、`target`、`is_default`、`theme_count`、`file_count`、`total_bytes`、`warnings` | 迁移确认框的数据源，只读不搬 |
 | `ThemesDirChangeResult` | `settings`、`report` | `report` 含 `rebound_slots` 与 `warnings` |
@@ -316,3 +318,4 @@ App.tsx
 | 2026-10-29 | 决策 34：备份内容浏览与单主题恢复——新增 `list_backup_themes` / `restore_theme_from_backup`（命令契约 32 → 34）与 `BackupThemeListing` / `RestoreBackupThemeOutcome`；备份历史行内「查看内容」任务层弹窗，只解压选中一套、目标已存在拒绝、不合并历史；`missing_files` 标出包内缺文件，部分缺文件恢复提示、全缺拒绝；前端 `BackupContentDialog`，验收 `scripts/backup_content_check.mjs` |
 | 2026-10-29 | 决策 35：维护工具箱——新增 `get_storage_stats`（数据目录分区只读统计）/ `export_all_themes`（批量导出「我的主题」，部分成功 + `export-all-progress`，取 `ops` 锁）/ `clear_history`（清空使用记录，轻量原子重写），命令契约 34 → 37；UI 全部长在既有页面内（设置 → 数据两张卡、我的主题工具条「导出全部」），不新增导航；原型的备份内容预览 `peek_backup` 让位决策 34 的 `list_backup_themes`，合入时未采用；验收 `scripts/maintenance_check.mjs` |
 | 2026-10-30 | 决策 36：`.theme` 光标方案导入——`import_theme` 分发新增第三类来源：解析 `[Control Panel\Cursors]` 段（键名与注册表槽位同名，直接映射；UTF-16LE/BE 与 UTF-8 按 BOM 识别，1MB 文本上限），`%Var%` 大小写不敏感展开后按槽位复制引用的光标文件（相对路径以方案文件目录为基准，链接 / 目录联接拒收），`[Theme] DisplayName` 作主题名（本地化引用退回文件名 stem）；引用缺失 / 非光标格式跳过并 warning、全部落空才拒绝；命令数保持 37；对话框 filter 与拖拽白名单放开 `.theme`，浏览器 mock 按 stem 命名；新增 `utils/theme_file.rs` 纯解析器，验收 `scripts/scheme_import_check.mjs` |
+| 2026-10-30 | 决策 37：备份完整性体检——新增 `verify_backup`（命令契约 37 → 38）与 `BackupVerifyReport`；流式读每个条目进 sink 触发 CRC，静默损坏当场点名（≤20 条 + 总数）；只读不取锁、结果为快照；备份历史行内「体检」按钮 + 「体检损坏 N 处」徽标（`?mock-backup-corrupt=1` 注入），验收 `scripts/backup_verify_check.mjs` |

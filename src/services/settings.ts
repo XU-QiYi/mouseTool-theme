@@ -543,6 +543,25 @@ export function getStorageStats(): Promise<StorageStats> {
   return invoke<StorageStats>("get_storage_stats");
 }
 
+/** 备份完整性体检结果（决策 37），字段与 Rust `BackupVerifyReport` 一一对应 */
+export interface BackupVerifyReport {
+  file_name: string;
+  /** 实际做了 CRC 校验的文件条目数（目录条目不计） */
+  entries_checked: number;
+  /** 条目声明大小的累计值（概数） */
+  bytes: number;
+  /** 损坏条目名（最多列出 20 条） */
+  corrupt: string[];
+  /** 损坏条目总数（corrupt 可能被截断） */
+  corrupt_total: number;
+}
+
+/** 体检一份应用内备份：流式读每个条目触发 CRC 校验，当场点名坏条目 */
+export function verifyBackup(fileName: string): Promise<BackupVerifyReport> {
+  if (!inTauri) return Promise.resolve(mockVerifyBackup(fileName));
+  return invoke<BackupVerifyReport>("verify_backup", { fileName });
+}
+
 /** 自动备份的结果，字段与 Rust `AutoBackupSummary` 一一对应 */
 export interface AutoBackupOutcome {
   /** 本次是否真的创建了备份 */
@@ -812,6 +831,32 @@ function mockStorageStats(): StorageStats {
     history_bytes: 38_400,
     settings_bytes: 1_120,
     total_bytes: themeBytes + backupsBytes + trashBytes + 38_400 + 1_120,
+  };
+}
+
+/** 浏览器里的备份体检模拟（决策 37）：`?mock-backup-corrupt=1` 时手动备份报两处 CRC 损坏 */
+function mockVerifyBackup(fileName: string): BackupVerifyReport {
+  const entry = mockBackups.find((backup) => backup.file_name === fileName);
+  const corruptMode =
+    new URLSearchParams(window.location.search).get("mock-backup-corrupt") === "1";
+  if (corruptMode && entry?.kind === "manual") {
+    return {
+      file_name: fileName,
+      entries_checked: entry.files,
+      bytes: entry.bytes,
+      corrupt: [
+        "themes/8f2a1c32-55e0-4b8e-9d1a-2f0c33aa87e1/cursors/arrow.cur（Invalid checksum）",
+        "themes/8f2a1c32-55e0-4b8e-9d1a-2f0c33aa87e1/theme.json（Invalid checksum）",
+      ],
+      corrupt_total: 2,
+    };
+  }
+  return {
+    file_name: fileName,
+    entries_checked: entry?.files ?? 0,
+    bytes: entry?.bytes ?? 0,
+    corrupt: [],
+    corrupt_total: 0,
   };
 }
 

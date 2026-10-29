@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { ArrowLeft, Archive, ListTree, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowLeft, Archive, ListTree, RefreshCw, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -20,7 +20,13 @@ import { readableError, toast } from "@/lib/toast";
 import { formatBytes } from "@/lib/utils";
 import { appliedAtMachine } from "@/lib/themes";
 import { inTauri } from "@/services/theme";
-import { deleteBackup, listBackups, type BackupEntry } from "@/services/settings";
+import {
+  deleteBackup,
+  listBackups,
+  verifyBackup,
+  type BackupEntry,
+  type BackupVerifyReport,
+} from "@/services/settings";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 interface BackupHistorySectionProps {
@@ -48,6 +54,11 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
   const [pendingDelete, setPendingDelete] = useState<BackupEntry | null>(null);
   /** 正在查看内容的备份；null = 弹窗关闭 */
   const [contentEntry, setContentEntry] = useState<BackupEntry | null>(null);
+  /**
+   * 体检结果（决策 37）：按文件名记一份快照，损坏的行内出徽标。
+   * 不缓存完好结论——列表随时可能被自动备份改写，重新体检再看。
+   */
+  const [verifyReports, setVerifyReports] = useState<Record<string, BackupVerifyReport>>({});
 
   const setBusyFlag = (key: string, value: boolean) =>
     setBusy((prev) => {
@@ -144,6 +155,33 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
     } catch (err) {
       console.error("删除备份失败：", err);
       toast.error("删除失败", readableError(err));
+    } finally {
+      setBusyFlag(key, false);
+    }
+  };
+
+  // 体检（决策 37）：逐条目 CRC 校验，只读；结果以 toast + 行内徽标呈现
+  const verifyEntry = async (entry: BackupEntry) => {
+    const key = `verify:${entry.file_name}`;
+    if (busy[key]) return;
+    setBusyFlag(key, true);
+    try {
+      const report = await verifyBackup(entry.file_name);
+      setVerifyReports((prev) => ({ ...prev, [entry.file_name]: report }));
+      if (report.corrupt_total > 0) {
+        toast.warning(
+          `体检发现 ${report.corrupt_total} 处损坏`,
+          `${report.corrupt[0]}${report.corrupt_total > report.corrupt.length ? " 等处" : ""}；这份备份别再用于恢复`,
+        );
+      } else {
+        toast.success(
+          `体检通过（${report.entries_checked} 个条目）`,
+          "每个文件都完整读了一遍，CRC 全部对得上",
+        );
+      }
+    } catch (err) {
+      console.error("体检失败：", err);
+      toast.error("体检失败", readableError(err));
     } finally {
       setBusyFlag(key, false);
     }
@@ -252,7 +290,7 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
               <th scope="col" className="w-16 px-2 py-2 text-left text-xs font-normal text-muted-foreground">
                 状态
               </th>
-              <th scope="col" className="w-40 px-2 py-2 text-right text-xs font-normal text-muted-foreground">
+              <th scope="col" className="w-48 px-2 py-2 text-right text-xs font-normal text-muted-foreground">
                 操作
               </th>
             </tr>
@@ -302,6 +340,13 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
                       ) : (
                         <StatusBadge tone="neutral">可恢复</StatusBadge>
                       )}
+                      {verifyReports[entry.file_name] && verifyReports[entry.file_name].corrupt_total > 0 && (
+                        <StatusBadge tone="warning" dot>
+                          <span data-backup-verify="damaged">
+                            体检损坏 {verifyReports[entry.file_name].corrupt_total} 处
+                          </span>
+                        </StatusBadge>
+                      )}
                     </span>
                     {corrupt && entry.error && (
                       <p className="mt-1 text-2xs leading-relaxed text-muted-foreground" title={entry.error}>
@@ -331,6 +376,21 @@ export function BackupHistorySection({ onBack }: BackupHistorySectionProps) {
                       >
                         <RotateCcw data-icon="inline-start" />
                         恢复
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`体检备份 ${entry.file_name}`}
+                        title={
+                          corrupt
+                            ? "备份文件已损坏，无法体检"
+                            : "逐条目校验数据完整性（CRC），当场点名坏文件"
+                        }
+                        onClick={() => void verifyEntry(entry)}
+                        disabled={corrupt || backupBusy !== null || Boolean(busy[`verify:${entry.file_name}`])}
+                        className="text-muted-foreground"
+                      >
+                        <ShieldCheck />
                       </Button>
                       <Button
                         variant="ghost"
