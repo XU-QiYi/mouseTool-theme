@@ -23,7 +23,7 @@ import { useExportAllThemes } from "@/hooks/useExportAllThemes";
 import { useExportTheme } from "@/hooks/useExportTheme";
 import { useImportTheme } from "@/hooks/useImportTheme";
 import { coverSlot, slotStats } from "@/lib/slots";
-import { mineThemes, missingSlotsOf } from "@/lib/themes";
+import { mineThemes, missingSlotsOf, type MineFilter, type MineSort } from "@/lib/themes";
 import { cn } from "@/lib/utils";
 import { actionBusyKey, BATCH_DELETE_BUSY_KEY, useThemeStore } from "@/stores/themeStore";
 import type { CursorTheme } from "@/types/theme";
@@ -42,6 +42,7 @@ import type { CursorTheme } from "@/types/theme";
 export function MyThemesView() {
   const themes = useThemeStore((s) => s.themes);
   const fileGaps = useThemeStore((s) => s.fileGaps);
+  const recent = useThemeStore((s) => s.recent);
   const query = useThemeStore((s) => s.searchQuery);
   const setSearchQuery = useThemeStore((s) => s.setSearchQuery);
   const loading = useThemeStore((s) => s.loading);
@@ -61,8 +62,20 @@ export function MyThemesView() {
   const [batchMode, setBatchMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [batchConfirmOpen, setBatchConfirmOpen] = useState(false);
+  // 排序与筛选同样是会话内状态（决策 48）：不落盘、不影响别的页面
+  const [sort, setSort] = useState<MineSort>("newest");
+  const [filter, setFilter] = useState<MineFilter>("all");
 
-  const rows = useMemo(() => mineThemes(themes, query), [themes, query]);
+  // 「从未使用」= 最近使用记录里没出现过的主题 ID
+  const usedIds = useMemo(
+    () => new Set(recent.map((entry) => entry.theme_id)),
+    [recent],
+  );
+
+  const rows = useMemo(
+    () => mineThemes(themes, query, { sort, filter, fileGaps, usedIds }),
+    [themes, query, sort, filter, fileGaps, usedIds],
+  );
   const hasImported = useMemo(
     () => themes.some((theme) => !theme.is_built_in),
     [themes],
@@ -176,15 +189,36 @@ export function MyThemesView() {
   }
 
   if (rows.length === 0) {
+    const keyword = query.trim();
+    const filterTitle =
+      filter === "gapped"
+        ? "没有缺文件的主题"
+        : filter === "unused"
+          ? "没有从未使用过的主题"
+          : null;
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center">
         <EmptyState
           icon={SearchX}
-          title={`没有匹配「${query.trim()}」的主题`}
-          description="换个关键词试试，或者清除搜索看全部"
+          title={
+            keyword
+              ? `没有匹配「${keyword}」的主题`
+              : (filterTitle ?? "没有匹配的主题")
+          }
+          description={
+            keyword
+              ? "换个关键词试试，或者清除搜索看全部"
+              : "当前筛选条件下没有主题，切回「全部主题」看完整列表"
+          }
           action={
-            <Button variant="outline" onClick={() => setSearchQuery("")}>
-              清除搜索
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (keyword) setSearchQuery("");
+                if (filter !== "all") setFilter("all");
+              }}
+            >
+              {keyword ? "清除搜索" : "显示全部主题"}
             </Button>
           }
         />
@@ -197,7 +231,9 @@ export function MyThemesView() {
       <ContentFrame width="wide">
         {/* 工具条：默认批量导出（决策 34）；整理模式换成选择与批量删除（决策 43） */}
         <div className="mb-3 flex items-center justify-between gap-3" data-export-all-bar>
-          <p className="text-2xs text-muted-foreground tabular-nums">共 {rows.length} 套主题</p>
+          <p className="text-2xs text-muted-foreground tabular-nums">
+            共 {rows.length} 套主题{filter !== "all" ? "（已按条件筛选）" : ""}
+          </p>
           <div className="flex items-center gap-2">
             {batchMode ? (
               <>
@@ -257,6 +293,31 @@ export function MyThemesView() {
                     {exportAllProgress.message}
                   </span>
                 )}
+                {/* 排序与筛选（决策 48）：原生 select 拿免费的无障碍与键盘行为；
+                    整理模式下让位——批量范围永远等于眼前列表，中途换条件会让勾选失义 */}
+                <select
+                  aria-label="排序方式"
+                  data-mine-sort
+                  className="h-8 rounded-lg border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring"
+                  value={sort}
+                  onChange={(event) => setSort(event.target.value as MineSort)}
+                >
+                  <option value="newest">最新导入在前</option>
+                  <option value="oldest">最早导入在前</option>
+                  <option value="name">按名称</option>
+                  <option value="slots">按槽位完整度</option>
+                </select>
+                <select
+                  aria-label="筛选"
+                  data-mine-filter
+                  className="h-8 rounded-lg border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring"
+                  value={filter}
+                  onChange={(event) => setFilter(event.target.value as MineFilter)}
+                >
+                  <option value="all">全部主题</option>
+                  <option value="gapped">缺文件的</option>
+                  <option value="unused">从未使用的</option>
+                </select>
                 <Button
                   size="sm"
                   variant="outline"

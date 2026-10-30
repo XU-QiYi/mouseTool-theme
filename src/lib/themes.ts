@@ -27,12 +27,64 @@ export function filterByName(themes: CursorTheme[], query: string): CursorTheme[
   return themes.filter((theme) => theme.name.toLowerCase().includes(q));
 }
 
-/** 「我的主题」页的数据：非系统方案 + 关键词过滤 */
-export function mineThemes(themes: CursorTheme[], query: string): CursorTheme[] {
-  return filterByName(
+/**
+ * 「我的主题」的排序键（决策 48）
+ *
+ * `newest` 是缺省值，也是后端既有口径（导入时间倒序）——不排序就是它。
+ */
+export type MineSort = "newest" | "oldest" | "name" | "slots";
+
+/** 「我的主题」的筛选（决策 48）：缺口与使用记录都来自 store，不落盘 */
+export type MineFilter = "all" | "gapped" | "unused";
+
+export interface MineViewOptions {
+  sort?: MineSort;
+  filter?: MineFilter;
+  /** 文件缺口清单（决策 31）：「缺文件的」筛选依据 */
+  fileGaps?: ThemeFileGap[];
+  /** 最近使用里出现过的主题 ID：「从未使用的」取反 */
+  usedIds?: ReadonlySet<string>;
+}
+
+/** 「我的主题」页的数据：非系统方案 + 关键词过滤 + 排序与筛选（决策 48） */
+export function mineThemes(
+  themes: CursorTheme[],
+  query: string,
+  options: MineViewOptions = {},
+): CursorTheme[] {
+  let rows = filterByName(
     themes.filter((theme) => !theme.is_built_in),
     query,
   );
+
+  const { sort = "newest", filter = "all", fileGaps = [], usedIds } = options;
+  if (filter === "gapped") {
+    const gapped = new Set(fileGaps.map((gap) => gap.theme_id));
+    rows = rows.filter((theme) => gapped.has(theme.id));
+  } else if (filter === "unused" && usedIds) {
+    rows = rows.filter((theme) => !usedIds.has(theme.id));
+  }
+
+  // 「导入于」列显示 updated_at（重命名不动它），排序跟眼睛看到的这列一致
+  const byDate = (a: CursorTheme, b: CursorTheme) =>
+    (a.updated_at ?? "").localeCompare(b.updated_at ?? "") || a.name.localeCompare(b.name, "zh");
+  switch (sort) {
+    case "oldest":
+      rows = [...rows].sort(byDate);
+      break;
+    case "name":
+      rows = [...rows].sort((a, b) => a.name.localeCompare(b.name, "zh"));
+      break;
+    case "slots":
+      // 完整度 = 非空槽位数（cursors 数组本身就是非空槽位，决策 31 同口径）；
+      // 同数按导入时间新在前，与缺省视图衔接
+      rows = [...rows].sort((a, b) => b.cursors.length - a.cursors.length || byDate(a, b));
+      break;
+    default:
+      // newest：保持后端顺序
+      break;
+  }
+  return rows;
 }
 
 /**
