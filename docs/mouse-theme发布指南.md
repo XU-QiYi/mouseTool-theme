@@ -6,7 +6,7 @@
 > **本文档的命令与结论均在本仓库实测过**（2026-10-22）。实测过程中发现并修复了两个
 > 会直接卡住发布的问题，详见 §1.3（版本错位）与 §2.2 坑 ⑧（MSI 与中文产品名冲突，已修复）。
 >
-> 文档版本：2026-10-22，对应仓库 `XU-QiYi/mouseTool-theme`，首个发布版本 v0.1.0。
+> 文档版本：2026-10-22，对应仓库 `XU-QiYi/mousetool-theme`，首个发布版本 v0.1.0。
 
 ---
 
@@ -16,7 +16,7 @@
 
 | 项 | 本指南的假设 | 为什么是这个 |
 |---|---|---|
-| 托管平台 | **GitHub Releases** | 仓库远端就是 `https://github.com/XU-QiYi/mouseTool-theme.git` |
+| 托管平台 | **GitHub Releases** | 仓库远端就是 `https://github.com/XU-QiYi/mousetool-theme.git` |
 | 目标平台 | **仅 Windows 10/11 x64** | 应用依赖 `HKCU` 注册表 + `SPI_SETCURSORS`，macOS/Linux 无法运行 |
 | 工具链 | Node 22 · Rust 1.95 · Visual Studio 生成工具 2026 | 本机 `tauri info` 实测值 |
 | 安装包格式 | **NSIS**（`.exe`）为主，MSI 同轮产出备用 | MSI 曾因中文 `productName` 与代码页 1252 冲突构建失败，已用 `wix.language: "zh-CN"` 修复，见 §2.2 坑 ⑧ |
@@ -399,7 +399,7 @@ git rev-parse origin/main
 浏览器打开（把 `<你的用户名>` 换成 `XU-QiYi`）：
 
 ```
-https://github.com/XU-QiYi/mouseTool-theme/releases/new
+https://github.com/XU-QiYi/mousetool-theme/releases/new
 ```
 
 ### 4.2 选择 tag —— 最关键的一步
@@ -480,8 +480,8 @@ A：不支持。本应用依赖 Windows 注册表与光标 API，只在 Windows 
 
 ---
 
-📖 使用文档与源码：<https://github.com/XU-QiYi/mouseTool-theme>
-🐛 问题反馈：<https://github.com/XU-QiYi/mouseTool-theme/issues>
+📖 使用文档与源码：<https://github.com/XU-QiYi/mousetool-theme>
+🐛 问题反馈：<https://github.com/XU-QiYi/mousetool-theme/issues>
 ```
 
 > **写法建议**：正文用「用户视角」写——他们关心的是"能不能装、装完怎么用、出问题怎么办"，
@@ -834,7 +834,7 @@ git tag -a v0.1.0 -m "鼠标主题工具 v0.1.0"
 git push origin v0.1.0
 git rev-parse v0.1.0; git rev-parse origin/main   # 两行必须相同
 
-# 6. 打开 https://github.com/XU-QiYi/mouseTool-theme/releases/new
+# 6. 打开 https://github.com/XU-QiYi/mousetool-theme/releases/new
 #    选已有 tag v0.1.0 → 填标题 → 贴正文 → 拖入产物 → Publish release
 
 # 7. 校验

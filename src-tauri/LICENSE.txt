@@ -1,5 +1,5 @@
-鼠标主题工具（mouseTool-theme）
-https://github.com/XU-QiYi/mouseTool-theme
+鼠标主题工具（mousetool-theme）
+https://github.com/XU-QiYi/mousetool-theme
 
 本程序按 MIT 许可证发布，以下为完整许可证文本。
 

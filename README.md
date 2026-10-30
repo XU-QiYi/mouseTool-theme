@@ -10,13 +10,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/XU-QiYi/mouseTool-theme/actions/workflows/ci.yml"><img src="https://github.com/XU-QiYi/mouseTool-theme/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
-  <a href="https://github.com/XU-QiYi/mouseTool-theme/releases/latest"><img src="https://img.shields.io/github/v/release/XU-QiYi/mouseTool-theme?style=flat-square&label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=2ea44f" alt="最新版本" /></a>
-  <a href="https://github.com/XU-QiYi/mouseTool-theme/releases"><img src="https://img.shields.io/github/downloads/XU-QiYi/mouseTool-theme/total?style=flat-square&label=%E4%B8%8B%E8%BD%BD%E9%87%8F&color=0969da" alt="下载量" /></a>
-  <a href="https://github.com/XU-QiYi/mouseTool-theme/stargazers"><img src="https://img.shields.io/github/stars/XU-QiYi/mouseTool-theme?style=flat-square&label=Stars&logo=github&color=e3b341" alt="Stars" /></a>
-  <a href="https://github.com/XU-QiYi/mouseTool-theme/commits/main"><img src="https://img.shields.io/github/last-commit/XU-QiYi/mouseTool-theme?style=flat-square&label=%E6%9C%80%E5%90%8E%E6%8F%90%E4%BA%A4" alt="最后提交" /></a>
-  <a href="https://github.com/XU-QiYi/mouseTool-theme/issues"><img src="https://img.shields.io/github/issues/XU-QiYi/mouseTool-theme?style=flat-square&label=Issues" alt="Issues" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/XU-QiYi/mouseTool-theme?style=flat-square&label=License&color=2ea44f" alt="License" /></a>
+  <a href="https://github.com/XU-QiYi/mousetool-theme/actions/workflows/ci.yml"><img src="https://github.com/XU-QiYi/mousetool-theme/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
+  <a href="https://github.com/XU-QiYi/mousetool-theme/releases/latest"><img src="https://img.shields.io/github/v/release/XU-QiYi/mousetool-theme?style=flat-square&label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=2ea44f" alt="最新版本" /></a>
+  <a href="https://github.com/XU-QiYi/mousetool-theme/releases"><img src="https://img.shields.io/github/downloads/XU-QiYi/mousetool-theme/total?style=flat-square&label=%E4%B8%8B%E8%BD%BD%E9%87%8F&color=0969da" alt="下载量" /></a>
+  <a href="https://github.com/XU-QiYi/mousetool-theme/stargazers"><img src="https://img.shields.io/github/stars/XU-QiYi/mousetool-theme?style=flat-square&label=Stars&logo=github&color=e3b341" alt="Stars" /></a>
+  <a href="https://github.com/XU-QiYi/mousetool-theme/commits/main"><img src="https://img.shields.io/github/last-commit/XU-QiYi/mousetool-theme?style=flat-square&label=%E6%9C%80%E5%90%8E%E6%8F%90%E4%BA%A4" alt="最后提交" /></a>
+  <a href="https://github.com/XU-QiYi/mousetool-theme/issues"><img src="https://img.shields.io/github/issues/XU-QiYi/mousetool-theme?style=flat-square&label=Issues" alt="Issues" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/XU-QiYi/mousetool-theme?style=flat-square&label=License&color=2ea44f" alt="License" /></a>
 </p>
 
 <p align="center">
@@ -92,7 +92,7 @@
 
 ### 下载安装
 
-前往 [Releases](https://github.com/XU-QiYi/mouseTool-theme/releases/latest) 下载最新版本：
+前往 [Releases](https://github.com/XU-QiYi/mousetool-theme/releases/latest) 下载最新版本：
 
 | 文件 | 说明 |
 | --- | --- |
@@ -243,5 +243,5 @@ node scripts/dev_bg.mjs stop
 ---
 
 <p align="center">
-  遇到问题或有主题包想反馈？<a href="https://github.com/XU-QiYi/mouseTool-theme/issues">提交 Issue</a>
+  遇到问题或有主题包想反馈？<a href="https://github.com/XU-QiYi/mousetool-theme/issues">提交 Issue</a>
 </p>

@@ -9,8 +9,8 @@
 export const APP_VERSION = "0.3.0";
 
 /** 开源仓库地址（决策 13 的发布通道，也是「关于」页的反馈入口） */
-export const REPO_URL = "https://github.com/XU-QiYi/mouseTool-theme";
+export const REPO_URL = "https://github.com/XU-QiYi/mousetool-theme";
 
 /** 检查更新的版本源：GitHub Releases 最新版 */
 export const RELEASES_API =
-  "https://api.github.com/repos/XU-QiYi/mouseTool-theme/releases/latest";
+  "https://api.github.com/repos/XU-QiYi/mousetool-theme/releases/latest";
