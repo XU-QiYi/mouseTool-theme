@@ -555,6 +555,108 @@ pub async fn delete_theme(app: AppHandle, theme_id: String) -> Result<trash::Del
     outcome
 }
 
+/// 批量删除结果里的一条失败项
+#[derive(Debug, Serialize)]
+pub struct BatchDeleteFailure {
+    pub theme_id: String,
+    pub error: String,
+}
+
+/// `delete_themes` 的返回值
+///
+/// 与批量导出一致是**部分成功**语义：某一套被拒绝（使用中 / 已不存在 /
+/// 非法 ID）只进 `failed`，其余照常移入回收站。`deleted` 是成功移走的
+/// 主题 ID，顺序与入参去重后的顺序一致；`auto_purged` 是回收站超限时
+/// 自动清理的旧条目数。
+#[derive(Debug, Serialize)]
+pub struct BatchDeleteOutcome {
+    pub deleted: Vec<String>,
+    pub failed: Vec<BatchDeleteFailure>,
+    pub auto_purged: usize,
+    pub warning: Option<String>,
+}
+
+/// 批量软删除：多选后一次移入回收站（决策 43）
+///
+/// 逐套复用单套删除的 ID 校验、系统方案拒绝、使用中复核与回收站限额；
+/// 一把 `ops` 锁把整批动作与导入 / 备份 / 迁移隔开，执行完只刷新一次托盘。
+/// 单套失败不拖垮其余——宁可留下几套让用户重试，也不能把前一半悄悄撤掉。
+#[tauri::command]
+pub async fn delete_themes(
+    app: AppHandle,
+    theme_ids: Vec<String>,
+) -> Result<BatchDeleteOutcome, String> {
+    let emitter = app.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let _guard = ops::try_begin("删除主题")?;
+        let emitter = emitter.clone();
+        delete_many(&theme_ids, &mut |current, total| {
+            let _ = emitter.emit(
+                "delete-progress",
+                progress::TaskProgress::new("delete", current, total, "正在移入回收站"),
+            );
+        })
+    })
+    .await
+    .map_err(|err| format!("批量删除任务异常退出（{err}）"))?;
+
+    if outcome.as_ref().is_ok_and(|outcome| !outcome.deleted.is_empty()) {
+        // 主题没了，托盘菜单里的对应条目也该跟着消失（决策 30）
+        tray::refresh(&app);
+    }
+    outcome
+}
+
+fn delete_many(
+    theme_ids: &[String],
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<BatchDeleteOutcome, String> {
+    // 同一 ID 只处理一次：界面不会重复勾选，但 IPC 入口不信任调用方。
+    // 保留首次出现的位置，成功的顺序与用户看到的选择顺序一致。
+    let mut seen = HashSet::new();
+    let unique: Vec<&str> = theme_ids
+        .iter()
+        .map(String::as_str)
+        .filter(|id| seen.insert(*id))
+        .collect();
+    if unique.is_empty() {
+        return Err("没有选择要删除的主题".to_string());
+    }
+
+    let total = unique.len();
+    let mut outcome = BatchDeleteOutcome {
+        deleted: Vec::new(),
+        failed: Vec::new(),
+        auto_purged: 0,
+        warning: None,
+    };
+    let mut warnings = Vec::new();
+
+    for (index, theme_id) in unique.iter().copied().enumerate() {
+        progress(index + 1, total);
+        match delete(theme_id) {
+            Ok(result) => {
+                outcome.deleted.push(theme_id.to_string());
+                outcome.auto_purged = outcome.auto_purged.saturating_add(result.auto_purged);
+                if let Some(warning) = result.warning {
+                    warnings.push(warning);
+                }
+            }
+            Err(error) => outcome.failed.push(BatchDeleteFailure {
+                theme_id: theme_id.to_string(),
+                error,
+            }),
+        }
+    }
+
+    outcome.warning = match warnings.len() {
+        0 => None,
+        1 => warnings.pop(),
+        count => Some(format!("{}（共 {count} 套主题收尾未完全成功）", warnings[0])),
+    };
+    Ok(outcome)
+}
+
 fn delete(theme_id: &str) -> Result<trash::DeleteOutcome, String> {
     if !validation::is_canonical_uuid(theme_id) {
         return Err("非法的主题 ID".to_string());
@@ -1926,6 +2028,118 @@ mod tests {
         let err = delete(&theme.id).unwrap_err();
         assert!(err.contains("正在使用"), "实际：{err}");
         assert!(dir.exists(), "拒绝删除时目录必须保留");
+    }
+
+    /// 批量删除按入参顺序逐套移入回收站，同一 ID 只处理一次
+    #[test]
+    fn 批量删除逐套移入回收站并去重() {
+        let root = TempDir::new("delete-many");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("delete-many", true);
+
+        let (first, first_dir) =
+            seed_exportable_theme("批量甲", &[("Arrow", "arrow.cur", fixture_cur())]);
+        let (second, second_dir) =
+            seed_exportable_theme("批量乙", &[("Wait", "busy.ani", fixture_ani())]);
+        let mut steps = Vec::new();
+
+        let outcome = delete_many(
+            &[first.id.clone(), second.id.clone(), first.id.clone()],
+            &mut |current, total| steps.push((current, total)),
+        )
+        .expect("批量删除应整体成功");
+
+        assert_eq!(outcome.deleted, vec![first.id.clone(), second.id.clone()]);
+        assert!(outcome.failed.is_empty(), "不应有失败项");
+        assert_eq!(outcome.auto_purged, 0);
+        assert_eq!(steps, vec![(1, 2), (2, 2)], "进度要按去重后的总数上报");
+        assert!(!first_dir.exists() && !second_dir.exists(), "主题目录应已移走");
+        let entries = crate::utils::trash::list().expect("列出回收站").entries;
+        assert_eq!(entries.len(), 2, "两套主题都要留下回收站条目");
+    }
+
+    /// 批量里有一套正在使用：只拒绝那一套，其余继续删除（部分成功）
+    #[test]
+    fn 批量删除拒绝使用中主题但不影响其余() {
+        let root = TempDir::new("delete-many-active");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("delete-many-active", true);
+
+        let (active, active_dir) =
+            seed_exportable_theme("批量使用中", &[("Arrow", "arrow.cur", fixture_cur())]);
+        let (other, other_dir) =
+            seed_exportable_theme("批量可删", &[("Wait", "busy.ani", fixture_ani())]);
+        registry::write_cursors(&active.cursors, &active.name).expect("写隔离注册表");
+
+        let outcome = delete_many(
+            &[active.id.clone(), other.id.clone()],
+            &mut |_, _| {},
+        )
+        .expect("部分失败仍应返回结果");
+
+        assert_eq!(outcome.deleted, vec![other.id.clone()]);
+        assert_eq!(outcome.failed.len(), 1);
+        assert_eq!(outcome.failed[0].theme_id, active.id);
+        assert!(
+            outcome.failed[0].error.contains("正在使用"),
+            "失败原因要说清是使用中：{}",
+            outcome.failed[0].error
+        );
+        assert!(active_dir.exists(), "被拒绝的主题目录必须保留");
+        assert!(!other_dir.exists(), "其余主题应照常删除");
+        assert_eq!(
+            crate::utils::trash::list().expect("列出回收站").entries.len(),
+            1,
+            "只有成功删除的那套进入回收站"
+        );
+    }
+
+    /// 非法 ID 只记这一条失败，不能拖垮整批
+    #[test]
+    fn 批量删除非法_id_逐条失败不影响其余() {
+        let root = TempDir::new("delete-many-bad-id");
+        let _guard = root.isolate_paths();
+        let _registry = isolate_registry("delete-many-bad-id", true);
+
+        let (theme, dir) =
+            seed_exportable_theme("批量合法", &[("Arrow", "arrow.cur", fixture_cur())]);
+
+        let outcome = delete_many(
+            &["../evil".to_string(), theme.id.clone()],
+            &mut |_, _| {},
+        )
+        .expect("非法 ID 不应让整批失败");
+
+        assert_eq!(outcome.deleted, vec![theme.id]);
+        assert_eq!(outcome.failed.len(), 1);
+        assert_eq!(outcome.failed[0].theme_id, "../evil");
+        assert!(
+            outcome.failed[0].error.contains("非法"),
+            "实际：{}",
+            outcome.failed[0].error
+        );
+        assert!(!dir.exists(), "合法主题仍应删除");
+    }
+
+    /// 全部失败仍返回逐条原因，让界面能说明「为什么一套都没删掉」
+    #[test]
+    fn 批量删除全部失败仍返回逐条原因() {
+        let outcome = delete_many(
+            &["bad-id".to_string(), "../evil".to_string()],
+            &mut |_, _| {},
+        )
+        .expect("逐条失败不是命令级失败");
+
+        assert!(outcome.deleted.is_empty());
+        assert_eq!(outcome.failed.len(), 2);
+        assert!(outcome.failed.iter().all(|item| item.error.contains("非法")));
+    }
+
+    /// 空选择直接拒绝，不能拿空列表去碰回收站
+    #[test]
+    fn 批量删除空列表应拒绝() {
+        let err = delete_many(&[], &mut |_, _| {}).unwrap_err();
+        assert!(err.contains("没有选择"), "实际：{err}");
     }
 
     /// 外部光标（系统设置 / 其它工具）保存为我的主题后应立即接管

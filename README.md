@@ -10,13 +10,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/XU-QiYi/mouseTool-theme/actions/workflows/ci.yml"><img src="https://github.com/XU-QiYi/mouseTool-theme/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
-  <a href="https://github.com/XU-QiYi/mouseTool-theme/releases/latest"><img src="https://img.shields.io/github/v/release/XU-QiYi/mouseTool-theme?style=flat-square&label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=2ea44f" alt="最新版本" /></a>
-  <a href="https://github.com/XU-QiYi/mouseTool-theme/releases"><img src="https://img.shields.io/github/downloads/XU-QiYi/mouseTool-theme/total?style=flat-square&label=%E4%B8%8B%E8%BD%BD%E9%87%8F&color=0969da" alt="下载量" /></a>
-  <a href="https://github.com/XU-QiYi/mouseTool-theme/stargazers"><img src="https://img.shields.io/github/stars/XU-QiYi/mouseTool-theme?style=flat-square&label=Stars&logo=github&color=e3b341" alt="Stars" /></a>
-  <a href="https://github.com/XU-QiYi/mouseTool-theme/commits/main"><img src="https://img.shields.io/github/last-commit/XU-QiYi/mouseTool-theme?style=flat-square&label=%E6%9C%80%E5%90%8E%E6%8F%90%E4%BA%A4" alt="最后提交" /></a>
-  <a href="https://github.com/XU-QiYi/mouseTool-theme/issues"><img src="https://img.shields.io/github/issues/XU-QiYi/mouseTool-theme?style=flat-square&label=Issues" alt="Issues" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/XU-QiYi/mouseTool-theme?style=flat-square&label=License&color=2ea44f" alt="License" /></a>
+  <a href="https://github.com/XU-QiYi/mousetool-theme/actions/workflows/ci.yml"><img src="https://github.com/XU-QiYi/mousetool-theme/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
+  <a href="https://github.com/XU-QiYi/mousetool-theme/releases/latest"><img src="https://img.shields.io/github/v/release/XU-QiYi/mousetool-theme?style=flat-square&label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=2ea44f" alt="最新版本" /></a>
+  <a href="https://github.com/XU-QiYi/mousetool-theme/releases"><img src="https://img.shields.io/github/downloads/XU-QiYi/mousetool-theme/total?style=flat-square&label=%E4%B8%8B%E8%BD%BD%E9%87%8F&color=0969da" alt="下载量" /></a>
+  <a href="https://github.com/XU-QiYi/mousetool-theme/stargazers"><img src="https://img.shields.io/github/stars/XU-QiYi/mousetool-theme?style=flat-square&label=Stars&logo=github&color=e3b341" alt="Stars" /></a>
+  <a href="https://github.com/XU-QiYi/mousetool-theme/commits/main"><img src="https://img.shields.io/github/last-commit/XU-QiYi/mousetool-theme?style=flat-square&label=%E6%9C%80%E5%90%8E%E6%8F%90%E4%BA%A4" alt="最后提交" /></a>
+  <a href="https://github.com/XU-QiYi/mousetool-theme/issues"><img src="https://img.shields.io/github/issues/XU-QiYi/mousetool-theme?style=flat-square&label=Issues" alt="Issues" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/XU-QiYi/mousetool-theme?style=flat-square&label=License&color=2ea44f" alt="License" /></a>
 </p>
 
 <p align="center">
@@ -61,6 +61,7 @@
 ### 管理与维护
 
 - 改名、导出、删除；导出的 zip 按槽位重命名，并附带通用 `.inf` 安装文件，保证「导出 → 再导入」能还原
+- **批量整理**：在「我的主题」进入整理模式，多选后一次移入回收站；使用中的主题不可勾选，换搜索词会清空勾选，删除范围永远等于眼前列表
 - **回收站**：删除先移入回收站，可恢复、彻底删除或清空（上限 20 套 / 512 MB，超出自动清理最早）
 - **文件完整性**：声明了但读不到的槽位文件，在「我的主题」、检查器与诊断中心提示「缺 N 个文件」；只提示不拦截
 - **内容查重**：按槽位指纹预分组、组内逐字节确认，只报证实的重复，并算出删到每组一套能省多少空间
@@ -91,7 +92,7 @@
 
 ### 下载安装
 
-前往 [Releases](https://github.com/XU-QiYi/mouseTool-theme/releases/latest) 下载最新版本：
+前往 [Releases](https://github.com/XU-QiYi/mousetool-theme/releases/latest) 下载最新版本：
 
 | 文件 | 说明 |
 | --- | --- |
@@ -166,7 +167,7 @@ src/
 ├── stores/           唯一全局状态
 └── services/         invoke 封装 + 浏览器示例数据
 src-tauri/
-├── commands/         39 个命令：主题读取/导入/应用/保存当前/删除/改名/导出（含批量导出、内容查重）
+├── commands/         40 个命令：主题读取/导入/应用/保存当前/删除/改名/导出（含批量导出、批量删除、内容查重）
 │                     + 回收站 + 数据目录/存储统计/设置/系统集成/备份（含自动备份、内容浏览、
 │                     单主题恢复、完整性体检）等
 ├── models/           前后端共用的数据结构
@@ -183,8 +184,13 @@ docs/                 决策记录、需求、架构、设计系统、动效、�
 2. [`docs/mouse-theme需求描述.md`](docs/mouse-theme需求描述.md) —— 范围与边界
 3. [`docs/mouse-theme架构设计.md`](docs/mouse-theme架构设计.md) —— 目录、命令契约、硬约束
 4. [`docs/design-system.md`](docs/design-system.md) / [`docs/motion.md`](docs/motion.md) —— 视觉与动效
-5. [`docs/mouse-theme发布指南.md`](docs/mouse-theme发布指南.md) —— 版本号同步与发布流程
-6. [`docs/版本发布release/`](docs/版本发布release/) —— 各版本发布说明
+5. [`docs/mouse-theme启动与构建指南.md`](docs/mouse-theme启动与构建指南.md) —— 从零启动、打包与冒烟
+6. [`docs/mouse-theme发布指南.md`](docs/mouse-theme发布指南.md) —— 版本号同步与发布流程
+7. [`docs/版本发布release/`](docs/版本发布release/) —— 各版本发布说明
+8. [`docs/real-machine-verify/`](docs/real-machine-verify/) —— 真机验证证据（不进 CI）
+9. [`docs/安装器原型/setup-ui-prototype.html`](docs/安装器原型/setup-ui-prototype.html) —— 安装器 UI 设计原型
+
+5–9 是操作手册与资料，不参与冲突裁决。
 
 ## 已知限制
 
@@ -228,11 +234,12 @@ node scripts/backup_content_check.mjs
 node scripts/backup_verify_check.mjs
 node scripts/duplicate_check.mjs
 node scripts/maintenance_check.mjs
+node scripts/batch_check.mjs     # 主题库批量整理
 node scripts/scheme_import_check.mjs
 node scripts/dev_bg.mjs stop
 ```
 
-完整的脚本清单、真机验证与发布步骤见 [`AGENTS.md`](AGENTS.md) 与 [`docs/mouse-theme发布指南.md`](docs/mouse-theme发布指南.md)。
+完整的脚本清单与发布步骤见 [`AGENTS.md`](AGENTS.md) 与 [`docs/mouse-theme发布指南.md`](docs/mouse-theme发布指南.md)；真机验证证据见 [`docs/real-machine-verify/`](docs/real-machine-verify/)，脚本说明见 [`scripts/real_machine/README.md`](scripts/real_machine/README.md)。
 
 ## 许可证
 
@@ -241,5 +248,5 @@ node scripts/dev_bg.mjs stop
 ---
 
 <p align="center">
-  遇到问题或有主题包想反馈？<a href="https://github.com/XU-QiYi/mouseTool-theme/issues">提交 Issue</a>
+  遇到问题或有主题包想反馈？<a href="https://github.com/XU-QiYi/mousetool-theme/issues">提交 Issue</a>
 </p>

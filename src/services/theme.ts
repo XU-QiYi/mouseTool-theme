@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import type {
   ActiveState,
   ApplyOutcome,
+  BatchDeleteOutcome,
   CursorTheme,
   DeleteOutcome,
   EmptyTrashOutcome,
@@ -411,6 +412,53 @@ export function deleteTheme(themeId: string): Promise<DeleteOutcome> {
     return Promise.resolve({ auto_purged: 0, warning: null });
   }
   return invoke<DeleteOutcome>("delete_theme", { themeId });
+}
+
+/**
+ * 对应 Rust 命令 `delete_themes`：多选批量移入回收站（决策 43）
+ *
+ * 部分成功：单套被拒绝只进 `failed`，其余照常删除。后端在整批执行期间只
+ * 取一把 `ops` 锁、只刷新一次托盘，逐套复用单套删除的校验与回收站链路。
+ */
+export async function deleteThemes(
+  themeIds: string[],
+  onProgress?: (progress: TaskProgress) => void,
+): Promise<BatchDeleteOutcome> {
+  const unique = [...new Set(themeIds)];
+  if (!inTauri) {
+    const deleted: string[] = [];
+    const failed: BatchDeleteOutcome["failed"] = [];
+    for (const [index, themeId] of unique.entries()) {
+      onProgress?.({
+        stage: "delete",
+        current: index + 1,
+        total: unique.length,
+        message: "正在移入回收站",
+      });
+      try {
+        await deleteTheme(themeId);
+        deleted.push(themeId);
+      } catch (err) {
+        failed.push({
+          theme_id: themeId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return { deleted, failed, auto_purged: 0, warning: null };
+  }
+
+  let unlisten: (() => void) | undefined;
+  if (onProgress) {
+    unlisten = await listen<TaskProgress>("delete-progress", (event) => {
+      onProgress(event.payload);
+    });
+  }
+  try {
+    return await invoke<BatchDeleteOutcome>("delete_themes", { themeIds: unique });
+  } finally {
+    unlisten?.();
+  }
 }
 
 /** 对应 Rust 命令 `list_trash`：列出回收站与当前限额 */
