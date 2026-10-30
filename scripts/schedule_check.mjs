@@ -221,13 +221,21 @@ try {
   assert("改设置解除挂起后重新应用期间内主题", reApplied);
 
   // --- 5. 跨零点窗口（22:00–06:00）：按当前时刻判定命中与否 ---
+  // 不派发 focus：focus 会顺带触发 App 的 refreshActive()，把 mock 里最后一次
+  // 应用写回 activeThemeId，覆盖本用例刚复位好的「系统默认」前提。设置补丁
+  // 本身就会触发定时切换评估，足够验证窗口判定。
   await patch(
     `__settingsStore.getState().patchSettings({ auto_switch_enabled: false, auto_switch_light_id: "", auto_switch_dark_id: "" })`,
   );
   await patch(`__settingsStore.getState().patchSettings({ schedule_switch_enabled: false })`);
-  await evaluate(
-    `__themeStore.setState({ activeThemeId: "sys_windows_default", activeExternal: false })`,
-  );
+  // 用真实的「还原默认」复位：除了 activeThemeId，还会清掉定时模块的
+  // lastAppliedId（去重记录）。直接 setState 只改前者，后面把映射改回 Neon
+  // 时会被去重挡住，得到一个与产品行为无关的假失败。
+  await sleep(300);
+  await evaluate(`__themeStore.getState().restoreDefault()`, true);
+  await sleep(200);
+  const crossReset = await evaluate(`__themeStore.getState().activeThemeId`);
+  assert("跨零点用例前已还原默认", crossReset === null, String(crossReset));
   await patch(
     `__settingsStore.getState().patchSettings({
       schedule_switch_enabled: true,
@@ -237,7 +245,6 @@ try {
       schedule_out_id: "",
     })`,
   );
-  await evaluate(`window.dispatchEvent(new Event("focus"))`);
   if (crossMidnightHit) {
     const hit = await waitFor(`__themeStore.getState().activeThemeId === "sys_firefly"`);
     const crossText = await evaluate(
@@ -252,7 +259,7 @@ try {
     );
     assert(
       "当前时刻在跨零点窗口外：不动作且状态行判定时间段外",
-      missed === "sys_windows_default" && crossText.includes("时间段外"),
+      missed === null && crossText.includes("时间段外"),
       `${missed} / ${crossText}`,
     );
   }
