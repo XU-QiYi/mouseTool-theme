@@ -302,7 +302,7 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
           : dupScan.error
             ? "点「重新扫描」重试；查重只读文件，不影响任何数据"
             : dupGroups.length > 0
-              ? "每组删到剩一套即可：到「我的主题」找到多余的那套删除（删除会先进回收站，可反悔）"
+              ? "每组删到剩一套即可：到「我的主题」用「批量整理」勾选多余副本，一次移入回收站（可反悔）"
               : null,
         action:
           dupGroups.length > 0

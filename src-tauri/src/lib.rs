@@ -16,9 +16,9 @@ use commands::system::{
     take_pending_import,
 };
 use commands::theme::{
-    apply_theme, delete_theme, export_all_themes, export_theme, find_duplicate_themes,
-    get_active_state, get_all_themes, import_theme, rename_theme, restore_default,
-    save_current_theme,
+    apply_theme, delete_theme, delete_themes, export_all_themes, export_theme,
+    find_duplicate_themes, get_active_state, get_all_themes, import_theme, rename_theme,
+    restore_default, save_current_theme,
 };
 use commands::trash::{delete_from_trash, empty_trash, list_trash, restore_from_trash};
 use utils::settings::{self, CloseBehavior};
@@ -57,6 +57,7 @@ pub fn run() {
             save_current_theme,
             import_theme,
             delete_theme,
+            delete_themes,
             rename_theme,
             export_theme,
             export_all_themes,

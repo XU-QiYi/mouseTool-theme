@@ -131,6 +131,24 @@ export interface DeleteOutcome {
   warning: string | null;
 }
 
+/** `delete_themes` 结果里的一条失败项（部分成功语义） */
+export interface BatchDeleteFailure {
+  theme_id: string;
+  error: string;
+}
+
+/** `delete_themes` 的返回值：多选批量移入回收站（决策 43） */
+export interface BatchDeleteOutcome {
+  /** 成功移入回收站的主题 ID，顺序与入参去重后一致 */
+  deleted: string[];
+  /** 被拒绝的主题与原因；其余主题照常删除 */
+  failed: BatchDeleteFailure[];
+  /** 回收站超限时自动清理的旧条目数 */
+  auto_purged: number;
+  /** 非致命问题（典型：跨盘复制后原目录没能完全删除） */
+  warning: string | null;
+}
+
 /** `restore_from_trash` 的返回值 */
 export interface RestoreOutcome {
   warning: string | null;

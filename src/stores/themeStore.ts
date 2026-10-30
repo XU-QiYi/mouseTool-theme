@@ -4,6 +4,7 @@ import {
   applyTheme as apiApplyTheme,
   clearHistory as apiClearHistory,
   deleteTheme as apiDeleteTheme,
+  deleteThemes as apiDeleteThemes,
   exportAllThemes as apiExportAllThemes,
   exportTheme as apiExportTheme,
   getActiveState,
@@ -29,7 +30,13 @@ import {
   takePendingImport as apiTakePendingImport,
   type ZipMenuStatus,
 } from "@/services/system";
-import type { CursorTheme, HistoryEntry, ThemeFileGap, TrashEntry } from "@/types/theme";
+import type {
+  BatchDeleteOutcome,
+  CursorTheme,
+  HistoryEntry,
+  ThemeFileGap,
+  TrashEntry,
+} from "@/types/theme";
 
 /**
  * 每页各记一份选中项：切页回来还是原来的上下文，又不会把别的页的选择带过来
@@ -60,6 +67,9 @@ function clearSelection(selection: Selection, removedId: string): Selection {
 export function actionBusyKey(action: string, id: string): string {
   return `${action}:${id}`;
 }
+
+/** 批量删除不是按主题计的动作，固定占用一个 key；界面与 store 共用同一份 */
+export const BATCH_DELETE_BUSY_KEY = actionBusyKey("delete", "batch");
 
 function withBusyFlag(
   busy: Record<string, boolean>,
@@ -112,6 +122,8 @@ interface ThemeStore {
   importProgress: TaskProgress | null;
   /** 批量导出进度（来自 `export-all-progress` 事件，决策 34）；null = 没有进行中的批量导出 */
   exportAllProgress: TaskProgress | null;
+  /** 批量删除进度（来自 `delete-progress` 事件，决策 43）；null = 没有进行中的批量删除 */
+  batchDeleteProgress: TaskProgress | null;
   /**
    * 按动作区分的忙碌状态：键见 `actionBusyKey`
    *
@@ -152,6 +164,14 @@ interface ThemeStore {
   importTheme: (sourcePath: string) => Promise<void>;
   /** 返回是否真的删掉了；确认对话框据此决定关不关 */
   deleteTheme: (id: string) => Promise<boolean>;
+  /**
+   * 多选批量移入回收站（决策 43）
+   *
+   * 只提交仍存在、非系统方案、且不是当前使用中的主题；部分成功时把成功项
+   * 从列表移除，失败项留给界面继续显示。返回 null = 没有可提交的目标或
+   * 命令失败（错误已提示）。
+   */
+  deleteThemes: (ids: string[]) => Promise<BatchDeleteOutcome | null>;
   /** 从回收站恢复；成功后重读主题列表，并把恢复的主题选在图库与我的主题里 */
   restoreTrashEntry: (entry: TrashEntry) => Promise<boolean>;
   renameTheme: (id: string, newName: string) => Promise<void>;
@@ -203,6 +223,7 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
   importing: false,
   importProgress: null,
   exportAllProgress: null,
+  batchDeleteProgress: null,
   busy: {},
   loadError: null,
   warnings: [],
@@ -432,6 +453,78 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
       return false;
     } finally {
       set((state) => ({ busy: withBusyFlag(state.busy, key, false) }));
+    }
+  },
+
+  deleteThemes: async (ids) => {
+    const key = BATCH_DELETE_BUSY_KEY;
+    if (get().busy[key]) return null;
+
+    const activeId = get().activeThemeId;
+    const wanted = new Set(ids);
+    const targets = get().themes.filter(
+      (theme) => wanted.has(theme.id) && !theme.is_built_in && theme.id !== activeId,
+    );
+    if (targets.length === 0) {
+      toast.error("没有可删除的主题", "使用中的主题需要先切换或还原系统默认");
+      return null;
+    }
+
+    const names = new Map(get().themes.map((theme) => [theme.id, theme.name]));
+    set((state) => ({
+      busy: withBusyFlag(state.busy, key, true),
+      batchDeleteProgress: null,
+    }));
+
+    try {
+      const outcome = await apiDeleteThemes(
+        targets.map((theme) => theme.id),
+        (progress) => set({ batchDeleteProgress: progress }),
+      );
+
+      if (outcome.deleted.length > 0) {
+        const removed = new Set(outcome.deleted);
+        set((state) => ({
+          themes: state.themes.filter((theme) => !removed.has(theme.id)),
+          fileGaps: state.fileGaps.filter((gap) => !removed.has(gap.theme_id)),
+          selection: outcome.deleted.reduce(clearSelection, state.selection),
+        }));
+      }
+
+      const hints = ["可在 设置 → 数据 → 回收站 恢复"];
+      if (outcome.auto_purged > 0) {
+        hints.push(`回收站超出上限，已自动清理最早的 ${outcome.auto_purged} 套`);
+      }
+      const firstFailure = outcome.failed[0];
+      const failureDetail = firstFailure
+        ? `「${names.get(firstFailure.theme_id) ?? firstFailure.theme_id}」${
+            firstFailure.error
+          }${outcome.failed.length > 1 ? `；共 ${outcome.failed.length} 套未删除` : ""}`
+        : "";
+
+      if (outcome.deleted.length === 0) {
+        toast.error("没有删除任何主题", failureDetail || "请重试");
+      } else if (outcome.failed.length === 0) {
+        toast.success(`已移入回收站 ${outcome.deleted.length} 套主题`, hints.join("；"));
+      } else {
+        toast.warning(
+          `已移入回收站 ${outcome.deleted.length} 套，${outcome.failed.length} 套未删除`,
+          `${failureDetail}；${hints.join("；")}`,
+        );
+      }
+      if (outcome.warning) {
+        toast.warning("主题已移入回收站，但收尾没完全成功", outcome.warning);
+      }
+      return outcome;
+    } catch (err) {
+      console.error("批量删除失败：", err);
+      toast.error("批量删除失败", readableError(err));
+      return null;
+    } finally {
+      set((state) => ({
+        busy: withBusyFlag(state.busy, key, false),
+        batchDeleteProgress: null,
+      }));
     }
   },
 

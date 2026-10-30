@@ -1,13 +1,23 @@
-import { useMemo, useState } from "react";
-import { Archive, FolderDown, FolderOutput, MousePointer2, SearchX, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Archive,
+  FolderDown,
+  FolderOutput,
+  ListChecks,
+  MousePointer2,
+  SearchX,
+  Trash2,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { ContentFrame } from "@/components/layout/ContentFrame";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { CursorPreviewImage } from "@/components/cursor/CursorPreviewImage";
 import { SlotMeter } from "@/components/theme/SlotMeter";
+import { BatchDeleteDialog } from "@/components/theme/BatchDeleteDialog";
 import { DeleteThemeDialog } from "@/components/theme/DeleteThemeDialog";
 import { useExportAllThemes } from "@/hooks/useExportAllThemes";
 import { useExportTheme } from "@/hooks/useExportTheme";
@@ -15,7 +25,7 @@ import { useImportTheme } from "@/hooks/useImportTheme";
 import { coverSlot, slotStats } from "@/lib/slots";
 import { mineThemes, missingSlotsOf } from "@/lib/themes";
 import { cn } from "@/lib/utils";
-import { actionBusyKey, useThemeStore } from "@/stores/themeStore";
+import { actionBusyKey, BATCH_DELETE_BUSY_KEY, useThemeStore } from "@/stores/themeStore";
 import type { CursorTheme } from "@/types/theme";
 
 /**
@@ -40,22 +50,100 @@ export function MyThemesView() {
   const selectTheme = useThemeStore((s) => s.selectTheme);
   const busy = useThemeStore((s) => s.busy);
   const exportAllProgress = useThemeStore((s) => s.exportAllProgress);
+  const batchDeleteProgress = useThemeStore((s) => s.batchDeleteProgress);
   const { picking, pick } = useImportTheme();
   const { isExporting, pickAndExport } = useExportTheme();
   const { picking: pickingAll, exportingAll, pickAndExportAll } = useExportAllThemes();
 
   const [pendingDelete, setPendingDelete] = useState<CursorTheme | null>(null);
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [singleConfirmOpen, setSingleConfirmOpen] = useState(false);
+  // 整理模式是页面内的一次性会话：勾选不进 store、不落盘，离开页面即消失
+  const [batchMode, setBatchMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [batchConfirmOpen, setBatchConfirmOpen] = useState(false);
 
   const rows = useMemo(() => mineThemes(themes, query), [themes, query]);
   const hasImported = useMemo(
     () => themes.some((theme) => !theme.is_built_in),
     [themes],
   );
+  const batchDeleting = Boolean(busy[BATCH_DELETE_BUSY_KEY]);
+  // 使用中的主题可以看、可以选进检查器，但不能进入批量删除
+  const deletableRows = useMemo(
+    () => rows.filter((theme) => theme.id !== activeThemeId),
+    [rows, activeThemeId],
+  );
+  const selectedThemes = useMemo(
+    () => rows.filter((theme) => selectedIds.has(theme.id) && theme.id !== activeThemeId),
+    [rows, selectedIds, activeThemeId],
+  );
+  const selectedCount = selectedThemes.length;
+  const allSelected = deletableRows.length > 0 && selectedCount === deletableRows.length;
+  const someSelected = selectedCount > 0 && !allSelected;
+
+  // 删除范围永远与眼前列表一致：换搜索词就清空勾选，避免删掉被过滤掉的行
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [query]);
+
+  // 列表变化（删除 / 导入 / 恢复）后，把已经不存在的 ID 从勾选里剔除
+  useEffect(() => {
+    const available = new Set(rows.map((theme) => theme.id));
+    setSelectedIds((prev) => {
+      if ([...prev].every((id) => available.has(id))) return prev;
+      return new Set([...prev].filter((id) => available.has(id)));
+    });
+  }, [rows]);
+
+  // 应用主题后，刚变成「使用中」的那一套必须立刻退出勾选
+  useEffect(() => {
+    if (!activeThemeId) return;
+    setSelectedIds((prev) => {
+      if (!prev.has(activeThemeId)) return prev;
+      const next = new Set(prev);
+      next.delete(activeThemeId);
+      return next;
+    });
+  }, [activeThemeId]);
+
+  // 主题库清空后退出整理模式；否则下次导入会莫名回到勾选状态
+  useEffect(() => {
+    if (!hasImported && batchMode) {
+      setBatchMode(false);
+      setSelectedIds(new Set());
+    }
+  }, [hasImported, batchMode]);
+
+  useEffect(() => {
+    if (batchConfirmOpen && selectedThemes.length === 0) setBatchConfirmOpen(false);
+  }, [batchConfirmOpen, selectedThemes.length]);
 
   const requestDelete = (theme: CursorTheme) => {
     setPendingDelete(theme);
-    setConfirmOpen(true);
+    setSingleConfirmOpen(true);
+  };
+
+  const toggleSelected = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(deletableRows.map((theme) => theme.id)));
+    }
+  };
+
+  const exitBatchMode = () => {
+    if (batchDeleting) return;
+    setBatchMode(false);
+    setSelectedIds(new Set());
   };
 
   if (loading) {
@@ -107,25 +195,95 @@ export function MyThemesView() {
   return (
     <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-6 py-4">
       <ContentFrame width="wide">
-        {/* 工具条：批量导出（决策 34）。行内动作不变——「管」的单位仍然是一套主题 */}
+        {/* 工具条：默认批量导出（决策 34）；整理模式换成选择与批量删除（决策 43） */}
         <div className="mb-3 flex items-center justify-between gap-3" data-export-all-bar>
           <p className="text-2xs text-muted-foreground tabular-nums">共 {rows.length} 套主题</p>
           <div className="flex items-center gap-2">
-            {exportAllProgress && (
-              <span data-export-all-progress className="text-2xs text-muted-foreground tabular-nums">
-                {exportAllProgress.current}/{exportAllProgress.total} · {exportAllProgress.message}
-              </span>
+            {batchMode ? (
+              <>
+                {batchDeleteProgress && (
+                  <span
+                    data-batch-delete-progress
+                    className="text-2xs text-muted-foreground tabular-nums whitespace-nowrap"
+                  >
+                    {batchDeleteProgress.current}/{batchDeleteProgress.total} ·{" "}
+                    {batchDeleteProgress.message}
+                  </span>
+                )}
+                <span
+                  data-batch-count
+                  aria-live="polite"
+                  className="text-2xs text-muted-foreground tabular-nums whitespace-nowrap"
+                >
+                  已选 {selectedCount} 套
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  data-select-all
+                  onClick={toggleSelectAll}
+                  disabled={deletableRows.length === 0 || batchDeleting}
+                >
+                  {allSelected ? "取消全选" : "全选"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  data-batch-delete
+                  onClick={() => setBatchConfirmOpen(true)}
+                  disabled={selectedCount === 0 || batchDeleting}
+                >
+                  <Trash2 data-icon="inline-start" />
+                  {batchDeleting ? "删除中…" : "删除所选"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  data-batch-exit
+                  onClick={exitBatchMode}
+                  disabled={batchDeleting}
+                >
+                  退出整理
+                </Button>
+              </>
+            ) : (
+              <>
+                {exportAllProgress && (
+                  <span
+                    data-export-all-progress
+                    className="text-2xs text-muted-foreground tabular-nums"
+                  >
+                    {exportAllProgress.current}/{exportAllProgress.total} ·{" "}
+                    {exportAllProgress.message}
+                  </span>
+                )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  data-batch-mode
+                  title={
+                    deletableRows.length === 0
+                      ? "当前列表没有可批量删除的主题（使用中的主题需先切换或还原系统默认）"
+                      : undefined
+                  }
+                  onClick={() => setBatchMode(true)}
+                  disabled={exportingAll || pickingAll || batchDeleting || deletableRows.length === 0}
+                >
+                  <ListChecks data-icon="inline-start" />
+                  批量整理
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  data-export-all
+                  onClick={() => void pickAndExportAll()}
+                  disabled={exportingAll || pickingAll || batchDeleting}
+                >
+                  <FolderOutput data-icon="inline-start" />
+                  {exportingAll ? "导出中…" : pickingAll ? "选择中…" : "导出全部"}
+                </Button>
+              </>
             )}
-            <Button
-              size="sm"
-              variant="outline"
-              data-export-all
-              onClick={() => void pickAndExportAll()}
-              disabled={exportingAll || pickingAll}
-            >
-              <FolderOutput data-icon="inline-start" />
-              {exportingAll ? "导出中…" : pickingAll ? "选择中…" : "导出全部"}
-            </Button>
           </div>
         </div>
         {/* 抵消首末列 padding：表格首列文字与页标题左缘对齐 */}
@@ -134,7 +292,20 @@ export function MyThemesView() {
         <thead>
           <tr className="border-b border-border/60">
             <th scope="col" className="px-3 py-2 text-left text-xs font-normal text-muted-foreground">
-              主题
+              {batchMode ? (
+                <span className="flex items-center gap-2.5 whitespace-nowrap">
+                  <Checkbox
+                    checked={allSelected}
+                    indeterminate={someSelected}
+                    onCheckedChange={toggleSelectAll}
+                    label="全选当前列表中的可删除主题"
+                    disabled={deletableRows.length === 0 || batchDeleting}
+                  />
+                  主题
+                </span>
+              ) : (
+                "主题"
+              )}
             </th>
             <th scope="col" className="w-32 px-3 py-2 text-left text-xs font-normal text-muted-foreground">
               槽位
@@ -151,9 +322,10 @@ export function MyThemesView() {
           {rows.map((theme) => {
             const selected = theme.id === selectedId;
             const isActive = theme.id === activeThemeId;
-            // 批量导出占用重操作锁时，行内导出也让位：第二个动作会被锁立即拒绝
-            const exporting = isExporting(theme.id) || exportingAll;
-            const deleting = Boolean(busy[actionBusyKey("delete", theme.id)]);
+            const batchSelected = selectedIds.has(theme.id);
+            // 批量导出 / 批量删除占用重操作锁时，行内动作也让位：第二个动作会被锁立即拒绝
+            const exporting = isExporting(theme.id) || exportingAll || batchDeleting;
+            const deleting = Boolean(busy[actionBusyKey("delete", theme.id)]) || batchDeleting;
             const stats = slotStats(theme);
             const cover = coverSlot(theme);
             const missing = missingSlotsOf(fileGaps, theme.id);
@@ -179,35 +351,56 @@ export function MyThemesView() {
                       className="absolute inset-y-0 left-0 w-0.5 rounded-full bg-primary"
                     />
                   )}
-                  <button
-                    type="button"
-                    onClick={() => selectTheme(theme.id)}
-                    aria-pressed={selected}
-                    className="focus-ring relative flex w-full min-w-0 items-center gap-2.5 rounded-md text-left after:absolute after:inset-0"
-                  >
-                    <span className="preview-surface grid size-9 shrink-0 place-items-center rounded-md ring-1 ring-border/60">
-                      {cover ? (
-                        <CursorPreviewImage slot={cover} size="sm" />
-                      ) : (
-                        <MousePointer2 className="size-4 text-muted-foreground" />
-                      )}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium">{theme.name}</span>
-                      <span className="block truncate text-2xs text-muted-foreground">
-                        {stats.animated > 0
-                          ? `${stats.animated} 个动态光标`
-                          : "全部为静态光标"}
-                      </span>
-                    </span>
-                    {isActive && (
-                      <span className="z-10 shrink-0">
-                        <StatusBadge tone="success" dot>
-                          使用中
-                        </StatusBadge>
-                      </span>
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    {batchMode && (
+                      <Checkbox
+                        checked={batchSelected}
+                        onCheckedChange={() => toggleSelected(theme.id)}
+                        label={
+                          isActive
+                            ? `「${theme.name}」使用中，不能批量删除`
+                            : batchSelected
+                              ? `取消选择「${theme.name}」`
+                              : `选择「${theme.name}」`
+                        }
+                        title={
+                          isActive
+                            ? "使用中的主题需要先切换或还原系统默认才能删除"
+                            : undefined
+                        }
+                        disabled={isActive || batchDeleting}
+                      />
                     )}
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => selectTheme(theme.id)}
+                      aria-pressed={selected}
+                      className="focus-ring relative flex min-w-0 flex-1 items-center gap-2.5 rounded-md text-left after:absolute after:inset-0"
+                    >
+                      <span className="preview-surface grid size-9 shrink-0 place-items-center rounded-md ring-1 ring-border/60">
+                        {cover ? (
+                          <CursorPreviewImage slot={cover} size="sm" />
+                        ) : (
+                          <MousePointer2 className="size-4 text-muted-foreground" />
+                        )}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium">{theme.name}</span>
+                        <span className="block truncate text-2xs text-muted-foreground">
+                          {stats.animated > 0
+                            ? `${stats.animated} 个动态光标`
+                            : "全部为静态光标"}
+                        </span>
+                      </span>
+                      {isActive && (
+                        <span className="z-10 shrink-0">
+                          <StatusBadge tone="success" dot>
+                            使用中
+                          </StatusBadge>
+                        </span>
+                      )}
+                    </button>
+                  </div>
                 </td>
 
                 <td className="px-3 py-2.5">
@@ -290,7 +483,16 @@ export function MyThemesView() {
       </table>
       </ContentFrame>
 
-      <DeleteThemeDialog theme={pendingDelete} open={confirmOpen} onOpenChange={setConfirmOpen} />
+      <DeleteThemeDialog
+        theme={pendingDelete}
+        open={singleConfirmOpen}
+        onOpenChange={setSingleConfirmOpen}
+      />
+      <BatchDeleteDialog
+        themes={selectedThemes}
+        open={batchConfirmOpen}
+        onOpenChange={setBatchConfirmOpen}
+      />
     </div>
   );
 }

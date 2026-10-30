@@ -61,6 +61,7 @@
 ### 管理与维护
 
 - 改名、导出、删除；导出的 zip 按槽位重命名，并附带通用 `.inf` 安装文件，保证「导出 → 再导入」能还原
+- **批量整理**：在「我的主题」进入整理模式，多选后一次移入回收站；使用中的主题不可勾选，换搜索词会清空勾选，删除范围永远等于眼前列表
 - **回收站**：删除先移入回收站，可恢复、彻底删除或清空（上限 20 套 / 512 MB，超出自动清理最早）
 - **文件完整性**：声明了但读不到的槽位文件，在「我的主题」、检查器与诊断中心提示「缺 N 个文件」；只提示不拦截
 - **内容查重**：按槽位指纹预分组、组内逐字节确认，只报证实的重复，并算出删到每组一套能省多少空间
@@ -166,7 +167,7 @@ src/
 ├── stores/           唯一全局状态
 └── services/         invoke 封装 + 浏览器示例数据
 src-tauri/
-├── commands/         39 个命令：主题读取/导入/应用/保存当前/删除/改名/导出（含批量导出、内容查重）
+├── commands/         40 个命令：主题读取/导入/应用/保存当前/删除/改名/导出（含批量导出、批量删除、内容查重）
 │                     + 回收站 + 数据目录/存储统计/设置/系统集成/备份（含自动备份、内容浏览、
 │                     单主题恢复、完整性体检）等
 ├── models/           前后端共用的数据结构
@@ -228,6 +229,7 @@ node scripts/backup_content_check.mjs
 node scripts/backup_verify_check.mjs
 node scripts/duplicate_check.mjs
 node scripts/maintenance_check.mjs
+node scripts/batch_check.mjs     # 主题库批量整理
 node scripts/scheme_import_check.mjs
 node scripts/dev_bg.mjs stop
 ```
