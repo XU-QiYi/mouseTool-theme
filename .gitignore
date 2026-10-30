@@ -55,3 +55,6 @@ docs/screenshots/
 
 # 本地发布的安装包产物（上传 GitHub Releases，不入库）
 release/
+
+# 本地录屏素材（人工验证产物，不入库）
+recordings/
