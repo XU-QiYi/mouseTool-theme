@@ -141,7 +141,7 @@ App.tsx
 
 ---
 
-## 5. 命令契约（当前共 40 个）
+## 5. 命令契约（当前共 41 个）
 
 | Command | 入参（前端写法） | 返回 | 失败场景 |
 |---|---|---|---|
@@ -159,6 +159,7 @@ App.tsx
 | `export_all_themes` | `destDir` | `ExportAllOutcome`（`dir` + `exported` / `failed` / `total_bytes` / `warnings`） | 目录不存在或不是文件夹、落点是备份 / 回收站 / 主题库等应用管理目录——整体拒绝；单套导出失败（如文件缺口、源文件被占）只进 `failed`，其余照常落盘（硬约束 8 口径）；落盘名按主题名生成（非法字符与 Windows 保留名后端兜底，重名自动加序号且不覆盖已有文件）；只导「我的主题」，系统方案不在此列；执行期取 `ops` 锁并发 `export-all-progress`（决策 35） |
 | `get_data_dir` | — | `String`（展示路径） | `LOCALAPPDATA` 缺失或为空时返回中文错误（**不回退到当前目录**）；只读 `data_root()`，不创建目录 |
 | `open_data_dir` | — | `String`（实际打开的路径） | 数据根不可用、建目录失败、系统文件管理器打开失败 |
+| `open_log_dir` | — | `String`（实际打开的路径） | 同 `open_data_dir`（打开的是数据根 `logs` 目录，决策 46） |
 | `get_storage_stats` | — | `StorageStats`（`themes` / `backups` / `trash` 各含 `count` + `bytes`，另有 `history_bytes` / `settings_bytes` / `total_bytes`） | **不失败**（目录不存在按零计）；纯只读统计，不建目录、不取 `ops` 锁；链接 / 目录联接不进入，深度封顶 16 层；条目口径：主题 = 含 `theme.json` 的一级子目录、备份 = `.zip`、回收站 = 含 `.trash.json` 的条目，孤儿文件只计字节不冒充条目数（决策 35） |
 | `clear_history` | — | `usize`（清掉的条数） | 记录文件只读降级（版本过高 / 损坏）时拒绝清空；文件不存在返回 0 且**不凭空创建**；轻量单文件原子重写，不走 `ops` 锁（决策 35） |
 | `get_windows_version` | — | `String` | 读不到注册表版本键（诊断信息降级为「未知」） |

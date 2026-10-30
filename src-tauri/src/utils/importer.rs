@@ -6,7 +6,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::models::{CursorSlot, CursorTheme};
-use crate::utils::{inf_parse, limits, paths, progress, registry, theme_file, theme_paths, validation};
+use crate::utils::{inf_parse, limits, log, paths, progress, registry, theme_file, theme_paths, validation};
 
 /// 导入结果：新主题 + 扫描时跳过的非致命问题（典型：链接 / 目录联接）
 #[derive(Debug, Serialize)]
@@ -1018,7 +1018,7 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
                     "跳过链接或目录联接主题目录：{}",
                     entry.path().display()
                 );
-                eprintln!("{msg}");
+                log::warn("importer", &msg);
                 warnings.push(msg);
                 return None;
             }
@@ -1029,7 +1029,7 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
                     "跳过主题目录 {}（theme.json 是链接或目录联接）",
                     dir.display()
                 );
-                eprintln!("{msg}");
+                log::warn("importer", &msg);
                 warnings.push(msg);
                 return None;
             }
@@ -1042,7 +1042,7 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
                 Ok(text) => text,
                 Err(err) => {
                     let msg = format!("跳过主题目录 {}（读不到 theme.json：{err}）", dir.display());
-                    eprintln!("{msg}");
+                    log::warn("importer", &msg);
                     warnings.push(msg);
                     return None;
                 }
@@ -1059,7 +1059,7 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
                             "跳过主题目录 {}（theme.json 声明为系统方案，用户主题不能自称系统方案）",
                             dir.display()
                         );
-                        eprintln!("{msg}");
+                        log::warn("importer", &msg);
                         warnings.push(msg);
                         return None;
                     }
@@ -1070,7 +1070,7 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
                             dir.display(),
                             theme.id
                         );
-                        eprintln!("{msg}");
+                        log::warn("importer", &msg);
                         warnings.push(msg);
                         return None;
                     }
@@ -1107,7 +1107,7 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
                 }
                 Err(err) => {
                     let msg = format!("跳过损坏的 theme.json {}：{err}", dir.display());
-                    eprintln!("{msg}");
+                    log::warn("importer", &msg);
                     warnings.push(msg);
                     None
                 }

@@ -19,6 +19,7 @@ use tauri::{
 
 use crate::commands::theme::{apply_by_id, collect_snapshot, restore, ThemesSnapshot};
 use crate::models::{CursorTheme, HistoryEntry};
+use crate::utils::log;
 use crate::utils::settings::{self, CloseBehavior};
 
 const TRAY_ID: &str = "main";
@@ -93,7 +94,7 @@ pub fn sync(app: &AppHandle) {
         CloseBehavior::Tray => {
             if app.tray_by_id(TRAY_ID).is_none() {
                 if let Err(err) = build(app) {
-                    eprintln!("[tray] 创建托盘图标失败：{err}");
+                    log::error("tray", &format!("创建托盘图标失败：{err}"));
                 }
             }
             // 主题区随后台重查补齐：启动与设置变更都会走到这里，
@@ -125,11 +126,11 @@ fn rebuild_menu(app: &AppHandle, snapshot: &ThemesSnapshot) {
         Ok(menu) => {
             if let Some(tray) = app.tray_by_id(TRAY_ID) {
                 if let Err(err) = tray.set_menu(Some(menu)) {
-                    eprintln!("[tray] 更新托盘菜单失败：{err}");
+                    log::error("tray", &format!("更新托盘菜单失败：{err}"));
                 }
             }
         }
-        Err(err) => eprintln!("[tray] 组装托盘菜单失败：{err}"),
+        Err(err) => log::error("tray", &format!("组装托盘菜单失败：{err}")),
     }
 }
 
@@ -250,7 +251,7 @@ fn apply_theme_from_tray(app: &AppHandle, theme_id: &str) {
     std::thread::spawn(move || {
         let outcome = apply_by_id(&theme_id);
         if let Err(err) = &outcome {
-            eprintln!("[tray] 托盘应用主题失败：{err}");
+            log::warn("tray", &format!("托盘应用主题失败：{err}"));
         }
         refresh(&app);
     });
@@ -261,7 +262,7 @@ fn restore_default_from_tray(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
         if let Err(err) = restore() {
-            eprintln!("[tray] 托盘还原默认失败：{err}");
+            log::warn("tray", &format!("托盘还原默认失败：{err}"));
         }
         refresh(&app);
     });

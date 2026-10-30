@@ -4,7 +4,7 @@
 > 原则：**事实以代码为准**。本文件与代码不一致时改本文件，不要改代码迁就文档；更不要把没实现的东西写成已支持。
 
 **技术栈**：Tauri 2 + React 19 + TypeScript + Vite 7 + Tailwind 4 + shadcn/ui（base-nova / `@base-ui/react`）+ zustand 5 + Rust。
-**现状**：功能已跑通，40 个 Tauri 命令全部实现并注册；除纯路径计算的 `get_data_dir` 外，I/O 命令都是 `async` + `spawn_blocking`。不是脚手架（没有 `greet` 示例）。
+**现状**：功能已跑通，41 个 Tauri 命令全部实现并注册；除纯路径计算的 `get_data_dir` 外，I/O 命令都是 `async` + `spawn_blocking`。不是脚手架（没有 `greet` 示例）。
 
 ## 先读哪份（冲突时从上往下取）
 
@@ -26,6 +26,7 @@
 - **Capture**（`utils/capture.rs`）：把外部改写态的当前光标复制为我的主题（决策 28）。只读注册表、复制到新的 UUID 主题目录、`theme.json` 写相对路径；同一源文件多槽位只复制一份，单文件 20MB / 总量 50MB；有槽位没抄全时只保存不自动应用，当前已是已知主题则拒绝重复。
 - **Cursor**（`utils/cursor.rs`）：`.cur`/`.ico`/`.ani` 解码。自解 ICO 目录挑最大帧、手写 RIFF 取 `LIST/fram`；**不转 GIF**。
 - **Registry**（`utils/registry.rs`）：HKCU 读写 + `SPI_SETCURSORS`。
+- **日志**（`utils/log.rs`，决策 46）：发布版持久日志。数据根 `logs\mousetool.log` 追加写，512KB 轮转、连当前共 3 份；只记事件与原因、不写主题内容，写失败一律静默（日志系统不能弄坏业务）；启动写一条版本标记；诊断中心页脚「打开日志目录」直达（`open_log_dir`）；`logs\` 不计入存储统计。非测试代码禁止再写 `eprintln!`（发布版没有控制台，等于丢掉）。
 - **行为设置**（`utils/settings.rs` / `tray.rs` / `autostart.rs`）：`settings.json` 存关闭行为/主题目录/开关/自动切换映射/光标守护/自动备份开关与保留份数/定时切换时段与映射（Rust 与前端共用）；关闭到托盘时托盘图标动态创建移除，托盘菜单带最近使用主题快速切换（≤8 + 还原默认勾选，决策 30：应用 / 还原走 `commands/theme.rs` 的 `apply` / `restore` 同链路，`tray::refresh` 在应用 / 还原 / 保存当前光标 / 删除 / 改名 / 回收站 / 备份恢复等命令完成后重建菜单，不轮询；过期条目靠 `apply_by_id` 点击时复核自愈）；自启动写 `HKCU\...\Run`。外观三态留 `localStorage`（`lib/theme-mode.ts`，首帧落色要同步读）。跟随系统深浅色自动切换主题的**切换逻辑在前端** `lib/auto-switch.ts`（决策 25）：主题 ID 补丁用**空串表示清空**（serde_json 分不清 null 与缺省）。**光标守护也在前端** `lib/cursor-guard.ts`（决策 29）：启动检查 + 运行期 `active_external` 一轮恢复，复用 `applyTheme`，不轮询、不新增命令。**自动备份也在前端** `lib/auto-backup.ts`（决策 32）：启动就绪后 / 窗口聚焦节流后 / 开关打开时触发 `run_auto_backup`，当日去重与过期清理在命令层。**定时切换主题也在前端** `lib/schedule-switch.ts`（决策 33）：时间段内 / 外配对主题，边界用 `setTimeout` 到点评估，不轮询；时间段内且期间主题已设时深浅色切换让位。
 - **系统集成**（`utils/integration.rs`）：单实例互斥（`CreateMutexW`）、`--import` 转交（`pending_import.json`，领取即删）、主题文件右键菜单注册（试点，决策 12/41：`.zip` / `.themepack` / `.theme` 三类一把注册，全有或全无，部分注册视为未注册可自愈）。**窗口激活按标题查找**——改窗口标题必须同步 `WINDOW_TITLE` 常量。
 - **Integration**（`models/` ↔ `types/`、`capabilities/`）：前后端字段逐个同名，共用 `snake_case`，不做驼峰转换。
@@ -60,8 +61,8 @@
 **① 槽位 15 个，顺序固定**
 唯一来源 `utils/registry.rs::SLOT_DEFS`，完整表见决策记录「决策 3」。键名别照系统设置里的显示名猜：是 `Crosshair`（不是 Cross），另有 `NWPen`、`UpArrow`。短名（`no` / `ns` / `we` / `up`）只能做**精确匹配**，放进包含匹配会撞 `normal`、`upload`。
 
-**② 40 个命令**
-主题类 `get_all_themes` / `get_active_state` / `get_cursor_preview` / `import_theme` / `apply_theme` / `restore_default` / `save_current_theme` / `delete_theme` / `delete_themes` / `rename_theme` / `export_theme` / `export_all_themes` / `find_duplicate_themes`；回收站 `list_trash` / `restore_from_trash` / `delete_from_trash` / `empty_trash`；数据与系统类 `get_data_dir` / `open_data_dir` / `get_storage_stats` / `clear_history` / `get_windows_version` / `open_mouse_panel` / `get_zip_menu_registered` / `set_zip_menu` / `take_pending_import`；设置类 `get_settings` / `update_settings` / `get_autostart` / `set_autostart` / `preview_themes_dir` / `set_themes_dir` / `export_backup` / `import_backup` / `list_backups` / `list_backup_themes` / `restore_theme_from_backup` / `verify_backup` / `delete_backup` / `run_auto_backup`。契约见架构设计 §5。几条容易记错：
+**② 41 个命令**
+主题类 `get_all_themes` / `get_active_state` / `get_cursor_preview` / `import_theme` / `apply_theme` / `restore_default` / `save_current_theme` / `delete_theme` / `delete_themes` / `rename_theme` / `export_theme` / `export_all_themes` / `find_duplicate_themes`；回收站 `list_trash` / `restore_from_trash` / `delete_from_trash` / `empty_trash`；数据与系统类 `get_data_dir` / `open_data_dir` / `open_log_dir` / `get_storage_stats` / `clear_history` / `get_windows_version` / `open_mouse_panel` / `get_zip_menu_registered` / `set_zip_menu` / `take_pending_import`；设置类 `get_settings` / `update_settings` / `get_autostart` / `set_autostart` / `preview_themes_dir` / `set_themes_dir` / `export_backup` / `import_backup` / `list_backups` / `list_backup_themes` / `restore_theme_from_backup` / `verify_backup` / `delete_backup` / `run_auto_backup`。契约见架构设计 §5。几条容易记错：
 - `apply_theme` / `export_theme` 收**整个 `CursorTheme`**，不是 ID——系统方案只存在于注册表，没有磁盘目录，只给 ID 拿不到它的文件。
 - `import_theme` 收 `sourcePath`（**zip、.themepack、.theme 光标方案或整个主题文件夹**，决策 16/36/39，后端权威校验），返回 `{ theme, warnings }`——目录里的链接 / 目录联接会被跳过并说明原因；包内带 `.inf` 时槽位按说明书映射、**优先于文件名推断**，没带或解析失败退回文件名推断、不缺槽位（决策 15，`utils/inf_parse.rs`），`.inf` 与光标文件共用 `ScanBudget`；`.themepack`（CAB）解档走 `THEME_LIMITS` 全套限额后与 zip 同链路（`cab` crate，LZX/Quantum 压缩不支持，决策 39）；`.theme` 是说明书级映射且引用可指向包外系统光标（`theme_file.rs`），被映射认领的文件不再被推断重复使用；`.theme` 单文件收编 = 按槽位复制引用文件（源文件不动），引用缺失只跳槽位并 warning、全部落空才拒绝（决策 36）。
 - `get_active_state` 是聚焦用的轻量重查（决策 24）：只读注册表 + 主题清单比对，不读历史、不取 `ops` 锁；失败直接 `Err`，前端静默保留旧状态。`get_all_themes` 的 `ThemesResult` 相应多出 `current_slots_filled` / `active_external`（槽位非空但匹配不到任何主题 = 被系统设置改写）与 `file_gaps`（文件缺口清单，决策 31：托盘与聚焦重查不做这一步）。
@@ -71,7 +72,7 @@
 - `save_current_theme` 无入参（决策 28）：只在当前光标被外部改写时有意义；把注册表当前非空槽位复制为我的主题，全部抄全才自动应用，**有槽位没抄全绝不自动应用**（否则会把那些非空槽位写成空）；当前已是已知主题时返回「无需再保存」。返回 `SaveCurrentOutcome`，前端用 `applied` 区分「已保存并应用」与「只保存」。
 - `export_backup` 的 `destPath` 可空：空 = 写入数据目录 backups 目录自动命名（进「备份历史」），传路径 = 导出到任意位置（不受历史管理）；返回含 `saved_path` / `bytes`。`list_backups` 只读 zip 中央目录列应用内备份（时间倒序、上限 200），`kind` 按文件名前缀判定 auto / manual（决策 32），`delete_backup` 只收文件名、拒绝越出备份目录。`verify_backup` 备份体检（决策 37）：流式读每个条目进 sink 触发 CRC，坏条目当场点名（≤20 条 + `corrupt_total`）；**只读不取锁、结果是快照**（列表只覆盖「打开就炸」，数据区静默损坏靠它）；体检入口在备份历史行内，诊断中心不做整库扫描（1GiB × N 会把诊断变成分钟级阻塞）。`run_auto_backup` 是自动备份的命令（决策 32）：收 `keep`，当日去重、按 keep 清理过期 auto 备份（手动备份不碰）、与手动备份共用 ops 锁且不发 `backup-progress`；前端 `lib/auto-backup.ts` 只管触发。
 - `list_backup_themes` 只读备份内容（中央目录 + theme.json，不解压光标），返回可恢复的主题与 `warnings`；每项 `missing_files` 按包内实际条目算缺口，部分缺文件仍可恢复、全缺文件界面禁用且命令拒绝；`restore_theme_from_backup` 收 `zipPath` + `themeId`，**只追加一套主题**：目标 ID 已存在直接拒绝、不合并使用记录、不碰其它主题（决策 34）。恢复的是完整主题文件，落盘仍写相对路径，旧备份的绝对路径按主题 id / 文件名重新映射；部分缺文件写进 `warnings`，失败清理本次新建目录，执行期取 `ops` 锁并刷新托盘。**两条恢复路径（合并 + 单主题）遇条目数据损坏（CRC）一律拒绝**：`corrupt_entry_error` 点名坏条目、说明恢复已全部撤销、指引「备份历史 → 体检」（决策 40）；不做部分恢复、不做恢复前预检（决策 37 的体检按需覆盖）。「从文件恢复」外部备份**先看内容再动手**（决策 42）：内容弹窗复用任意路径的 `list_backup_themes`，看完选单套恢复或转整包合并确认。
-- `get_data_dir` 只读不建目录；`open_data_dir` 才 `ensure_dir` + 调 opener。前端**禁止**用 `localDataDir()` 自己拼 `CursorStudio`（硬约束 1）。
+- `get_data_dir` 只读不建目录；`open_data_dir` / `open_log_dir`（决策 46）才 `ensure_dir` + 调 opener。前端**禁止**用 `localDataDir()` 自己拼 `CursorStudio`（硬约束 1）。
 - `get_storage_stats` 同为只读（决策 35）：不建目录、不取锁，条目口径是「含标记文件的一级子目录 / .zip」，孤儿文件只计字节不冒充条目数；`clear_history` 清空使用记录（决策 35），文件不存在返回 0 且**不凭空创建**，只读降级（版本过高 / 损坏）时拒绝覆盖，不走 ops 锁。
 - `export_all_themes` 批量导出「我的主题」（决策 35）：收 `destDir`（拒绝落进备份 / 回收站 / 主题库），部分成功——单套失败进 `failed` 其余照常落盘；落盘名后端兜底（非法字符 / 保留名 / 重名加序号不覆盖）；取 ops 锁并发 `export-all-progress`。
 - `find_duplicate_themes` 主题内容查重（决策 38）：槽位指纹（键 + 扩展名 + 字节）预分组 → 组内与首套逐字节确认，**只报证实的重复**；缺文件的主题不参与（`skipped_missing` 计数）；只读不取锁；UI 是诊断中心第六项，也是诊断中心**唯一的按需命令**（打开 / 重扫时跑一次、结果只是会话内快照）——其余五项仍全部从 store 派生，别顺手把更多命令塞进诊断。
