@@ -165,9 +165,9 @@ PID，绝不通配杀）并清理临时目录。**前置：应用未在运行**�
 `.theme` 映射、DisplayName 优先）与 `verify_batch_delete.mjs`（决策 43：真实
 IPC 下导入两套 → 批量删除（重复 / 非法 ID）→ 主题库清空、回收站两条正常）。
 **不进 CI、不入 AGENTS 验证链**——它们碰真实文件系统，改动导入链路（决策
-15/16/36/39 涉及的文件）或批量删除路径（决策 43）后手动跑一遍。
+15/16/36/39 涉及的文件）或批量删除路径（决策 43）后手动跑一遍。历史证据（截图 + 结论）见 `docs/real-machine-verify/`。
 
-动了文档、尤其是本文件的 `§x` / `决策 N` 引用，跑 `node scripts/doc_ref_check.mjs`：指空会列出 `文件:行号` 并以退出码 1 失败（不需要 dev server）。`node scripts/design_audit.mjs` 发现违规同样以退出码 1 失败。
+动了文档、尤其是本文件的 `§x` / `决策 N` 引用，跑 `node scripts/doc_ref_check.mjs`：除引用指空外，还会断言命令总数（代码 / 架构标题与表格 / 本文件）、决策总览完整性、CI clippy 口径与发布指南的 5 个版本位置；失败打印实际值并以退出码 1 失败（不需要 dev server）。`node scripts/design_audit.mjs` 发现违规同样以退出码 1 失败。
 
 CI 在 `.github/workflows/ci.yml`：`windows-latest` 上跑 `npm ci` → `npm run build` → `cargo test` → `cargo clippy --all-targets -- -D warnings` → `design_audit` → `doc_ref_check`。
 

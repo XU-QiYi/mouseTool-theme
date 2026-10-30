@@ -1,6 +1,6 @@
 # 设计规范 · 鼠标主题工具
 
-> 可视化版本：`docs/design-system.html`（可直接用浏览器打开，含明暗切换）
+> 可视化版本：`docs/design-system.html`（token 与控件状态，可直接用浏览器打开，含明暗切换；页面结构以本文为准）
 > 动效专章：`docs/motion.md`（组件范围 / 进出场 / 降级与验收）
 > Token 唯一来源：`src/App.css`
 > 适用平台：Windows 10/11 桌面端（Tauri + WebView2）

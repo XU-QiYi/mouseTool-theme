@@ -83,16 +83,16 @@ Select-String -Path package-lock.json -Pattern '"version": "0\.' | Select-Object
 > **坑 ①：只改了 `package.json` 忘了改 `Cargo.toml`。**
 > Tauri 的打包器读的是 `tauri.conf.json` 的 `version`，Rust crate 用的是 `Cargo.toml` 的。
 > 只改一处 → 安装包文件名叫 `0.1.1` 但内部 crate 还是 `0.1.0`，用户反馈"版本号不对"时极难排查。
-> **四处一起改，改完重新 `cargo check` 让 Cargo.lock 同步。**
+> **五处一起改，改完重新 `cargo check` 让 Cargo.lock 同步。**
 
 > **坑 ②：`app-meta.ts` 是浏览器开发模式的兜底版本，不在三处配置文件里，最容易漏。**
 > 正式跑 Tauri 时界面版本号来自 `getVersion()`，所以漏改不影响已打包用户；
 > 但浏览器验收、检查更新失败退回的比较基准都读它——2026-10-29 发现升 0.2.0 时漏改了它，
-> 开发模式里应用自报 `v0.1.0`、检查更新误判「发现新版本」。上表因此从三处扩成四处。
+> 开发模式里应用自报 `v0.1.0`、检查更新误判「发现新版本」。当时上表从三处扩成四处。
 
 > **坑 ③：`package-lock.json` 的根版本是第五处，2026-10-30 升 0.3.0 时发现它还停在 0.1.0**
 > （0.2.0 那轮就漏了）。锁文件的根版本只是元数据、不影响构建，但 `npm install --package-lock-only`
-> 一条命令就能同步，升版收尾顺手跑一下；上表因此从四处扩成五处。
+> 一条命令就能同步，升版收尾顺手跑一下；当时上表又从四处扩成五处。
 
 ### 1.3 Tauri 版本一致性（**最容易踩，且会让构建直接失败**）
 
@@ -185,7 +185,7 @@ cd ..
 
 ### 1.6 验收脚本全绿
 
-界面/动效脚本跑在浏览器里、走 mock，**不会改你的系统光标**，可以放心跑：
+界面/动效脚本跑在浏览器里、走 mock，**不会改你的系统光标**，可以放心跑。下面是最小集；完整验收链见 [`AGENTS.md`](../AGENTS.md) 的「改完怎么验」：
 
 ```powershell
 node scripts/dev_bg.mjs start; node scripts/design_check.mjs; node scripts/motion_check.mjs; node scripts/nav_check.mjs; node scripts/recent_check.mjs; node scripts/dev_bg.mjs stop
@@ -597,8 +597,8 @@ git add -A
 git commit -m "fix: <问题描述>"
 git push origin main
 
-# ② 三处版本号改成 0.1.1
-#    package.json / src-tauri/Cargo.toml / src-tauri/tauri.conf.json
+# ② 按 §1.2 的五处版本号改成 0.1.1
+#    package.json / src-tauri/Cargo.toml / src-tauri/tauri.conf.json / src/lib/app-meta.ts / package-lock.json
 
 # ③ 重新构建
 npm run tauri build -- --ci --bundles nsis
@@ -817,7 +817,7 @@ npx tauri info                        # 必须无 version mismatch 报错
 npm run build                         # 必须通过
 cd src-tauri; cargo check; cd ..
 
-# 2. 验收脚本
+# 2. 验收脚本（最小集；完整链见 AGENTS「改完怎么验」）
 node scripts/dev_bg.mjs start; node scripts/design_check.mjs; node scripts/motion_check.mjs; node scripts/nav_check.mjs; node scripts/dev_bg.mjs stop
 
 # 3. 构建

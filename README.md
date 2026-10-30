@@ -184,8 +184,13 @@ docs/                 决策记录、需求、架构、设计系统、动效、�
 2. [`docs/mouse-theme需求描述.md`](docs/mouse-theme需求描述.md) —— 范围与边界
 3. [`docs/mouse-theme架构设计.md`](docs/mouse-theme架构设计.md) —— 目录、命令契约、硬约束
 4. [`docs/design-system.md`](docs/design-system.md) / [`docs/motion.md`](docs/motion.md) —— 视觉与动效
-5. [`docs/mouse-theme发布指南.md`](docs/mouse-theme发布指南.md) —— 版本号同步与发布流程
-6. [`docs/版本发布release/`](docs/版本发布release/) —— 各版本发布说明
+5. [`docs/mouse-theme启动与构建指南.md`](docs/mouse-theme启动与构建指南.md) —— 从零启动、打包与冒烟
+6. [`docs/mouse-theme发布指南.md`](docs/mouse-theme发布指南.md) —— 版本号同步与发布流程
+7. [`docs/版本发布release/`](docs/版本发布release/) —— 各版本发布说明
+8. [`docs/real-machine-verify/`](docs/real-machine-verify/) —— 真机验证证据（不进 CI）
+9. [`docs/安装器原型/setup-ui-prototype.html`](docs/安装器原型/setup-ui-prototype.html) —— 安装器 UI 设计原型
+
+5–9 是操作手册与资料，不参与冲突裁决。
 
 ## 已知限制
 
@@ -234,7 +239,7 @@ node scripts/scheme_import_check.mjs
 node scripts/dev_bg.mjs stop
 ```
 
-完整的脚本清单、真机验证与发布步骤见 [`AGENTS.md`](AGENTS.md) 与 [`docs/mouse-theme发布指南.md`](docs/mouse-theme发布指南.md)。
+完整的脚本清单与发布步骤见 [`AGENTS.md`](AGENTS.md) 与 [`docs/mouse-theme发布指南.md`](docs/mouse-theme发布指南.md)；真机验证证据见 [`docs/real-machine-verify/`](docs/real-machine-verify/)，脚本说明见 [`scripts/real_machine/README.md`](scripts/real_machine/README.md)。
 
 ## 许可证
 

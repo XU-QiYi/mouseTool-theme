@@ -43,6 +43,15 @@
 | 32 | 自动备份 | 每天第一份备份进 `backups\`，当日去重、按保留份数清理 auto 条目；前端三类事件触发，命令层互斥；默认关闭 |
 | 33 | 定时切换主题 | 按时间段内 / 外配对主题，前端 `setTimeout` 到边界评估；时间段内且已设期间内主题时深浅色切换让位；默认关闭 |
 | 34 | 备份内容浏览与单主题恢复 | 备份历史可只读查看包内主题并标出缺文件，把**一套**主题追加回主题库；部分缺文件可恢复并提示、全缺拒绝；目标已存在拒绝、不合并历史、不改整包恢复语义 |
+| 35 | 维护工具箱 | 存储统计 / 批量导出 / 清空记录三条维护能力长在既有页面；统计与清记录轻量，批量导出取 `ops` 锁发进度；不新增导航 |
+| 36 | `.theme` 光标方案导入 | 按 `[Control Panel\Cursors]` 段映射槽位并复制引用文件；缺失只跳过、全落空才拒绝；UTF-16LE/BE/UTF-8 按 BOM，1MB 文本上限 |
+| 37 | 备份完整性体检 | `verify_backup` 流式读条目触发 CRC，坏条目点名（≤20 + 总数）；只读不取锁，结果是快照 |
+| 38 | 主题内容去重诊断 | 槽位指纹预分组 + 组内逐字节确认，只报证实的重复；缺文件主题不参与；诊断中心按需命令、只读 |
+| 39 | `.themepack` 主题包导入 | CAB/MSZIP 解档走 `THEME_LIMITS` 后与 zip 同链路；包内 `.theme` 为说明书级映射（次于 `.inf`）；LZX/Quantum 不支持 |
+| 40 | 损坏备份的恢复防护 | 条目 CRC 损坏时两条恢复路径一律拒绝；错误点名坏条目、说明已撤销、指引体检 |
+| 41 | 右键菜单扩展到三类主题文件 | `.zip` / `.themepack` / `.theme` 一把注册，全有或全无；部分注册视为未注册可自愈 |
+| 42 | 从文件恢复先看内容 | 外部备份先看内容清单，再选单套恢复或转整包合并；合并语义不变 |
+| 43 | 主题库批量整理 | `delete_themes` 去重、逐套复用单套校验与回收站链路；部分成功、一把 `ops` 锁、`delete-progress`；UI 整理模式 |
 
 ---
 
@@ -559,17 +568,17 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 
 ---
 
-## 决策 21：测试不碰真实数据，CI 守住四条底线
+## 决策 21：测试不碰真实数据，CI 守住五条底线
 
-**结论**（2026-10-25，随测试隔离与 CI 实现）
+**结论**（2026-10-25，随测试隔离与 CI 实现；2026-10-29 增补 `clippy -D warnings` 门闸）
 
 - **不碰真实 `%LOCALAPPDATA%`**：`utils/test_support.rs` 用 `tempfile`（dev 依赖，决策 27）提供临时目录，并生成最小 `.cur` / `.ani` fixture；测试用 `paths::use_test_roots` 把数据根临时指到临时目录，结束后恢复。
 - **不碰真实光标设置**：注册表测试不再写用户的 `HKCU\Control Panel\Cursors`，而是在 `Software\CursorStudio.Tests\<label>-<pid>-<n>` 下建隔离键；`registry` 通过线程局部 `TEST_CURSORS_KEY` 重定向所有读写，`IsolatedRegistry` 在 Drop 时删除整棵测试键。隔离模式下 `refresh_cursors` 直接 no-op，不会调用 `SPI_SETCURSORS`。
 - 隔离键让注册表用例可以并行；只有确实共享同一个键的用例才需要自行串行（防中毒取回锁：`unwrap_or_else(|e| e.into_inner())`）。
-- **CI**（`.github/workflows/ci.yml`）：`windows-latest` + Node 22 + Rust stable，依次跑 `npm ci` → `npm run build` → `cargo test`（`src-tauri`）→ `node scripts/design_audit.mjs` → `node scripts/doc_ref_check.mjs`。先 build 是故意的：`cargo test` 编译期不需要 dist，但保持与本地验证顺序一致，也顺手把前端类型错误挡在 CI 上。
+- **CI**（`.github/workflows/ci.yml`）：`windows-latest` + Node 22 + Rust stable，依次跑 `npm ci` → `npm run build` → `cargo test`（`src-tauri`）→ `cargo clippy --all-targets -- -D warnings` → `node scripts/design_audit.mjs` → `node scripts/doc_ref_check.mjs`。先 build 是故意的：`cargo test` 编译期不需要 dist，但保持与本地验证顺序一致，也顺手把前端类型错误挡在 CI 上。clippy 于 2026-10-29 增补，警告基线为零。
 - `design_audit.mjs` 改为按仓库相对路径输出，并在发现非 2px 网格间距、字号魔法值、裸时长、`transition-all` 时**以退出码 1 失败**，不再只是打印报告。
 
-**为什么**：测试改真实光标会让开发者一边跑测试一边看到鼠标闪变，CI 上则直接污染 runner；临时目录 + fixture 让测试可重复、可并行。CI 不覆盖需要 WebView2 的界面脚本，但类型、后端、设计 token 与文档引用这四类回归能在提交时拦下。
+**为什么**：测试改真实光标会让开发者一边跑测试一边看到鼠标闪变，CI 上则直接污染 runner；临时目录 + fixture 让测试可重复、可并行。CI 不覆盖需要 WebView2 的界面脚本，但类型、后端、lint、设计 token 与文档引用这五类回归能在提交时拦下。
 
 ---
 

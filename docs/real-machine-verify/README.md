@@ -35,4 +35,4 @@
 ## 关联自动化
 
 - Rust 单测：`备份内容标出缺文件主题且恢复后提示缺口`、`全缺文件主题恢复失败并清理`（`src-tauri/src/commands/backup.rs`）
-- 浏览器验收：`node scripts/backup_content_check.mjs`（22/22，含 `?mock-backup-partial=1`）
+- 浏览器验收：`node scripts/backup_content_check.mjs`（25/25，含 `?mock-backup-partial=1` 与决策 42 的转交断言）
