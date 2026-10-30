@@ -27,9 +27,9 @@ dist-ssr
 *.sln
 *.sw?
 
-# AI 工作记忆：保留 memory 文档，忽略其余运行时产物
-.workbuddy/*
-!.workbuddy/memory/
+# 本地 AI 工作记忆与计划：只留本机，不入库
+.workbuddy/
+.zcode/
 
 # 浏览器自动化临时产物
 .playwright-mcp/
