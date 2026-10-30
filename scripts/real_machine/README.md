@@ -13,12 +13,15 @@
 
 ## 脚本做什么
 
+> `verify_cursor_size.mjs` 是唯一的例外：不启动应用（光标大小还没有命令），直接验证注册表假设；碰真实注册表前整键 `reg export` 备份、收工逐值还原。
+
 | 脚本 | 验证 | 输入 |
 |---|---|---|
 | `verify_theme_scheme.mjs` | 决策 36：UTF-16LE `.theme` 解析、`%SystemRoot%` 展开到真实系统光标、同目录相对路径收编、真机查重成组 | 脚本自造（复制 `C:\Windows\Cursors\aero_*.cur/ani`） |
 | `verify_themepack.mjs` | 决策 39：`makecab.exe`（微软自家 MSZIP 压缩器）打包的真实 CAB 解档 + 包内 `.theme` 映射 + DisplayName 优先 | 脚本自造（makecab DDF） |
 | `verify_batch_delete.mjs` | 决策 43：真实 Tauri IPC 与真实回收站下导入两套主题 → `delete_themes`（重复 ID + 非法 ID）→ 主题库清空、回收站两条正常 | 脚本自造（复制 `C:\Windows\Cursors\aero_arrow.cur`） |
 | `verify_import_duplicate.mjs` | 决策 47：同内容包二次导入 `duplicate_of` 点名 + warnings 人话版、不拦截；内容不同不误报 | 脚本自造（复制 `C:WindowsCursorsaero_arrow.cur`） |
+| `verify_cursor_size.mjs` | 决策 51：光标大小注册表路线的真机验证——`CursorBaseSize` / `AccessibilityCursorSize` 写入 + SPI 后实测光标位图不缩放，**假设被证伪**（退出码 1 = 假设未证实，本身是有效结论） | 无需造输入（reg.exe + PowerShell 直测，整键备份 + 逐值还原） |
 
 三个脚本都会：启动隔离应用 → CDP 直连 `__TAURI_INTERNALS__.invoke` 断言 →
 **按 PID 结束应用**（先取 `tasklist /FO CSV /NH` 的 PID，绝不通配杀）→
