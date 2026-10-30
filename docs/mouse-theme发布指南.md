@@ -22,7 +22,7 @@
 | 安装包格式 | **NSIS**（`.exe`）为主，MSI 同轮产出备用 | MSI 曾因中文 `productName` 与代码页 1252 冲突构建失败，已用 `wix.language: "zh-CN"` 修复，见 §2.2 坑 ⑧ |
 | 代码签名 | **暂无证书，产物未签名** | 当前状态；用户装机会遇到 SmartScreen 提示，§3.4 有应对话术 |
 | 上传方式 | **GitHub 网页手动拖拽** | 你已选定；`gh` CLI 作为备选写在 §7.2 |
-| 版本号 | 首版 **v0.1.0**，下文示例沿用 | 当前值以 §1.2 的「五处一致」为准（现为 `0.3.0`），示例命令里的 `0.1.0` 按当次版本替换 |
+| 版本号 | 首版 **v0.1.0**，下文示例沿用 | 当前值以 §1.2 的「五处一致」为准（现为 `0.4.0`），示例命令里的 `0.1.0` 按当次版本替换 |
 | 自动更新 | **不做** | 项目未接入 `tauri-plugin-updater`，无需 `.sig` / `latest.json` |
 
 > **关于版本号的讲究**（如果你之前问过这个）：SemVer 的 `主.次.修订` 三段是一句**兼容性承诺**——
@@ -64,11 +64,11 @@ git log --oneline main..origin/main
 
 | 文件 | 字段 | 当前值 |
 |---|---|---|
-| `package.json` | `version` | `0.3.0` |
-| `src-tauri/Cargo.toml` | `[package] version` | `0.3.0` |
-| `src-tauri/tauri.conf.json` | `version` | `0.3.0` |
-| `src/lib/app-meta.ts` | `APP_VERSION` | `0.3.0` |
-| `package-lock.json` | 根 `version`（两处：顶层 + `packages[""]`） | `0.3.0` |
+| `package.json` | `version` | `0.4.0` |
+| `src-tauri/Cargo.toml` | `[package] version` | `0.4.0` |
+| `src-tauri/tauri.conf.json` | `version` | `0.4.0` |
+| `src/lib/app-meta.ts` | `APP_VERSION` | `0.4.0` |
+| `package-lock.json` | 根 `version`（两处：顶层 + `packages[""]`） | `0.4.0` |
 
 检查命令：
 
