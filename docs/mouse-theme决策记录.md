@@ -58,6 +58,7 @@
 | 47 | 导入时提示内容重复 | 导入成功后复用决策 38 指纹 + 逐字节确认；`ImportReport.duplicate_of` 点名 + warnings 人话版；**只提示不拦截、不自动删除**；与导入同一把 ops 锁 |
 | 48 | 主题库排序与筛选 | 「我的主题」工具条：排序（最新 / 最早 / 名称 / 槽位完整度）与筛选（缺文件的 / 从未使用的），纯前端派生、会话内不落盘；整理模式下控件让位 |
 | 49 | 前端纯逻辑单测 | `node --test` 直接跑 `.ts`（类型剥离），不引测试框架；CI 增补 `npm test`（六道闸）；纯函数抽到零依赖模块（semver / schedule-window / preview-cache） |
+| 50 | 服务层与 mock 分离 | mock 全部住进 `services/mock.ts`（数据）+ `mock-theme.ts` / `mock-settings.ts`（命令级实现）；服务文件只留类型契约、真实 invoke 与一行委派；不改任何行为 |
 
 ---
 
@@ -1077,6 +1078,21 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 **为什么**：前端承担了大量时序逻辑（定时切换、光标守护、自动备份、版本比较），此前 0 个测试文件，回归全靠 26 个手跑脚本。`node --test` 让纯函数层零成本可测，先覆盖最怕竞态的部分。
 
 **验收**：`npm test` 本地与 CI 全绿（25 个用例：semver / schedule-window 含跨零点与半开区间 / preview-cache / themes 派生）。
+
+---
+
+## 决策 50：服务层与 mock 分离——浏览器演示不再长在命令封装里
+
+**结论**（2026-10-31，随修复规划缺口分析 G13 落地，纯整理、不改任何行为）
+
+- **拆法**：`services/theme.ts` 与 `services/settings.ts` 只留类型契约、真实 `invoke` 路径与 `if (!inTauri) return mockXxx(...)` 一行委派；mock 的全部状态（内存主题库 / 回收站 / 使用记录 / 备份历史）与业务口径（自动备份清理与 Rust prune 同口径、迁移失败模式、`?mock-*` 开关）住进 `services/mock-theme.ts` 与 `services/mock-settings.ts`，示例数据（MOCK_THEMES 等）仍在 `services/mock.ts`。按命令域拆成两份而不是一个巨型 mock.ts：每个文件与对应服务文件一一对照，改后端规则时找 mock 侧同位文件即可。
+- **依赖方向**：服务文件 → mock 模块（运行时单向）；mock 模块对服务文件的引用只允许 `import type`（类型剥离后消失，不构成运行时循环）。`mock-theme.ts` 的 `inApp` 是与 `inTauri` 同一行判定：mock 模块不能反向依赖服务文件拿这个值。
+- **不改行为**：所有函数签名、返回值、`?mock-*` 查询参数语义原样搬移；`addMockTheme` 随迁移内部化（唯一调用方是备份恢复 mock）。
+- **验收**：`npm run build`、`npm test`（25 用例）与**全部 21 个浏览器验收脚本**——浏览器链跑在 mock 上，全绿即行为等价的最强证据。
+
+**为什么**：`services/settings.ts` 862 行里 16 处 `inTauri` 分支、`services/theme.ts` 641 行里 23 处，mock 的业务口径（如自动备份清理）镜像在后端，改规则要记得同步两处。拆开后服务文件回归「命令封装」的本分，口径漂移的风险面收敛到 mock 模块自身。
+
+**边界**：不重写 mock 逻辑本身、不补 mock 与后端的契约测试（mock 是演示数据不是被测对象）；`services/system.ts` 的 mock 分支很少（4 处一行返回），不值得拆。
 
 ---
 
