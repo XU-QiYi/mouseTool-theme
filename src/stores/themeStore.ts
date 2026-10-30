@@ -411,9 +411,11 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
       toast.success(`已导入「${theme.name}」`, `共 ${theme.cursors.length} 个光标槽位`);
       if (warnings.length > 0) {
         for (const warning of warnings) console.warn("[importTheme]", warning);
+        // 提示正文自解释（跳过链接 / 与已有主题内容相同等），标题保持中性，
+        // 不预设「被跳过」这一种原因（决策 47 的重复提示也走这里）
         toast.warning(
-          "导入完成，但有内容被跳过",
-          warnings.length > 1 ? `${warnings[0]}（共 ${warnings.length} 条）` : warnings[0],
+          warnings.length > 1 ? `导入完成，有 ${warnings.length} 条提示` : "导入完成，有 1 条提示",
+          warnings[0],
         );
       }
     } catch (err) {

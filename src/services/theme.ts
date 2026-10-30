@@ -370,6 +370,7 @@ export async function importTheme(
     return {
       theme,
       warnings: [],
+      duplicate_of: null,
     };
   }
 

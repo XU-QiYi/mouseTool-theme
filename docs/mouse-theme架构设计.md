@@ -148,7 +148,7 @@ App.tsx
 | `get_all_themes` | — | `ThemesResult` | 只有聚合本身崩溃才 `Err`；单个来源失败走 `warnings` |
 | `get_active_state` | — | `ActiveState` | 注册表读失败返回 `Err`（前端聚焦钩子静默忽略、保留旧状态）；只比对注册表与主题清单反推当前三态，不读历史（决策 24） |
 | `get_cursor_preview` | `filePath` | `CursorPreview` | **不失败**，解析不出来返回空帧 |
-| `import_theme` | `sourcePath` | `ImportReport`（`theme` + `warnings`） | 不是 .zip / .theme / .themepack / 文件夹、超限额（50MB 总量 / 20MB 单文件 / 512 条目 / 8 层，`.inf`/`.theme` 与光标共用额度；`.theme` 与 CAB 均走 1MB 文本上限之外各自解档）、条目名不合法、无光标文件、认不出槽位（且 .inf/.theme 无映射 / 方案引用全部落空）、写盘失败；链接 / 目录联接跳过并进 `warnings`；失败清理临时目录与半成品主题目录 |
+| `import_theme` | `sourcePath` | `ImportReport`（`theme` + `warnings` + `duplicate_of`） | 不是 .zip / .theme / .themepack / 文件夹、超限额（50MB 总量 / 20MB 单文件 / 512 条目 / 8 层，`.inf`/`.theme` 与光标共用额度；`.theme` 与 CAB 均走 1MB 文本上限之外各自解档）、条目名不合法、无光标文件、认不出槽位（且 .inf/.theme 无映射 / 方案引用全部落空）、写盘失败；链接 / 目录联接跳过并进 `warnings`；失败清理临时目录与半成品主题目录 |
 | `apply_theme` | `theme`（整个对象） | `ApplyOutcome` | 注册表写失败；历史写失败只进 `warning` |
 | `restore_default` | — | `void` | 清空注册表失败（清 15 槽位 + `SchemeName` + 键默认值，并清空已存在的 `Pin`/`Person` 新指针键残留，决策 24） |
 | `save_current_theme` | — | `SaveCurrentOutcome`（`theme` + `warnings` + `file_count` + `applied` + `recent` + `warning`） | 系统默认（无槽位）、当前已是已知主题、复制失败 / 超限（单文件 20MB / 总量 50MB）、写注册表或刷新失败；有槽位没抄全时只保存不自动应用；执行期取 `ops` 锁（决策 28） |
