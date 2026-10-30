@@ -52,3 +52,6 @@ src-tauri/installer/ui/
 
 # QA 链路脚本的截图输出（每次跑都会重写，入库只会留下没人看的脏 diff）
 docs/screenshots/
+
+# 本地发布的安装包产物（上传 GitHub Releases，不入库）
+release/

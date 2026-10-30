@@ -199,7 +199,7 @@ node scripts/dev_bg.mjs start; node scripts/design_check.mjs; node scripts/motio
 
 - [ ] `git status --short` 输出为空
 - [ ] `git log --oneline main..origin/main` 输出为空（远端无新提交）
-- [ ] 版本号三处一致
+- [ ] 版本号五处一致
 - [ ] `npx tauri info` **无** `Found version mismatched` 报错
 - [ ] `npm run build` 通过
 - [ ] `cargo check` 通过
