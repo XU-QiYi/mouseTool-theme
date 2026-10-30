@@ -27,6 +27,10 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      # 前端纯逻辑单测：node --test 直接跑 .ts（Node 22.18+ 默认启用类型剥离），
+      # 不需要 dev server，也没有任何测试框架依赖（决策 49）
+      - name: Frontend unit tests
+        run: npm test
       # 工具链钉到具体版本，不用 @stable。下面 clippy 的口径是「警告基线为零」，
       # 而 @stable 会随 Rust 发版漂移，于是 CI 红不红取决于哪天跑的、撞上哪个
       # clippy，而不是这次改了什么 —— 2026-10-29 一个新 lint

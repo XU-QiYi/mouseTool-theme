@@ -21,6 +21,7 @@ import {
   type TaskProgress,
 } from "@/services/theme";
 import { readableError, toast } from "@/lib/toast";
+import { invalidateCursorPreviews } from "@/hooks/useCursorPreview";
 import type { Page } from "@/lib/pages";
 import type { SettingsSection } from "@/lib/settings-sections";
 import {
@@ -61,6 +62,13 @@ function clearSelection(selection: Selection, removedId: string): Selection {
   return Object.fromEntries(
     Object.entries(selection).map(([page, id]) => [page, id === removedId ? null : id]),
   );
+}
+
+/** 删除主题后顺带失效它名下的预览缓存：文件已移入回收站，旧图不能再显示 */
+function forgetThemePreviews(theme: CursorTheme): void {
+  for (const slot of theme.cursors) {
+    if (slot.file_path) invalidateCursorPreviews(slot.file_path);
+  }
 }
 
 /** 单个动作的忙碌键：`apply:<id>` / `delete:<id>` / `rename:<id>` / `export:<id>` */
@@ -238,6 +246,9 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     try {
       const { themes, warnings, active_theme_id, current_slots_filled, active_external, recent, file_gaps } =
         await getAllThemes();
+      // 重载意味着文件可能动过了（回收站恢复、目录迁移、外部改写）：
+      // 旧预览一律作废，让界面按新状态重新取图
+      invalidateCursorPreviews();
       // 「正在使用」每次都由后端从注册表反推，不沿用内存旧值：
       // 内存状态一重开就过期，会把已应用的主题当成还能再应用一次。
       // recent 兜底：前端热更新、后端还是旧二进制时字段会缺失，
@@ -400,9 +411,11 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
       toast.success(`已导入「${theme.name}」`, `共 ${theme.cursors.length} 个光标槽位`);
       if (warnings.length > 0) {
         for (const warning of warnings) console.warn("[importTheme]", warning);
+        // 提示正文自解释（跳过链接 / 与已有主题内容相同等），标题保持中性，
+        // 不预设「被跳过」这一种原因（决策 47 的重复提示也走这里）
         toast.warning(
-          "导入完成，但有内容被跳过",
-          warnings.length > 1 ? `${warnings[0]}（共 ${warnings.length} 条）` : warnings[0],
+          warnings.length > 1 ? `导入完成，有 ${warnings.length} 条提示` : "导入完成，有 1 条提示",
+          warnings[0],
         );
       }
     } catch (err) {
@@ -433,6 +446,7 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
     try {
       // 前端热更新、后端还是旧二进制时返回值可能为空；删除结果以列表变更为准
       const outcome = (await apiDeleteTheme(id)) ?? { auto_purged: 0, warning: null };
+      forgetThemePreviews(theme);
       set((state) => ({
         themes: state.themes.filter((t) => t.id !== id),
         // 所有页面的选择都要清，不然检查器会挂着一个已经不存在的 ID
@@ -484,6 +498,9 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
 
       if (outcome.deleted.length > 0) {
         const removed = new Set(outcome.deleted);
+        for (const theme of targets) {
+          if (removed.has(theme.id)) forgetThemePreviews(theme);
+        }
         set((state) => ({
           themes: state.themes.filter((theme) => !removed.has(theme.id)),
           fileGaps: state.fileGaps.filter((gap) => !removed.has(gap.theme_id)),

@@ -7,7 +7,7 @@ use commands::backup::{
     restore_theme_from_backup, run_auto_backup, verify_backup,
 };
 use commands::cursor::get_cursor_preview;
-use commands::data::{clear_history, get_data_dir, get_storage_stats, open_data_dir};
+use commands::data::{clear_history, get_data_dir, get_storage_stats, open_data_dir, open_log_dir};
 use commands::settings::{
     get_autostart, get_settings, preview_themes_dir, set_autostart, set_themes_dir, update_settings,
 };
@@ -21,6 +21,7 @@ use commands::theme::{
     restore_default, save_current_theme,
 };
 use commands::trash::{delete_from_trash, empty_trash, list_trash, restore_from_trash};
+use utils::log;
 use utils::settings::{self, CloseBehavior};
 use utils::{integration, tray};
 
@@ -28,6 +29,9 @@ use utils::{integration, tray};
 pub fn run() {
     // 单实例 + 右键菜单 `--import` 转交：已有实例时这里可能直接退出进程
     integration::handle_launch();
+
+    // 每次会话一条启动标记：报障时日志能对上「当时用的是哪个版本」
+    log::info("app", &format!("应用启动（版本 {}）", env!("CARGO_PKG_VERSION")));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -64,6 +68,7 @@ pub fn run() {
             find_duplicate_themes,
             get_data_dir,
             open_data_dir,
+            open_log_dir,
             get_storage_stats,
             clear_history,
             get_windows_version,

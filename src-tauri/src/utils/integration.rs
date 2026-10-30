@@ -16,7 +16,7 @@ use windows::core::HSTRING;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE};
 
-use crate::utils::{limits, paths};
+use crate::utils::{limits, log, paths};
 
 /// 单实例互斥名。`Local\` 前缀 = 会话内命名空间，多用户互不干扰
 const MUTEX_NAME: &str = "Local\\CursorStudio.SingleInstance";
@@ -129,7 +129,7 @@ pub fn take_pending_import() -> Option<String> {
     let file = match paths::pending_import_file() {
         Ok(file) => file,
         Err(err) => {
-            eprintln!("[integration] 读取待导入路径失败：{err}");
+            log::warn("integration", &format!("读取待导入路径失败：{err}"));
             return None;
         }
     };
@@ -270,6 +270,10 @@ mod tests {
     const TEST_KEY: &str =
         "Software\\Classes\\SystemFileAssociations\\.zip\\shell\\CursorStudio.TestImport";
 
+    /// 碰注册表的测试必须串行：注册表删除是延迟生效的，共享键的用例并行跑
+    /// 会互相踩踏（起点清理撞上对方的注册，表现为偶发 os error 1018 / 断言失败）
+    static REGISTRY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn 待导入路径领取即消费() {
         let file = std::env::temp_dir().join("cursorstudio-pending-test.json");
@@ -314,6 +318,7 @@ mod tests {
 
     #[test]
     fn 右键菜单注册与移除往返() {
+        let _guard = REGISTRY_LOCK.lock().unwrap_or_else(|err| err.into_inner());
         let _ = remove_menu(TEST_KEY); // 起点干净
 
         assert!(!menu_registered(TEST_KEY), "起点应未注册");
@@ -348,6 +353,7 @@ mod tests {
 
     #[test]
     fn 三类扩展名一把注册全部生效() {
+        let _guard = REGISTRY_LOCK.lock().unwrap_or_else(|err| err.into_inner());
         for key in TEST_KEYS {
             let _ = remove_menu(key); // 起点干净
         }
@@ -374,6 +380,7 @@ mod tests {
 
     #[test]
     fn 批量注册失败时整体回滚() {
+        let _guard = REGISTRY_LOCK.lock().unwrap_or_else(|err| err.into_inner());
         for key in TEST_KEYS {
             let _ = remove_menu(key);
         }

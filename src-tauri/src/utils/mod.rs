@@ -7,6 +7,7 @@ pub mod inf_export;
 pub mod inf_parse;
 pub mod integration;
 pub mod limits;
+pub mod log;
 pub mod ops;
 pub mod paths;
 pub mod progress;

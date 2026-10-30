@@ -141,14 +141,14 @@ App.tsx
 
 ---
 
-## 5. 命令契约（当前共 40 个）
+## 5. 命令契约（当前共 41 个）
 
 | Command | 入参（前端写法） | 返回 | 失败场景 |
 |---|---|---|---|
 | `get_all_themes` | — | `ThemesResult` | 只有聚合本身崩溃才 `Err`；单个来源失败走 `warnings` |
 | `get_active_state` | — | `ActiveState` | 注册表读失败返回 `Err`（前端聚焦钩子静默忽略、保留旧状态）；只比对注册表与主题清单反推当前三态，不读历史（决策 24） |
 | `get_cursor_preview` | `filePath` | `CursorPreview` | **不失败**，解析不出来返回空帧 |
-| `import_theme` | `sourcePath` | `ImportReport`（`theme` + `warnings`） | 不是 .zip / .theme / .themepack / 文件夹、超限额（50MB 总量 / 20MB 单文件 / 512 条目 / 8 层，`.inf`/`.theme` 与光标共用额度；`.theme` 与 CAB 均走 1MB 文本上限之外各自解档）、条目名不合法、无光标文件、认不出槽位（且 .inf/.theme 无映射 / 方案引用全部落空）、写盘失败；链接 / 目录联接跳过并进 `warnings`；失败清理临时目录与半成品主题目录 |
+| `import_theme` | `sourcePath` | `ImportReport`（`theme` + `warnings` + `duplicate_of`） | 不是 .zip / .theme / .themepack / 文件夹、超限额（50MB 总量 / 20MB 单文件 / 512 条目 / 8 层，`.inf`/`.theme` 与光标共用额度；`.theme` 与 CAB 均走 1MB 文本上限之外各自解档）、条目名不合法、无光标文件、认不出槽位（且 .inf/.theme 无映射 / 方案引用全部落空）、写盘失败；链接 / 目录联接跳过并进 `warnings`；失败清理临时目录与半成品主题目录 |
 | `apply_theme` | `theme`（整个对象） | `ApplyOutcome` | 注册表写失败；历史写失败只进 `warning` |
 | `restore_default` | — | `void` | 清空注册表失败（清 15 槽位 + `SchemeName` + 键默认值，并清空已存在的 `Pin`/`Person` 新指针键残留，决策 24） |
 | `save_current_theme` | — | `SaveCurrentOutcome`（`theme` + `warnings` + `file_count` + `applied` + `recent` + `warning`） | 系统默认（无槽位）、当前已是已知主题、复制失败 / 超限（单文件 20MB / 总量 50MB）、写注册表或刷新失败；有槽位没抄全时只保存不自动应用；执行期取 `ops` 锁（决策 28） |
@@ -159,6 +159,7 @@ App.tsx
 | `export_all_themes` | `destDir` | `ExportAllOutcome`（`dir` + `exported` / `failed` / `total_bytes` / `warnings`） | 目录不存在或不是文件夹、落点是备份 / 回收站 / 主题库等应用管理目录——整体拒绝；单套导出失败（如文件缺口、源文件被占）只进 `failed`，其余照常落盘（硬约束 8 口径）；落盘名按主题名生成（非法字符与 Windows 保留名后端兜底，重名自动加序号且不覆盖已有文件）；只导「我的主题」，系统方案不在此列；执行期取 `ops` 锁并发 `export-all-progress`（决策 35） |
 | `get_data_dir` | — | `String`（展示路径） | `LOCALAPPDATA` 缺失或为空时返回中文错误（**不回退到当前目录**）；只读 `data_root()`，不创建目录 |
 | `open_data_dir` | — | `String`（实际打开的路径） | 数据根不可用、建目录失败、系统文件管理器打开失败 |
+| `open_log_dir` | — | `String`（实际打开的路径） | 同 `open_data_dir`（打开的是数据根 `logs` 目录，决策 46） |
 | `get_storage_stats` | — | `StorageStats`（`themes` / `backups` / `trash` 各含 `count` + `bytes`，另有 `history_bytes` / `settings_bytes` / `total_bytes`） | **不失败**（目录不存在按零计）；纯只读统计，不建目录、不取 `ops` 锁；链接 / 目录联接不进入，深度封顶 16 层；条目口径：主题 = 含 `theme.json` 的一级子目录、备份 = `.zip`、回收站 = 含 `.trash.json` 的条目，孤儿文件只计字节不冒充条目数（决策 35） |
 | `clear_history` | — | `usize`（清掉的条数） | 记录文件只读降级（版本过高 / 损坏）时拒绝清空；文件不存在返回 0 且**不凭空创建**；轻量单文件原子重写，不走 `ops` 锁（决策 35） |
 | `get_windows_version` | — | `String` | 读不到注册表版本键（诊断信息降级为「未知」） |

@@ -24,6 +24,8 @@ export interface ImportReport {
   theme: CursorTheme;
   /** 导入成功但被跳过的内容（典型：链接 / 目录联接） */
   warnings: string[];
+  /** 与库里哪套主题内容完全相同（决策 47，只提示不拦截）；没有重复为 null */
+  duplicate_of: string | null;
 }
 
 /**

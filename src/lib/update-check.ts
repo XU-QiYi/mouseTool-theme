@@ -1,6 +1,7 @@
 import { getVersion } from "@tauri-apps/api/app";
 
 import { APP_VERSION, RELEASES_API, REPO_URL } from "@/lib/app-meta";
+import { compareVersions, parseVersion } from "@/lib/semver";
 
 /**
  * 检查更新：比对 GitHub Releases 的最新 tag 与当前版本
@@ -20,23 +21,6 @@ export interface UpdateCheckResult {
   message: string;
 }
 
-/** `v0.2.0` / `0.2.0` → 三段数字；前缀不合法返回 null */
-function parseVersion(raw: string): [number, number, number] | null {
-  const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(raw.trim());
-  if (!match) return null;
-  return [Number(match[1]), Number(match[2]), Number(match[3])];
-}
-
-function compare(
-  a: [number, number, number],
-  b: [number, number, number],
-): number {
-  for (let i = 0; i < 3; i += 1) {
-    if (a[i] !== b[i]) return a[i] > b[i] ? 1 : -1;
-  }
-  return 0;
-}
-
 async function currentVersion(): Promise<string> {
   try {
     return await getVersion();
@@ -48,6 +32,27 @@ async function currentVersion(): Promise<string> {
 
 /** 检查更新的超时：GitHub 在弱网下可能挂很久，启动检查不能一直悬着 */
 const REQUEST_TIMEOUT_MS = 8000;
+
+/**
+ * 403 且匿名额度耗尽时的说明
+ *
+ * 额度按网络出口 IP 计（未登录 60 次/小时），代理节点常被多人共用，
+ * 用完就整个出口 403——只说「HTTP 403」用户无从下手，给出恢复时间和出路。
+ */
+function rateLimitMessage(res: Response): string | null {
+  if (res.status !== 403 || res.headers.get("x-ratelimit-remaining") !== "0") {
+    return null;
+  }
+  const reset = Number(res.headers.get("x-ratelimit-reset")) * 1000;
+  const at = new Date(reset);
+  if (!Number.isFinite(reset) || reset <= 0 || Number.isNaN(at.getTime())) {
+    return "GitHub 接口的匿名访问额度已用完，稍后再试";
+  }
+  const clock = `${String(at.getHours()).padStart(2, "0")}:${String(
+    at.getMinutes(),
+  ).padStart(2, "0")}`;
+  return `GitHub 接口的匿名额度（每小时 60 次）已被当前网络的出口 IP 用完，${clock} 后恢复；换代理节点或关闭代理可立即重试`;
+}
 
 export async function checkForUpdates(): Promise<UpdateCheckResult> {
   const current = await currentVersion();
@@ -76,7 +81,8 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
       return {
         ...base,
         status: "error",
-        message: `检查失败（HTTP ${res.status}），稍后再试`,
+        message:
+          rateLimitMessage(res) ?? `检查失败（HTTP ${res.status}），稍后再试`,
       };
     }
 
@@ -96,7 +102,7 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
       };
     }
 
-    if (compare(latestParts, currentParts) > 0) {
+    if (compareVersions(latestParts, currentParts) > 0) {
       return {
         ...base,
         status: "update-available",

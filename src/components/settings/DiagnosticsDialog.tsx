@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { CircleAlert, CircleCheck, Copy, RefreshCw, Stethoscope, TriangleAlert } from "lucide-react";
+import { CircleAlert, CircleCheck, Copy, RefreshCw, ScrollText, Stethoscope, TriangleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -15,8 +15,9 @@ import { useAppVersion } from "@/hooks/use-app-version";
 import { toast, readableError } from "@/lib/toast";
 import { appliedAtMachine } from "@/lib/themes";
 import { formatBytes } from "@/lib/utils";
-import { getWindowsVersion } from "@/services/system";
+import { getWindowsVersion, openLogDir } from "@/services/system";
 import { findDuplicateThemes, type DuplicateReport } from "@/services/theme";
+import { inTauri } from "@/services/theme";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useThemeStore } from "@/stores/themeStore";
 import { cn } from "@/lib/utils";
@@ -343,6 +344,17 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
     }
   };
 
+  /** 打开数据根下的日志目录（决策 46）：报障时用户能直接把日志文件发上来 */
+  const openLogs = async () => {
+    try {
+      const dir = await openLogDir();
+      toast.success("已打开日志目录", inTauri ? dir : "开发模式：未真正打开系统目录");
+    } catch (err) {
+      console.error("打开日志目录失败：", err);
+      toast.error("打开失败", readableError(err));
+    }
+  };
+
   const copyReport = async () => {
     // 备份体检快照（决策 37/42 修订）：store 里会话内的体检结果随报告走，
     // 报障时对方能看到「哪份备份体检过、结果如何」；没跑过体检就没有这一段
@@ -505,6 +517,10 @@ export function DiagnosticsDialog({ open, onOpenChange }: DiagnosticsDialogProps
               <Button size="sm" variant="outline" onClick={() => void copyReport()}>
                 <Copy data-icon="inline-start" />
                 复制报告
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => void openLogs()}>
+                <ScrollText data-icon="inline-start" />
+                打开日志目录
               </Button>
               <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
                 关闭
