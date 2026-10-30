@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "installer:assets": "powershell -NoProfile -ExecutionPolicy Bypass -File src-tauri/installer/src/make_ui_assets.ps1",
     "installer:build": "npm run installer:assets && tauri build --bundles nsis",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test": "node --test \"src/lib/*.test.ts\""
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
@@ -31,6 +32,7 @@
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.2",
     "@tauri-apps/cli": "2.11.2",
+    "@types/node": "^26.6.6",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",

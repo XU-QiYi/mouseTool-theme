@@ -29,7 +29,7 @@
 | 18 | 归档限额与 IPC 输入校验 | 主题包 / 备份共用一个限额模块（总量、单文件、条目数、深度、条目名白名单）；15 槽位白名单、路径包含、预览 / 光标文件上限、`dest_path` 与 `theme.id` 校验都在后端收口 |
 | 19 | 重操作的执行模型 | 所有 I/O 命令进 `spawn_blocking`；导入 / 备份 / 迁移发进度事件；三类重操作共用一把 `try_lock` 互斥锁，冲突立即失败而不是排队 |
 | 20 | 交互安全与无障碍 | 按动作 / 按主题的 busy 状态、导出文件名清洗、恢复前确认、顶层 ErrorBoundary、更新检查 8 秒超时、外链白名单；键盘分段控件、标题层级、减少动态、装饰图 `alt=""`、`<time>` 语义 |
-| 21 | 测试隔离与 CI | 测试用临时目录 + 生成的光标 fixture；注册表用例写独立的 `CursorStudio.Tests` 键并在结束时删除；GitHub Actions 跑 build / cargo test / clippy（警告基线为零，2026-10-29 增补）/ design_audit / doc_ref_check |
+| 21 | 测试隔离与 CI | 测试用临时目录 + 生成的光标 fixture；注册表用例写独立的 `CursorStudio.Tests` 键并在结束时删除；GitHub Actions 跑 build / npm test（决策 49）/ cargo test / clippy（警告基线为零，2026-10-29 增补）/ design_audit / doc_ref_check |
 | 22 | CSP 与 capability 最小权限 | 生产 CSP 只放行 `self` / `data:` / `blob:` / asset 协议 / GitHub API；开发环境额外放行 Vite HMR；opener 只允许 `https://github.com/*`，dialog 只留 open / save；`--no-sandbox` 保留 |
 | 23 | 维护型界面的挂载方式与应用内备份 | 诊断用任务层弹窗、批量导入用任务层弹窗、备份历史做「数据」子页——都不新增导航与设置分组；应用内备份落数据目录 backups，只管理自己生成的备份 |
 | 24 | 系统改写光标的检测与夺回 | 窗口聚焦时 `get_active_state` 静默重查；状态卡三态（使用中 / 系统默认 / **被系统设置修改**）；「还原系统默认」常可用并清 `Pin`/`Person` 残留；不写 `Schemes` 换面板显示 |
@@ -57,6 +57,7 @@
 | 46 | 发布版持久日志 | `utils/log.rs` 手写追加日志（数据根 `logs\mousetool.log`，512KB 轮转保留 3 份，不引日志库）；替换全部非测试 `eprintln!`；诊断中心「打开日志目录」；不计入存储统计 |
 | 47 | 导入时提示内容重复 | 导入成功后复用决策 38 指纹 + 逐字节确认；`ImportReport.duplicate_of` 点名 + warnings 人话版；**只提示不拦截、不自动删除**；与导入同一把 ops 锁 |
 | 48 | 主题库排序与筛选 | 「我的主题」工具条：排序（最新 / 最早 / 名称 / 槽位完整度）与筛选（缺文件的 / 从未使用的），纯前端派生、会话内不落盘；整理模式下控件让位 |
+| 49 | 前端纯逻辑单测 | `node --test` 直接跑 `.ts`（类型剥离），不引测试框架；CI 增补 `npm test`（六道闸）；纯函数抽到零依赖模块（semver / schedule-window / preview-cache） |
 
 ---
 
@@ -573,17 +574,17 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 
 ---
 
-## 决策 21：测试不碰真实数据，CI 守住五条底线
+## 决策 21：测试不碰真实数据，CI 守住六条底线
 
 **结论**（2026-10-25，随测试隔离与 CI 实现；2026-10-29 增补 `clippy -D warnings` 门闸）
 
 - **不碰真实 `%LOCALAPPDATA%`**：`utils/test_support.rs` 用 `tempfile`（dev 依赖，决策 27）提供临时目录，并生成最小 `.cur` / `.ani` fixture；测试用 `paths::use_test_roots` 把数据根临时指到临时目录，结束后恢复。
 - **不碰真实光标设置**：注册表测试不再写用户的 `HKCU\Control Panel\Cursors`，而是在 `Software\CursorStudio.Tests\<label>-<pid>-<n>` 下建隔离键；`registry` 通过线程局部 `TEST_CURSORS_KEY` 重定向所有读写，`IsolatedRegistry` 在 Drop 时删除整棵测试键。隔离模式下 `refresh_cursors` 直接 no-op，不会调用 `SPI_SETCURSORS`。
 - 隔离键让注册表用例可以并行；只有确实共享同一个键的用例才需要自行串行（防中毒取回锁：`unwrap_or_else(|e| e.into_inner())`）。
-- **CI**（`.github/workflows/ci.yml`）：`windows-latest` + Node 22 + Rust（2026-10-29 起钉死 `1.99.1`，不用 `@stable`），依次跑 `npm ci` → `npm run build` → `cargo test`（`src-tauri`）→ `cargo clippy --all-targets -- -D warnings` → `node scripts/design_audit.mjs` → `node scripts/doc_ref_check.mjs`。先 build 是故意的：`cargo test` 编译期不需要 dist，但保持与本地验证顺序一致，也顺手把前端类型错误挡在 CI 上。clippy 于 2026-10-29 增补，警告基线为零。
+- **CI**（`.github/workflows/ci.yml`）：`windows-latest` + Node 22 + Rust（2026-10-29 起钉死 `1.99.1`，不用 `@stable`），依次跑 `npm ci` → `npm run build` → `npm test`（前端单测，2026-10-31 增补，决策 49）→ `cargo test`（`src-tauri`）→ `cargo clippy --all-targets -- -D warnings` → `node scripts/design_audit.mjs` → `node scripts/doc_ref_check.mjs`。先 build 是故意的：`cargo test` 编译期不需要 dist，但保持与本地验证顺序一致，也顺手把前端类型错误挡在 CI 上。clippy 于 2026-10-29 增补，警告基线为零。
 - `design_audit.mjs` 改为按仓库相对路径输出，并在发现非 2px 网格间距、字号魔法值、裸时长、`transition-all` 时**以退出码 1 失败**，不再只是打印报告。
 
-**为什么**：测试改真实光标会让开发者一边跑测试一边看到鼠标闪变，CI 上则直接污染 runner；临时目录 + fixture 让测试可重复、可并行。CI 不覆盖需要 WebView2 的界面脚本，但类型、后端、lint、设计 token 与文档引用这五类回归能在提交时拦下。
+**为什么**：测试改真实光标会让开发者一边跑测试一边看到鼠标闪变，CI 上则直接污染 runner；临时目录 + fixture 让测试可重复、可并行。CI 不覆盖需要 WebView2 的界面脚本，但类型、前端纯逻辑、后端、lint、设计 token 与文档引用这六类回归能在提交时拦下。
 
 ---
 
@@ -1059,6 +1060,23 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 **边界**：不做多条件组合（一次一个筛选）；不做保存的视图；系统方案分组不参与；虚拟化与大库性能仍按需另议（修复规划的观察项，无测量数据不立项）。
 
 **验收**：`scripts/mine_view_check.mjs`（13 步：默认顺序不变 / 注入测试主题后三种排序生效 / 从未使用命中 / 计数标注 / 整理模式让位 / 空态与恢复 / 缺口 mock 命中带提示行 / 无 JS 异常）。
+
+---
+
+## 决策 49：前端纯逻辑单测——node --test 起步，不引框架
+
+**结论**（2026-10-31，随修复规划缺口分析 G5 落地）
+
+- **零框架**：Node 自带 test runner（`node:test` + `node:assert/strict`），`package.json` 的 `test` 脚本就是 `node --test "src/lib/*.test.ts"`——Node 22.18+（CI 的 Node 22 满足）与本地 24 都默认启用 TypeScript 类型剥离，`.ts` 测试文件直接跑，**不引入 vitest 等任何新依赖**（决策 27）。`@types/node` 是唯一的 dev 依赖增补：tsc 要能检查测试文件里对 `node:test` 的导入，类型包不进产物、无运行时影响。
+- **只测纯逻辑**：定时切换的窗口/边界计算（决策 33）、版本比较（检查更新）、预览缓存 LRU（决策 45）、主题排序筛选派生（决策 48）。这批时序逻辑出过真 bug（决策 25 的启动竞态就是靠真机才发现的），Rust 单测与浏览器验收都够不着它们。
+- **配套小重构**（与加测试同一批完成）：`lib/semver.ts`（从 `update-check.ts` 抽出 `parseVersion` / `compareVersions`）、`lib/schedule-window.ts`（从 `schedule-switch.ts` 抽出 `parseHHMM` / `isInWindow` / `msUntilMinute` / `msToNextBoundary`，全部接收 `now` 参数——原实现写死 `new Date()` 没法测）；`schedule-switch.ts` / `update-check.ts` 只留 store 接线与网络层。
+- **测试文件约定**：与被测模块同目录 `*.test.ts`；相对导入必须带 `.ts` 扩展名（Node ESM 要求显式扩展；tsconfig 的 `allowImportingTsExtensions` 允许）；被测模块保持零运行时依赖（`@/` 别名只允许出现在 `import type` 里，剥离后消失）。
+- **CI**：`npm test` 增补为第六道闸（决策 21 的口径同步），排在 build 之后——类型错误先拦，单测再拦逻辑。
+- **不做**：浏览器验收脚本不进 CI（需要 `windows-latest` 上的 Edge 与 dev server，路径写死在脚本里，成本明显更高，修复规划明确不建议现在做）；vitest/组件测试、快照测试都不引入。
+
+**为什么**：前端承担了大量时序逻辑（定时切换、光标守护、自动备份、版本比较），此前 0 个测试文件，回归全靠 26 个手跑脚本。`node --test` 让纯函数层零成本可测，先覆盖最怕竞态的部分。
+
+**验收**：`npm test` 本地与 CI 全绿（25 个用例：semver / schedule-window 含跨零点与半开区间 / preview-cache / themes 派生）。
 
 ---
 
