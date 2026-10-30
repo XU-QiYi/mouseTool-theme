@@ -248,7 +248,7 @@ src-tauri\target\release\mousetool-theme.exe
 
 `scripts/` 下是项目自带的验收脚本：一部分用无头 Edge + CDP 驱动界面（前提是 `http://localhost:1420` 可访问，用 `dev:bg` 后台起最稳；前台 `npm run tauri dev` 也行，但会占住一个终端），另一部分只扫源码。
 
-下表是日常最常用的最小集；完整验收链（含维护、批量、导入等）见 [`AGENTS.md`](../AGENTS.md) 的「改完怎么验」。
+下表是日常最常用的最小集；完整验收链（含维护、批量、导入等）见 [`agents.md`](../agents.md) 的「改完怎么验」。
 
 | 脚本 | 验什么 | 会点「应用」吗 |
 |---|---|---|

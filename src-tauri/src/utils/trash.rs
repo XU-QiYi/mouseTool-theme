@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::models::CursorTheme;
-use crate::utils::{cursor, limits, paths, validation};
+use crate::utils::{cursor, limits, log, paths, validation};
 
 /// 条目快照文件名；以点开头，不与主题里的光标文件撞名
 const META_FILE: &str = ".trash.json";
@@ -421,7 +421,7 @@ fn list_in(root: &Path) -> Result<Vec<TrashEntry>, String> {
         let entry = match entry {
             Ok(entry) => entry,
             Err(err) => {
-                eprintln!("[list_trash] 读取目录项失败，已跳过（{err}）");
+                log::warn("list_trash", &format!("读取目录项失败，已跳过（{err}）"));
                 continue;
             }
         };

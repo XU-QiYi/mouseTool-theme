@@ -6,13 +6,16 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::models::{CursorSlot, CursorTheme};
-use crate::utils::{inf_parse, limits, paths, progress, registry, theme_file, theme_paths, validation};
+use crate::utils::{inf_parse, limits, log, paths, progress, registry, theme_file, theme_paths, validation};
 
 /// 导入结果：新主题 + 扫描时跳过的非致命问题（典型：链接 / 目录联接）
 #[derive(Debug, Serialize)]
 pub struct ImportReport {
     pub theme: CursorTheme,
     pub warnings: Vec<String>,
+    /// 与库里哪套主题内容完全相同（决策 47，只提示不拦截）；没有重复为 null。
+    /// warnings 里同时有人话版；单独给结构化字段是让界面能各自措辞。
+    pub duplicate_of: Option<String>,
 }
 
 /// `pick_slots` 的返回：按标准槽位顺序排好的 (槽位键, 文件路径) + 包内
@@ -461,7 +464,7 @@ fn import_themepack_as(
             &mut warnings,
             progress_fn,
         )?;
-        Ok(ImportReport { theme, warnings })
+        Ok(ImportReport { theme, warnings, duplicate_of: None })
     });
     // 无论成败都清理临时目录（超限、解压失败也不会留下半截文件）
     let _ = fs::remove_dir_all(&temp_dir);
@@ -592,7 +595,7 @@ fn import_zip_as(
             &mut warnings,
             progress_fn,
         )?;
-        Ok(ImportReport { theme, warnings })
+        Ok(ImportReport { theme, warnings, duplicate_of: None })
     });
     // 无论成败都清理临时目录（超限、解压失败也不会留下半截文件）
     let _ = fs::remove_dir_all(&temp_dir);
@@ -624,7 +627,7 @@ fn import_dir_as(
         progress_fn,
     )
     .map_err(|err| discard_partial(theme_id, err))?;
-    Ok(ImportReport { theme, warnings })
+    Ok(ImportReport { theme, warnings, duplicate_of: None })
 }
 
 /// 导入一个 `.theme` 光标方案文件（决策 36：Windows 主题方案收编）
@@ -704,7 +707,7 @@ fn import_scheme_as(
         Ok(theme)
     })()
     .map_err(|err| discard_partial(theme_id, err));
-    outcome.map(|theme| ImportReport { theme, warnings })
+    outcome.map(|theme| ImportReport { theme, warnings, duplicate_of: None })
 }
 
 /// 压缩格式白名单：`cab` crate 只能解 None / MSZIP；LZX / Quantum（老
@@ -1018,7 +1021,7 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
                     "跳过链接或目录联接主题目录：{}",
                     entry.path().display()
                 );
-                eprintln!("{msg}");
+                log::warn("importer", &msg);
                 warnings.push(msg);
                 return None;
             }
@@ -1029,7 +1032,7 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
                     "跳过主题目录 {}（theme.json 是链接或目录联接）",
                     dir.display()
                 );
-                eprintln!("{msg}");
+                log::warn("importer", &msg);
                 warnings.push(msg);
                 return None;
             }
@@ -1042,7 +1045,7 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
                 Ok(text) => text,
                 Err(err) => {
                     let msg = format!("跳过主题目录 {}（读不到 theme.json：{err}）", dir.display());
-                    eprintln!("{msg}");
+                    log::warn("importer", &msg);
                     warnings.push(msg);
                     return None;
                 }
@@ -1059,7 +1062,7 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
                             "跳过主题目录 {}（theme.json 声明为系统方案，用户主题不能自称系统方案）",
                             dir.display()
                         );
-                        eprintln!("{msg}");
+                        log::warn("importer", &msg);
                         warnings.push(msg);
                         return None;
                     }
@@ -1070,7 +1073,7 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
                             dir.display(),
                             theme.id
                         );
-                        eprintln!("{msg}");
+                        log::warn("importer", &msg);
                         warnings.push(msg);
                         return None;
                     }
@@ -1107,7 +1110,7 @@ pub fn read_user_themes() -> (Vec<CursorTheme>, Vec<String>) {
                 }
                 Err(err) => {
                     let msg = format!("跳过损坏的 theme.json {}：{err}", dir.display());
-                    eprintln!("{msg}");
+                    log::warn("importer", &msg);
                     warnings.push(msg);
                     None
                 }

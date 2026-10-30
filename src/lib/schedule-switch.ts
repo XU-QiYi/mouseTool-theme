@@ -1,5 +1,6 @@
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useThemeStore } from "@/stores/themeStore";
+import { isInWindow, msToNextBoundary } from "@/lib/schedule-window";
 import type { SettingsSnapshot } from "@/services/settings";
 
 /**
@@ -35,31 +36,9 @@ const state = {
   timer: null as ReturnType<typeof setTimeout> | null,
 };
 
-/** "HH:MM" → 当天分钟数；格式不合法返回 null（后端已校验，这里兜底不炸） */
-function parseHHMM(raw: string): number | null {
-  const match = /^(\d{2}):(\d{2})$/.exec(raw);
-  if (!match) return null;
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  if (hour > 23 || minute > 59) return null;
-  return hour * 60 + minute;
-}
-
-function nowMinutes(): number {
-  const now = new Date();
-  return now.getHours() * 60 + now.getMinutes();
-}
-
-/**
- * 当前是否处于时间段内；区间半开 `[start, end)`，`start === end` 视为空窗口。
- * 跨零点（start > end，如 22:00–06:00）按两段取并集。
- */
+/** 当前是否处于时间段内（纯时间计算在 `lib/schedule-window.ts`，决策 49） */
 export function isScheduleInWindow(settings: SettingsSnapshot): boolean {
-  const start = parseHHMM(settings.schedule_start);
-  const end = parseHHMM(settings.schedule_end);
-  if (start === null || end === null) return false;
-  const now = nowMinutes();
-  return start <= end ? now >= start && now < end : now >= start || now < end;
+  return isInWindow(settings.schedule_start, settings.schedule_end, new Date());
 }
 
 /**
@@ -119,15 +98,6 @@ function schedule(): void {
   });
 }
 
-/** 距离当天 minuteOfDay 这一分钟还有多少毫秒；已过则算明天 */
-function msUntilMinute(minuteOfDay: number): number {
-  const now = new Date();
-  const target = new Date(now);
-  target.setHours(Math.floor(minuteOfDay / 60), minuteOfDay % 60, 0, 0);
-  if (target.getTime() <= now.getTime()) target.setDate(target.getDate() + 1);
-  return target.getTime() - now.getTime();
-}
-
 /** 排一个定时器到下一个 start / end 边界；边界跨过时评估一次并重排 */
 function armTimer(): void {
   if (state.timer) {
@@ -136,11 +106,9 @@ function armTimer(): void {
   }
   const settings = useSettingsStore.getState().settings;
   if (!settings?.schedule_switch_enabled) return;
-  const start = parseHHMM(settings.schedule_start);
-  const end = parseHHMM(settings.schedule_end);
-  if (start === null || end === null) return;
   // 两个边界的最近一个；最长间隔 24h，不会触到 setTimeout 的 2^31 上限
-  const delay = Math.min(msUntilMinute(start), msUntilMinute(end));
+  const delay = msToNextBoundary(settings.schedule_start, settings.schedule_end, new Date());
+  if (delay === null) return;
   state.timer = setTimeout(() => {
     state.timer = null;
     // 新时段开始：挂起解除（这与系统深浅色翻转解除挂起是同一个语义）

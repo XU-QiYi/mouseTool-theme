@@ -349,9 +349,18 @@ pub async fn import_theme(
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = ops::try_begin("导入主题")?;
         let emitter = app.clone();
-        importer::import_source_report(&source_path, &mut |progress| {
+        let mut report = importer::import_source_report(&source_path, &mut |progress| {
             let _ = emitter.emit("import-progress", progress);
-        })
+        })?;
+        // 导入查重（决策 47）：复用决策 38 的指纹 + 逐字节确认，只提示不拦截。
+        // 查重本身没有失败通道，给不出结论（如缺文件）就当没有重复。
+        if let Some(name) = find_identical_theme_name(&report.theme) {
+            report.warnings.push(format!(
+                "与已有主题《{name}》内容完全相同（可到「我的主题」删除多余的一套）"
+            ));
+            report.duplicate_of = Some(name);
+        }
+        Ok(report)
     })
     .await
     .map_err(|err| format!("导入任务异常退出（{err}）"))?
@@ -1132,26 +1141,25 @@ pub async fn find_duplicate_themes() -> Result<DuplicateReport, String> {
 /// 槽位指纹：排序后相同的才进同一预分组
 type SlotFingerprint = Vec<(String, String, u64)>;
 
-fn find_duplicate_themes_in() -> Result<DuplicateReport, String> {
-    let (themes, mut warnings) = importer::read_user_themes();
+/// 单套主题的查重素材：非空槽位文件表 + 指纹（决策 38 诊断与决策 47 导入查重共用）
+struct ThemeEvidence {
+    id: String,
+    name: String,
+    /// 槽位文件字节合计
+    bytes: u64,
+    slots_filled: usize,
+    /// 注册表键 → 槽位文件绝对路径
+    files: std::collections::BTreeMap<String, std::path::PathBuf>,
+    fingerprint: SlotFingerprint,
+}
 
-    struct Candidate {
-        id: String,
-        name: String,
-        bytes: u64,
-        slots_filled: usize,
-        /// 注册表键 → 槽位文件绝对路径
-        files: std::collections::BTreeMap<String, std::path::PathBuf>,
-        fingerprint: SlotFingerprint,
-    }
-
-    let mut candidates: Vec<Candidate> = Vec::new();
-    let mut skipped_missing = 0usize;
-    for theme in themes {
+impl ThemeEvidence {
+    /// 缺文件（或没有非空槽位）的主题给不出可证实的指纹，返回 None——
+    /// 查重只报证实过的重复，缺文件的不参与也不猜
+    fn of(theme: &CursorTheme) -> Option<ThemeEvidence> {
         let mut files = std::collections::BTreeMap::new();
         let mut fingerprint: SlotFingerprint = Vec::new();
         let mut bytes = 0u64;
-        let mut complete = true;
         for slot in &theme.cursors {
             if slot.file_path.trim().is_empty() {
                 continue;
@@ -1159,11 +1167,7 @@ fn find_duplicate_themes_in() -> Result<DuplicateReport, String> {
             let path = std::path::PathBuf::from(&slot.file_path);
             let meta = match fs::metadata(&path) {
                 Ok(meta) if meta.is_file() => meta,
-                _ => {
-                    // 缺文件的主题没法证实内容，不参与比对（完整性体检另有提示）
-                    complete = false;
-                    break;
-                }
+                _ => return None,
             };
             let ext = path
                 .extension()
@@ -1171,33 +1175,77 @@ fn find_duplicate_themes_in() -> Result<DuplicateReport, String> {
                 .unwrap_or_default()
                 .to_ascii_lowercase();
             bytes += meta.len();
-            fingerprint.push((
-                slot.registry_key.clone(),
-                ext.clone(),
-                meta.len(),
-            ));
+            fingerprint.push((slot.registry_key.clone(), ext, meta.len()));
             files.insert(slot.registry_key.clone(), path);
         }
-        if !complete || files.is_empty() {
-            skipped_missing += 1;
-            continue;
+        if files.is_empty() {
+            return None;
         }
         fingerprint.sort();
-        candidates.push(Candidate {
-            id: theme.id,
-            name: theme.name,
+        Some(ThemeEvidence {
+            id: theme.id.clone(),
+            name: theme.name.clone(),
             bytes,
             slots_filled: files.len(),
             files,
             fingerprint,
-        });
+        })
+    }
+
+    /// 逐字节确认：自己每个槽位文件与对方同键文件内容一致才算相同
+    /// （指纹相等只说明键、扩展名与字节数一致，内容要字节说算）
+    fn identical_to(&self, other: &ThemeEvidence) -> bool {
+        self.files.iter().all(|(key, path)| {
+            other
+                .files
+                .get(key)
+                .is_some_and(|other_path| files_equal(path, other_path))
+        })
+    }
+}
+
+/// 导入查重（决策 47）：找与刚导入主题内容完全相同的已有主题，返回其名称
+///
+/// 复用决策 38 的两步口径：指纹相同才进入逐字节确认。只读不取锁——
+/// 调用方 `import_theme` 已在 `ops` 锁内；查重给不出结论时宁可漏报不误报。
+fn find_identical_theme_name(new_theme: &CursorTheme) -> Option<String> {
+    let fresh = ThemeEvidence::of(new_theme)?;
+    for theme in importer::read_user_themes().0 {
+        // 刚导入的这套此刻已经在磁盘上，别跟自己比
+        if theme.id == new_theme.id {
+            continue;
+        }
+        let Some(existing) = ThemeEvidence::of(&theme) else {
+            continue;
+        };
+        if existing.fingerprint == fresh.fingerprint && existing.identical_to(&fresh) {
+            return Some(existing.name);
+        }
+    }
+    None
+}
+
+fn find_duplicate_themes_in() -> Result<DuplicateReport, String> {
+    let (themes, mut warnings) = importer::read_user_themes();
+
+    let mut candidates: Vec<ThemeEvidence> = Vec::new();
+    let mut skipped_missing = 0usize;
+    for theme in &themes {
+        match ThemeEvidence::of(theme) {
+            Some(evidence) => candidates.push(evidence),
+            // 缺文件的主题没法证实内容，不参与比对（完整性体检另有提示）
+            None => skipped_missing += 1,
+        }
     }
 
     // 指纹相同的进同一预分组；组内两两与首套逐字节比对，全部一致才算重复
-    let mut pregroups: std::collections::HashMap<SlotFingerprint, Vec<Candidate>> =
+    let mut pregroups: std::collections::HashMap<SlotFingerprint, Vec<ThemeEvidence>> =
         std::collections::HashMap::new();
     for candidate in candidates {
-        pregroups.entry(candidate.fingerprint.clone()).or_default().push(candidate);
+        pregroups
+            .entry(candidate.fingerprint.clone())
+            .or_default()
+            .push(candidate);
     }
 
     let mut groups = Vec::new();
@@ -1208,14 +1256,9 @@ fn find_duplicate_themes_in() -> Result<DuplicateReport, String> {
             continue;
         }
         let base = &members[0];
-        let mut confirmed: Vec<&Candidate> = vec![base];
+        let mut confirmed: Vec<&ThemeEvidence> = vec![base];
         for member in &members[1..] {
-            let identical = member.files.iter().all(|(key, path)| {
-                base.files
-                    .get(key)
-                    .is_some_and(|base_path| files_equal(base_path, path))
-            });
-            if identical {
+            if member.identical_to(base) {
                 confirmed.push(member);
             }
         }
@@ -2466,5 +2509,94 @@ mod tests {
             (4096 + 22 + (32 * 32 * 4 + (32 / 8) * 32 + 40)) as u64 * 2,
             "可省字节按「套数 - 1」累计：{report:?}"
         );
+    }
+
+    /// 与 importer 测试同款的最小 zip 构造（导入查重用例需要真实导入链路）
+    fn zip_with(path: &Path, entries: Vec<(String, Vec<u8>)>) {
+        use std::io::Write as _;
+        let file = fs::File::create(path).expect("建 zip");
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, data) in entries {
+            writer.start_file(name, options).expect("写入条目");
+            writer.write_all(&data).expect("写入数据");
+        }
+        writer.finish().expect("完成压缩");
+    }
+
+    #[test]
+    fn 导入查重_刚导入的不会跟自己成对() {
+        let temp = TempDir::new("import-dup-self");
+        let _guard = temp.isolate_paths();
+        let zip = temp.join("pack-a.zip");
+        zip_with(
+            &zip,
+            vec![
+                ("cursors/arrow.cur".to_string(), fixture_cur()),
+                ("cursors/busy.ani".to_string(), fixture_ani()),
+            ],
+        );
+        let report = importer::import_source_report(zip.to_str().unwrap(), &mut |_| {})
+            .expect("首次导入");
+        assert_eq!(
+            find_identical_theme_name(&report.theme),
+            None,
+            "库里只有刚导入的这套，不能跟自己比出重复"
+        );
+    }
+
+    #[test]
+    fn 导入查重_内容相同点名已有主题() {
+        let temp = TempDir::new("import-dup-hit");
+        let _guard = temp.isolate_paths();
+        let entries = vec![
+            ("cursors/arrow.cur".to_string(), fixture_cur()),
+            ("cursors/busy.ani".to_string(), fixture_ani()),
+        ];
+        let first_zip = temp.join("pack-a.zip");
+        zip_with(&first_zip, entries.clone());
+        let second_zip = temp.join("pack-b.zip");
+        zip_with(&second_zip, entries);
+
+        let first = importer::import_source_report(first_zip.to_str().unwrap(), &mut |_| {})
+            .expect("首次导入");
+        let second = importer::import_source_report(second_zip.to_str().unwrap(), &mut |_| {})
+            .expect("二次导入");
+        assert_eq!(
+            find_identical_theme_name(&second.theme)
+                .expect("内容相同的包再次导入应点名已有主题"),
+            first.theme.name,
+            "点名的应是先导入的那套"
+        );
+    }
+
+    #[test]
+    fn 导入查重_内容不同不误报() {
+        let temp = TempDir::new("import-dup-miss");
+        let _guard = temp.isolate_paths();
+        let first_zip = temp.join("pack-a.zip");
+        zip_with(
+            &first_zip,
+            vec![("cursors/arrow.cur".to_string(), fixture_cur())],
+        );
+        // 扩展名与字节数都一样、内容不同：指纹会撞，必须靠字节比对拦住
+        let mut different = fixture_cur();
+        different[10] = different[10].wrapping_add(1);
+        let second_zip = temp.join("pack-b.zip");
+        zip_with(
+            &second_zip,
+            vec![("cursors/arrow.cur".to_string(), different)],
+        );
+
+        let first = importer::import_source_report(first_zip.to_str().unwrap(), &mut |_| {})
+            .expect("首次导入");
+        let second = importer::import_source_report(second_zip.to_str().unwrap(), &mut |_| {})
+            .expect("二次导入");
+        assert_eq!(
+            find_identical_theme_name(&second.theme),
+            None,
+            "只差一个字节就不算重复"
+        );
+        let _ = first;
     }
 }

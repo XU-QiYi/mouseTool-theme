@@ -1,6 +1,7 @@
 import { getVersion } from "@tauri-apps/api/app";
 
 import { APP_VERSION, RELEASES_API, REPO_URL } from "@/lib/app-meta";
+import { compareVersions, parseVersion } from "@/lib/semver";
 
 /**
  * 检查更新：比对 GitHub Releases 的最新 tag 与当前版本
@@ -18,23 +19,6 @@ export interface UpdateCheckResult {
   releaseUrl: string;
   /** 中文结果说明，界面直接展示 */
   message: string;
-}
-
-/** `v0.2.0` / `0.2.0` → 三段数字；前缀不合法返回 null */
-function parseVersion(raw: string): [number, number, number] | null {
-  const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(raw.trim());
-  if (!match) return null;
-  return [Number(match[1]), Number(match[2]), Number(match[3])];
-}
-
-function compare(
-  a: [number, number, number],
-  b: [number, number, number],
-): number {
-  for (let i = 0; i < 3; i += 1) {
-    if (a[i] !== b[i]) return a[i] > b[i] ? 1 : -1;
-  }
-  return 0;
 }
 
 async function currentVersion(): Promise<string> {
@@ -118,7 +102,7 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
       };
     }
 
-    if (compare(latestParts, currentParts) > 0) {
+    if (compareVersions(latestParts, currentParts) > 0) {
       return {
         ...base,
         status: "update-available",

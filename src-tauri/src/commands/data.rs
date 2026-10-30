@@ -13,7 +13,7 @@ use std::path::Path;
 use serde::Serialize;
 use tauri_plugin_opener::open_path;
 
-use crate::utils::{history, limits, paths};
+use crate::utils::{history, limits, log, paths};
 
 /// 数据目录的展示路径（`%LOCALAPPDATA%\CursorStudio`）
 ///
@@ -38,6 +38,19 @@ pub async fn open_data_dir() -> Result<String, String> {
     })
     .await
     .map_err(|err| format!("打开数据目录任务异常退出（{err}）"))?
+}
+
+/// 打开日志目录（决策 46）：排障时让用户直接把 `logs\mousetool.log` 发上来
+#[tauri::command]
+pub async fn open_log_dir() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let dir = log::log_dir()?;
+        paths::ensure_dir(&dir)?;
+        open_path(&dir, None::<&str>).map_err(|err| format!("打开日志目录失败（{err}）"))?;
+        Ok(dir.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|err| format!("打开日志目录任务异常退出（{err}）"))?
 }
 
 // ---------------------------------------------------------------------------

@@ -53,3 +53,12 @@ export function takePendingImport(): Promise<string | null> {
   }
   return invoke<string | null>("take_pending_import");
 }
+
+/** 打开数据根下的日志目录（决策 46）；浏览器里给演示路径 */
+export function openLogDir(): Promise<string> {
+  if (!inTauri) {
+    console.warn("[dev] 非 Tauri 环境，模拟打开日志目录");
+    return Promise.resolve("C:\\Users\\demo\\AppData\\Local\\CursorStudio\\logs");
+  }
+  return invoke<string>("open_log_dir");
+}

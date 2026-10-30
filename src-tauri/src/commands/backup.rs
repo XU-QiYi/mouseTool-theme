@@ -18,7 +18,7 @@ use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use crate::models::CursorTheme;
-use crate::utils::{history, limits, ops, paths, progress, theme_paths, tray, validation};
+use crate::utils::{history, limits, log, ops, paths, progress, theme_paths, tray, validation};
 
 /// 导出结果
 #[derive(Debug, Serialize)]
@@ -1212,7 +1212,7 @@ fn list_backups_in(dir: &Path) -> Result<Vec<BackupEntry>, String> {
         let entry = match entry {
             Ok(entry) => entry,
             Err(err) => {
-                console_fallback_warning(&format!("读取备份目录项失败，已跳过（{err}）"));
+                log_list_warning(&format!("读取备份目录项失败，已跳过（{err}）"));
                 continue;
             }
         };
@@ -1230,7 +1230,7 @@ fn list_backups_in(dir: &Path) -> Result<Vec<BackupEntry>, String> {
             Ok(meta) if meta.is_file() => meta,
             Ok(_) => continue,
             Err(err) => {
-                console_fallback_warning(&format!("读备份文件信息失败，已跳过（{err}）"));
+                log_list_warning(&format!("读备份文件信息失败，已跳过（{err}）"));
                 continue;
             }
         };
@@ -1288,8 +1288,8 @@ fn list_backups_in(dir: &Path) -> Result<Vec<BackupEntry>, String> {
 }
 
 /// 列表阶段的问题只进日志：历史里少一条提示无伤大雅，弹错误反而吓人
-fn console_fallback_warning(message: &str) {
-    eprintln!("[list_backups] {message}");
+fn log_list_warning(message: &str) {
+    log::warn("list_backups", message);
 }
 
 /// 校验「应用内备份文件名」并拼出完整路径（删除 / 内容预览共用）
