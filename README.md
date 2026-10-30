@@ -239,7 +239,7 @@ node scripts/scheme_import_check.mjs
 node scripts/dev_bg.mjs stop
 ```
 
-完整的脚本清单与发布步骤见 [`AGENTS.md`](AGENTS.md) 与 [`docs/mouse-theme发布指南.md`](docs/mouse-theme发布指南.md)；真机验证证据见 [`docs/real-machine-verify/`](docs/real-machine-verify/)，脚本说明见 [`scripts/real_machine/README.md`](scripts/real_machine/README.md)。
+完整的脚本清单与发布步骤见 [`agents.md`](agents.md) 与 [`docs/mouse-theme发布指南.md`](docs/mouse-theme发布指南.md)；真机验证证据见 [`docs/real-machine-verify/`](docs/real-machine-verify/)，脚本说明见 [`scripts/real_machine/README.md`](scripts/real_machine/README.md)。
 
 ## 许可证
 

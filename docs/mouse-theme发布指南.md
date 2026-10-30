@@ -185,7 +185,7 @@ cd ..
 
 ### 1.6 验收脚本全绿
 
-界面/动效脚本跑在浏览器里、走 mock，**不会改你的系统光标**，可以放心跑。下面是最小集；完整验收链见 [`AGENTS.md`](../AGENTS.md) 的「改完怎么验」：
+界面/动效脚本跑在浏览器里、走 mock，**不会改你的系统光标**，可以放心跑。下面是最小集；完整验收链见 [`agents.md`](../agents.md) 的「改完怎么验」：
 
 ```powershell
 node scripts/dev_bg.mjs start; node scripts/design_check.mjs; node scripts/motion_check.mjs; node scripts/nav_check.mjs; node scripts/recent_check.mjs; node scripts/dev_bg.mjs stop

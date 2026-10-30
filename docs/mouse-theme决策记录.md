@@ -29,11 +29,11 @@
 | 18 | 归档限额与 IPC 输入校验 | 主题包 / 备份共用一个限额模块（总量、单文件、条目数、深度、条目名白名单）；15 槽位白名单、路径包含、预览 / 光标文件上限、`dest_path` 与 `theme.id` 校验都在后端收口 |
 | 19 | 重操作的执行模型 | 所有 I/O 命令进 `spawn_blocking`；导入 / 备份 / 迁移发进度事件；三类重操作共用一把 `try_lock` 互斥锁，冲突立即失败而不是排队 |
 | 20 | 交互安全与无障碍 | 按动作 / 按主题的 busy 状态、导出文件名清洗、恢复前确认、顶层 ErrorBoundary、更新检查 8 秒超时、外链白名单；键盘分段控件、标题层级、减少动态、装饰图 `alt=""`、`<time>` 语义 |
-| 21 | 测试隔离与 CI | 测试用临时目录 + 生成的光标 fixture；注册表用例写独立的 `CursorStudio.Tests` 键并在结束时删除；GitHub Actions 跑 build / cargo test / design_audit / doc_ref_check |
+| 21 | 测试隔离与 CI | 测试用临时目录 + 生成的光标 fixture；注册表用例写独立的 `CursorStudio.Tests` 键并在结束时删除；GitHub Actions 跑 build / cargo test / clippy（警告基线为零，2026-10-29 增补）/ design_audit / doc_ref_check |
 | 22 | CSP 与 capability 最小权限 | 生产 CSP 只放行 `self` / `data:` / `blob:` / asset 协议 / GitHub API；开发环境额外放行 Vite HMR；opener 只允许 `https://github.com/*`，dialog 只留 open / save；`--no-sandbox` 保留 |
 | 23 | 维护型界面的挂载方式与应用内备份 | 诊断用任务层弹窗、批量导入用任务层弹窗、备份历史做「数据」子页——都不新增导航与设置分组；应用内备份落数据目录 backups，只管理自己生成的备份 |
 | 24 | 系统改写光标的检测与夺回 | 窗口聚焦时 `get_active_state` 静默重查；状态卡三态（使用中 / 系统默认 / **被系统设置修改**）；「还原系统默认」常可用并清 `Pin`/`Person` 残留；不写 `Schemes` 换面板显示 |
-| 25 | 跟随系统深浅色自动切换主题 | 设置里配对浅 / 深主题，切换逻辑在前端；手动还原后挂起，系统再次翻转才恢复；不做按时刻定时切换 |
+| 25 | 跟随系统深浅色自动切换主题 | 设置里配对浅 / 深主题，切换逻辑在前端；手动还原后挂起，系统再次翻转才恢复（修订：按时刻的定时切换已由决策 33 实现） |
 | 26 | 删除主题的软删除与回收站 | 删除移入数据根 `trash\`（条目 UUID 与主题 ID 分开）；上限 20 套 / 512 MB 自动清最早；「设置 → 数据」子页可恢复 / 彻底删除 / 清空 |
 | 27 | 新增依赖的取舍 | 默认不加；要加先记清现有能力为何不够 / 手写成本 / 代价；按总成本判断，已有手写实现不因有现成库就重写 |
 | 28 | 保存并接管当前光标 | 外部改写态下把当前注册表光标复制为我的主题；抄全才自动应用，槽位缺失只保存；与已知主题一致时拒绝重复 |
@@ -52,6 +52,7 @@
 | 41 | 右键菜单扩展到三类主题文件 | `.zip` / `.themepack` / `.theme` 一把注册，全有或全无；部分注册视为未注册可自愈 |
 | 42 | 从文件恢复先看内容 | 外部备份先看内容清单，再选单套恢复或转整包合并；合并语义不变 |
 | 43 | 主题库批量整理 | `delete_themes` 去重、逐套复用单套校验与回收站链路；部分成功、一把 `ops` 锁、`delete-progress`；UI 整理模式 |
+| 44 | 仓库与文档卫生 | `agents.md` 链接大小写修正；`doc_ref_check` 增加区分大小写的相对链接检查；删无关脚本；Cargo 元数据与决策记录三处过期口径 |
 
 ---
 
@@ -575,7 +576,7 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 - **不碰真实 `%LOCALAPPDATA%`**：`utils/test_support.rs` 用 `tempfile`（dev 依赖，决策 27）提供临时目录，并生成最小 `.cur` / `.ani` fixture；测试用 `paths::use_test_roots` 把数据根临时指到临时目录，结束后恢复。
 - **不碰真实光标设置**：注册表测试不再写用户的 `HKCU\Control Panel\Cursors`，而是在 `Software\CursorStudio.Tests\<label>-<pid>-<n>` 下建隔离键；`registry` 通过线程局部 `TEST_CURSORS_KEY` 重定向所有读写，`IsolatedRegistry` 在 Drop 时删除整棵测试键。隔离模式下 `refresh_cursors` 直接 no-op，不会调用 `SPI_SETCURSORS`。
 - 隔离键让注册表用例可以并行；只有确实共享同一个键的用例才需要自行串行（防中毒取回锁：`unwrap_or_else(|e| e.into_inner())`）。
-- **CI**（`.github/workflows/ci.yml`）：`windows-latest` + Node 22 + Rust stable，依次跑 `npm ci` → `npm run build` → `cargo test`（`src-tauri`）→ `cargo clippy --all-targets -- -D warnings` → `node scripts/design_audit.mjs` → `node scripts/doc_ref_check.mjs`。先 build 是故意的：`cargo test` 编译期不需要 dist，但保持与本地验证顺序一致，也顺手把前端类型错误挡在 CI 上。clippy 于 2026-10-29 增补，警告基线为零。
+- **CI**（`.github/workflows/ci.yml`）：`windows-latest` + Node 22 + Rust（2026-10-29 起钉死 `1.99.1`，不用 `@stable`），依次跑 `npm ci` → `npm run build` → `cargo test`（`src-tauri`）→ `cargo clippy --all-targets -- -D warnings` → `node scripts/design_audit.mjs` → `node scripts/doc_ref_check.mjs`。先 build 是故意的：`cargo test` 编译期不需要 dist，但保持与本地验证顺序一致，也顺手把前端类型错误挡在 CI 上。clippy 于 2026-10-29 增补，警告基线为零。
 - `design_audit.mjs` 改为按仓库相对路径输出，并在发现非 2px 网格间距、字号魔法值、裸时长、`transition-all` 时**以退出码 1 失败**，不再只是打印报告。
 
 **为什么**：测试改真实光标会让开发者一边跑测试一边看到鼠标闪变，CI 上则直接污染 runner；临时目录 + fixture 让测试可重复、可并行。CI 不覆盖需要 WebView2 的界面脚本，但类型、后端、lint、设计 token 与文档引用这五类回归能在提交时拦下。
@@ -645,6 +646,8 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 - **范围边界**：不配对系统方案还原（浅色映射为空 = 浅色时不动当前光标）；不做按时刻的定时切换（那是 PowerToys 的领地，跟随系统深浅色才是本应用的差异化）；应用必须在前台或托盘运行，这与「关闭到托盘」的既有行为天然互补。
 - **验收**：`scripts/auto_switch_check.mjs`（CDP `Emulation.setEmulatedMedia` 模拟深浅色翻转：配对生效 / 往返切换 / 还原挂起 / 翻转恢复接管 / 关开关不动），`settings.rs` 往返与旧文件兼容用例覆盖新字段。
 - **启动竞态修复**（2026-10-29）：真机上 settings（单文件）几乎总是先于主题列表（目录扫描）就绪，空列表下 `applyTheme` 静默 no-op 却把 `lastAppliedId` 记上，列表就绪后的评估被去重挡住，「启动后的首次评估」实际永远不生效。修复：`maybeSwitch` 在列表为空时退避且不记账，列表到位的订阅回调会补上这次应用；`auto_switch_check.mjs` 增补竞态回归两步（先把列表置空再开启开关，恢复列表后必须补上首次应用），已验证该断言对修复前的代码确实失败。
+
+**修订**（2026-10-31，随修复规划缺口分析 G6）：本决策「不做按时刻的定时切换」的范围边界已被**决策 33** 推翻——定时切换主题已按时间段内 / 外配对实现，并在该时段让深浅色切换让位。其余结论（配对方式、挂起与恢复、让位规则）不变。
 
 ---
 
@@ -970,9 +973,24 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 - **执行模型**：`async` + `spawn_blocking`，整批取一把 `ops::try_begin("删除主题")`，与导入 / 备份 / 迁移 / 其它重操作互斥；每套开始前发 `delete-progress`（`TaskProgress`，`stage = "delete"`），整批结束只在有成功项时 `tray::refresh` 一次。
 - **UI**：「我的主题」工具条新增「批量整理」；进入后表格出现逐行复选框与表头全选（三态：未选 / 半选 / 全选），工具条换成「已选 N 套 / 全选 / 删除所选 / 退出整理」，批量导出与行内动作在执行期间让位。使用中的主题复选框禁用（行内 title 说明原因）；搜索词变化会清空勾选，保证删除范围永远等于眼前列表；离开页面或主题库清空即退出整理模式。
 - **安全**：后端仍把前端传来的每个 ID 当作不可信输入；批量命令不提供「按条件删除」或「自动挑选重复项」——选哪几套由用户勾选。确认框列名并说明「可恢复、使用中的主题不会被删除」，执行中不可用 Esc / 遮罩关闭。
-- **为什么现在做**：v0.3.0 已有批量导入、内容查重、存储统计与回收站，但清理仍是单套按钮——查重只能告诉用户「每组删到剩一套」，没有批量入口时这条路要走很多次。这个模块补的是已有能力的最后一环，不新增存储格式、不写系统设置、不引依赖，风险最低。主题收藏 / 标签在 `archive/theme-favorites-2026-10-28` 留档但决策记录已明确暂缓到主题市场；全局快捷键需要新增系统级插件，光标大小要碰辅助功能注册表，均排在后面。
+- **为什么现在做**：v0.3.0 已有批量导入、内容查重、存储统计与回收站，但清理仍是单套按钮——查重只能告诉用户「每组删到剩一套」，没有批量入口时这条路要走很多次。这个模块补的是已有能力的最后一环，不新增存储格式、不写系统设置、不引依赖，风险最低。主题收藏 / 标签在 `archive/theme-favorites-2026-10-28` 留档暂缓——主题数量不大时价值有限，且要先定存放位置才能动手（2026-10-31 勘误：此前一句「决策记录已明确暂缓到主题市场」没有出处，需求描述 §0 只拍板过不做在线主题商店，并不存在那条决策）；全局快捷键需要新增系统级插件，光标大小要碰辅助功能注册表，均排在后面。
 - **边界**：只作用于「我的主题」表格，系统方案不参与；只做软删除（进回收站），不做批量应用 / 改名 / 导出、不做自动去重、不做跨页选择；勾选只在当前页面会话内、不落盘；不改备份、最近使用、应用与还原链路。
 - **验收**：Rust 单测覆盖入参去重与进度口径、使用中主题局部拒绝、非法 ID 逐条失败、全部失败与空列表；`scripts/batch_check.mjs` 走浏览器 mock 验收入口 / 三态全选 / 搜索清空 / 使用中禁选 / 确认框点名 / 批量删除提示 / 删空回空状态 / 无 JS 异常。
+
+---
+
+## 决策 44：仓库与文档卫生——链接大小写、无关脚本、过期口径
+
+**结论**（2026-10-31，随修复规划缺口分析 G1+G6 一次性落地，无运行时影响）
+
+- **`agents.md` 链接大小写**：git 里的文件名是小写 `agents.md`，README、发布指南、启动与构建指南三处链接写成 `AGENTS.md`——Windows 与 CI（`windows-latest`）的文件系统都不区分大小写所以从不报错，但 GitHub 页面上点了就是 404。三处链接目标统一改为 `agents.md`。
+- **`doc_ref_check` 两项增强**：① 脚本内三处 `AGENTS.md` 文件引用改为真实大小写（Linux 上 `fs.existsSync("AGENTS.md")` 找不到文件，扫描会静默漏掉）；② 新增相对链接检查——README.md / `agents.md` / `docs/*.md` 里的相对链接目标必须出现在 `git ls-files` 清单中（`core.quotepath=false` 按原始大小写核对），把「只在 GitHub 上炸」的断链变成退出码 1。代码块内的示例链接、锚点与外链不参与。
+- **清理**：`scripts/clean_c_drive.ps1` / `.py`（C 盘清理工具，与本项目无关，附录 B 早已写明「建议尽快移除」）从仓库删除。
+- **Cargo 元数据**：`src-tauri/Cargo.toml` 的 `description` / `authors` 从脚手架占位（"A Tauri App" / "you"）改为真实描述与作者。
+- **决策记录三处口径**：决策 25 末尾补修订（定时切换已由决策 33 实现，总览行同步）；决策 21 的「Rust stable」改为「钉死 1.99.1」，总览行补上 clippy 门闸；决策 43 的「决策记录已明确暂缓到主题市场」改为事实陈述——不存在那条决策，需求描述 §0 只拍板过不做在线主题商店。
+- **不做**：遗留分支与工作树清理（修复规划标记为可选项且不可逆，去留由作者决定）。
+
+**为什么**：发布渠道只有 GitHub Releases，README 是访客的第一落点，断链是首页最先撞上的坑；大小写问题在开发机与 CI 上都不可见，只能靠把检查本身做成区分大小写来防。本条全部是文档与元数据层的修正，为后续修复项（预览缓存、持久日志等）先扫清口径。
 
 ---
 
@@ -1006,6 +1024,6 @@ Tauri 自己会设置 `additionalBrowserArgs`，**它会覆盖 `WEBVIEW2_ADDITIO
 | 保存当前光标 | 只在外部改写态出现；单文件 20MB / 总量 50MB；全部抄全才自动应用，槽位缺失时只保存（决策 28） |
 | 归档大小 | 主题包 50MB / 单文件 20MB / 512 条目 / 8 层；备份 1GiB / 单文件 64MB / 4096 条目 / 10 层。共用 `utils/limits.rs`，流式复制、超限清理（决策 18） |
 | 光标与预览上限 | 光标文件 20MB；预览源文件 8MB，超出直接降级为空预览（决策 18） |
-| `scripts/clean_c_drive.ps1` / `.py` | 与本项目无关的遗留脚本，文档不引用；建议尽快从仓库移除 |
+| `scripts/clean_c_drive.ps1` / `.py` | 与本项目无关的遗留脚本，文档不引用；已于 2026-10-31 移出仓库（决策 44） |
 | 窗口配置 | `transparent: false` + `decorations: true`（曾试过透明窗口，已放弃） |
 | dev server | 前台用 `npm run tauri dev`；后台验证只用 `npm run dev:bg` / `dev:stop`，禁止 `npm run dev \| head` 这类管道启动 |
